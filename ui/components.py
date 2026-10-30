@@ -11,7 +11,7 @@ from calc.odds import (
 from calc.ev import ev_percent
 from calc.clv import line_move_prob_delta, classify_move
 
-EASTERN = ZoneInfo("America/New_York")
+CENTRAL = ZoneInfo("America/Chicago")
 
 
 def html(s: str):
@@ -33,10 +33,10 @@ def html(s: str):
 def brand_bar(subtitle: str = ""):
     # %-d/%-I isn't portable to Windows - use zero-padded codes and strip leading zeros manually.
     try:
-        dt = datetime.now(EASTERN)
+        dt = datetime.now(CENTRAL)
         day = str(dt.day)
         hour12 = dt.hour % 12 or 12
-        now_et = f"{dt.strftime('%a %b')} {day} · {hour12}:{dt.strftime('%M %p')} ET"
+        now_et = f"{dt.strftime('%a %b')} {day} · {hour12}:{dt.strftime('%M %p')} CT"
     except Exception:
         now_et = ""
     html(f"""
@@ -117,7 +117,7 @@ def game_card(
     start_dt = event.get("start_utc")
     if start_dt:
         try:
-            start_et = start_dt.astimezone(EASTERN).strftime("%I:%M %p ET").lstrip("0")
+            start_et = start_dt.astimezone(CENTRAL).strftime("%I:%M %p CT").lstrip("0")
         except Exception:
             start_et = status_detail or "TBD"
     else:

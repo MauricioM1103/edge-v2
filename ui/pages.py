@@ -39,6 +39,12 @@ def load_espn_scoreboard(sport_key: str, date_str: Optional[str] = None):
         return []
 
 
+def _central_today_str() -> str:
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    return datetime.now(ZoneInfo("America/Chicago")).strftime("%Y%m%d")
+
+
 @st.cache_data(ttl=180, show_spinner=False)
 def load_odds(sport_key: str, regions: str = "us,eu"):
     odds_sport = espn.ODDS_API_SPORT_KEYS.get(sport_key)
@@ -187,12 +193,45 @@ def render_dashboard(settings: dict):
     bankroll_units = settings.get("bankroll_units") or 100.0
     kalshi_cash = settings.get("kalshi_cash") or 0.0
 
+    # Date picker (Central US). Picks will apply to this date.
+    from datetime import date, timedelta
+    from zoneinfo import ZoneInfo
+    central_today = datetime.now(ZoneInfo("America/Chicago")).date()
+    dc1, dc2, dc3, dc4 = st.columns([1, 1, 1, 6])
+    with dc1:
+        if st.button("← Prev"):
+            cur = st.session_state.get("dash_date") or central_today
+            st.session_state["dash_date"] = cur - timedelta(days=1)
+            st.rerun()
+    with dc2:
+        picked_date = st.date_input(
+            "Date", value=st.session_state.get("dash_date") or central_today,
+            min_value=central_today - timedelta(days=180),
+            max_value=central_today + timedelta(days=30),
+            key="dash_date", label_visibility="collapsed",
+        )
+    with dc3:
+        if st.button("Next →"):
+            cur = st.session_state.get("dash_date") or central_today
+            st.session_state["dash_date"] = cur + timedelta(days=1)
+            st.rerun()
+    with dc4:
+        if picked_date != central_today:
+            if st.button("Today", key="go_today"):
+                st.session_state["dash_date"] = central_today
+                st.rerun()
+
+    is_today = picked_date == central_today
+    date_str_api = picked_date.strftime("%Y%m%d")
+    date_str_pretty = picked_date.strftime("%A, %b %d, %Y")
+
     # fetch
     saved_cfg = settings_store.load()
     regions = saved_cfg.get("odds_regions") or "us,eu"
-    events = load_espn_scoreboard(sport)
-    odds_games = load_odds(sport, regions=regions)
-    kalshi_markets = load_kalshi_markets(sport)
+    events = load_espn_scoreboard(sport, date_str=date_str_api)
+    # Only fetch live odds for today — past dates would need historical (expensive).
+    odds_games = load_odds(sport, regions=regions) if is_today else []
+    kalshi_markets = load_kalshi_markets(sport) if is_today else []
     polymarket_markets = load_polymarket_markets()
     merged = _merge_events_with_odds(
         events, odds_games,
@@ -226,6 +265,14 @@ def render_dashboard(settings: dict):
 
     if not api_key_ok:
         html('<div class="hint warn">The Odds API key not set — showing ESPN schedule only. Add <code>THE_ODDS_API_KEY</code> to your environment or <code>.streamlit/secrets.toml</code> to enable live lines, EV, and Kelly suggestions.</div>')
+
+    # Date-mode banner
+    if is_today:
+        html(f'<div class="hint" style="margin-bottom:6px;"><strong>{date_str_pretty}</strong> (today, Central US) — live odds & agent active</div>')
+    elif picked_date < central_today:
+        html(f'<div class="hint warn" style="margin-bottom:6px;"><strong>{date_str_pretty}</strong> — past date. Showing ESPN finals only; the agent needs the Backtest tab for historical plays.</div>')
+    else:
+        html(f'<div class="hint" style="margin-bottom:6px;"><strong>{date_str_pretty}</strong> — upcoming. Live odds appear closer to game time.</div>')
 
     # Agent recommendations panel - pass per-game Kalshi probs so agent uses them as fair.
     kalshi_probs_by_game = {}
