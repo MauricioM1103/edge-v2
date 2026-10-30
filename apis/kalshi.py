@@ -35,7 +35,9 @@ from urllib.error import URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
-BASE = "https://api.elections.kalshi.com/trade-api/v2"
+HOST = "https://api.elections.kalshi.com"
+API_PREFIX = "/trade-api/v2"
+BASE = HOST + API_PREFIX
 
 
 # ---------------------------------------------------------------------------
@@ -51,6 +53,24 @@ def _session_val(key: str) -> Optional[str]:
         return None
 
 
+def _normalize_pem(pem_text: str) -> str:
+    """Clean up a pasted PEM: strip BOM, normalize line endings, trim whitespace.
+
+    Streamlit text_area may introduce CRLF or trailing spaces; Kalshi's RSA
+    loader is forgiving but line endings matter when the PEM is malformed.
+    """
+    if not pem_text:
+        return ""
+    s = pem_text.replace("\r\n", "\n").replace("\r", "\n").strip()
+    # If someone pasted a one-line PEM (markers glued together), expand it.
+    if "-----BEGIN" in s and "\n" not in s:
+        s = (
+            s.replace(" -----", "\n-----")
+             .replace("----- ", "-----\n")
+        )
+    return s
+
+
 def set_runtime_credentials(access_key_id: str, private_key_pem: str) -> None:
     """Store Kalshi credentials in the current session only (never written to disk).
 
@@ -58,10 +78,54 @@ def set_runtime_credentials(access_key_id: str, private_key_pem: str) -> None:
     """
     try:
         import streamlit as st
-        st.session_state["_kalshi_rt_key_id"] = access_key_id or ""
-        st.session_state["_kalshi_rt_pem"] = private_key_pem or ""
+        st.session_state["_kalshi_rt_key_id"] = (access_key_id or "").strip()
+        st.session_state["_kalshi_rt_pem"] = _normalize_pem(private_key_pem or "")
     except Exception:
         pass
+
+
+def test_credentials() -> dict:
+    """Ping /portfolio/balance with current creds. Returns a human-readable result.
+
+    Shape:
+      {"ok": True,  "balance_usd": 12.34}
+      {"ok": False, "error": "...", "hint": "..."}
+    """
+    status, payload = _get_verbose("/portfolio/balance", authed=True)
+    if status == "ok":
+        try:
+            cents = int(payload.get("balance"))
+            return {"ok": True, "balance_usd": cents / 100.0}
+        except (TypeError, ValueError, KeyError):
+            return {"ok": False, "error": "Unexpected response from Kalshi.",
+                    "hint": "The /portfolio/balance endpoint returned JSON without a `balance` field."}
+    if status == "no_keys":
+        return {"ok": False, "error": "Both the Access Key ID and PEM are required.",
+                "hint": "Paste both fields and click Connect again."}
+    if status == "sign_failed":
+        return {"ok": False, "error": "Could not sign the request.",
+                "hint": "PEM format wrong. It should look like:\n"
+                        "-----BEGIN RSA PRIVATE KEY-----\n"
+                        "MIIE... (multi-line base64 body) ...\n"
+                        "-----END RSA PRIVATE KEY-----\n"
+                        f"Detail: {payload.get('detail')}"}
+    if status == "http_401":
+        return {"ok": False, "error": "Kalshi rejected the request (401 Unauthorized).",
+                "hint": "Common causes: wrong Access Key ID, PEM doesn't match that key, "
+                        "or the key has been revoked. Response: " + (payload.get("body") or "")[:200]}
+    if status == "http_403":
+        return {"ok": False, "error": "Kalshi returned 403 Forbidden.",
+                "hint": "The key may not have the right permissions, or your account is restricted."}
+    if status == "http_429":
+        return {"ok": False, "error": "Rate-limited by Kalshi (429).",
+                "hint": "Wait a few seconds and try again."}
+    if status.startswith("http_"):
+        return {"ok": False, "error": f"Kalshi returned HTTP {payload.get('status')}.",
+                "hint": (payload.get("body") or "")[:200]}
+    if status == "network":
+        return {"ok": False, "error": "Could not reach Kalshi.",
+                "hint": payload.get("detail") or "network/timeout"}
+    return {"ok": False, "error": "Unknown error.", "hint": str(payload)}
 
 
 def clear_runtime_credentials() -> None:
@@ -147,13 +211,19 @@ def _sign(private_key_pem: str, message: str) -> Optional[str]:
 
 
 def _auth_headers(method: str, path: str) -> Optional[Dict[str, str]]:
-    """Build the three KALSHI-ACCESS-* headers. Returns None if keys missing."""
+    """Build the three KALSHI-ACCESS-* headers. Returns None if keys missing.
+
+    The signed path MUST include the full `/trade-api/v2/...` prefix per
+    Kalshi's auth spec. Query strings are NOT included.
+    """
     key_id = get_access_key_id()
     pem = get_private_key_pem()
     if not (key_id and pem):
         return None
     ts = str(int(time.time() * 1000))
-    msg = ts + method.upper() + path
+    # Ensure the API prefix is on the path exactly once.
+    full_path = path if path.startswith(API_PREFIX) else (API_PREFIX + path)
+    msg = ts + method.upper() + full_path
     sig = _sign(pem, msg)
     if not sig:
         return None
@@ -175,12 +245,10 @@ def _get(path: str, params: Optional[dict] = None, authed: bool = False, timeout
         url += "?" + urlencode(params)
     headers = {"Accept": "application/json", "User-Agent": "edge-v2/1.0"}
     if authed:
-        auth = _auth_headers("GET", path if not params else path + "?" + urlencode(params))
+        # Sign only the path (never with query string, per Kalshi's spec).
+        auth = _auth_headers("GET", path)
         if auth is None:
-            # Try unsigned path for auth (some servers want the path-only variant).
-            auth = _auth_headers("GET", path)
-            if auth is None:
-                return None
+            return None
         headers.update(auth)
     try:
         req = Request(url, headers=headers)
@@ -188,6 +256,46 @@ def _get(path: str, params: Optional[dict] = None, authed: bool = False, timeout
             return json.load(resp)
     except (URLError, ValueError, TimeoutError, ConnectionError, OSError):
         return None
+
+
+def _get_verbose(path: str, authed: bool = True, timeout: int = 10):
+    """Like _get but returns (ok, payload_or_error_dict) with HTTP status/body.
+
+    Used by the Connect button so the UI can show WHY auth failed:
+      ("ok", {"balance": 10050})
+      ("http_401", {"status": 401, "body": "<html>...</html>"})
+      ("sign_failed", {"detail": "cryptography not installed"})
+      ("no_keys", {"detail": "missing access key or PEM"})
+      ("network", {"detail": "connection timeout"})
+    """
+    from urllib.error import HTTPError
+    url = BASE + path
+    headers = {"Accept": "application/json", "User-Agent": "edge-v2/1.0"}
+    if authed:
+        if not (get_access_key_id() and get_private_key_pem()):
+            return ("no_keys", {"detail": "Missing access key id or PEM."})
+        try:
+            from cryptography.hazmat.primitives import hashes  # noqa
+        except ImportError:
+            return ("sign_failed", {"detail": "cryptography library not installed."})
+        auth = _auth_headers("GET", path)
+        if auth is None:
+            return ("sign_failed", {"detail": "Could not sign request — check PEM format."})
+        headers.update(auth)
+    try:
+        req = Request(url, headers=headers)
+        with urlopen(req, timeout=timeout) as resp:
+            data = json.load(resp)
+            return ("ok", data)
+    except HTTPError as e:
+        body = ""
+        try:
+            body = e.read().decode("utf-8", errors="replace")[:500]
+        except Exception:
+            pass
+        return (f"http_{e.code}", {"status": e.code, "body": body})
+    except (URLError, ValueError, TimeoutError, ConnectionError, OSError) as e:
+        return ("network", {"detail": str(e)})
 
 
 # ---------------------------------------------------------------------------

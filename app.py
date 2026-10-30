@@ -76,9 +76,17 @@ def _sidebar_settings() -> dict:
             if c_a.button("Connect", use_container_width=True, type="primary"):
                 if kid_in.strip() and pem_in.strip():
                     kalshi.set_runtime_credentials(kid_in.strip(), pem_in.strip())
-                    st.cache_data.clear()
-                    st.success("Credentials saved for this session. Reloading…")
-                    st.rerun()
+                    result = kalshi.test_credentials()
+                    if result.get("ok"):
+                        st.cache_data.clear()
+                        st.success(f"✓ Connected. Live balance: ${result['balance_usd']:,.2f}")
+                        st.rerun()
+                    else:
+                        # Keep creds in session so user can tweak; show detailed error.
+                        st.error(result.get("error") or "Connect failed.")
+                        hint = result.get("hint")
+                        if hint:
+                            st.caption(hint)
                 else:
                     st.warning("Both the access key ID and PEM are required.")
             if c_b.button("Disconnect", use_container_width=True):
