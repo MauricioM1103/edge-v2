@@ -351,8 +351,25 @@ def render_dashboard(settings: dict):
                 kalshi_by_game[(home_name, away_name)] = event_markets
         kalshi_markets_by_sport[sp] = kalshi_by_game
 
-        # Partition the already-fetched pinnacle games by their sport tag.
-        pinnacle_games_by_sport[sp] = [og for og in odds_games if og.get("_sport") == sp]
+        # Partition the already-fetched pinnacle games by their sport tag,
+        # AND filter to games commencing today in Central time (the Odds API
+        # returns all upcoming games, we want today's slate only).
+        from zoneinfo import ZoneInfo as _ZI
+        _CT = _ZI("America/Chicago")
+        _today_c = picked_date
+        def _is_today(og):
+            commence = og.get("commence_time")
+            if not commence:
+                return True  # keep when the API omits a time
+            try:
+                dt = datetime.fromisoformat(commence.replace("Z", "+00:00"))
+                return dt.astimezone(_CT).date() == _today_c
+            except (ValueError, AttributeError):
+                return True
+        pinnacle_games_by_sport[sp] = [
+            og for og in odds_games
+            if og.get("_sport") == sp and _is_today(og)
+        ]
 
     top_picks = _render_agent_panel(
         odds_games, kalshi_cash, settings,
@@ -735,8 +752,9 @@ def _render_agent_panel(odds_games, kalshi_cash, settings,
         '</tr></thead>'
     )
 
-    top = funded[:15]
-    overflow_funded = funded[15:]
+    picks_shown = int(settings.get("agent_picks_shown") or saved_cfg.get("agent_picks_shown") or 10)
+    top = funded[:picks_shown]
+    overflow_funded = funded[picks_shown:]
     # Attach stable anchor ids so the analysis boards can scroll-nav back and forth.
     for i, e in enumerate(top):
         e["_anchor"] = f"pick-{i+1}"

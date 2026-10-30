@@ -36,11 +36,11 @@ _DEFAULTS: Dict[str, Any] = {
     # (Bovada, LowVig, BetOnline) alongside Pinnacle - these tolerate winning
     # accounts and produce bigger edges than the sharp exchanges alone.
     "odds_regions": "us,eu",
-    # Which Odds API markets to pull. "h2h" is enough for moneyline edges on
-    # Kalshi (which only lists winner markets). Each extra market multiplies
-    # credit cost (us,eu × 3 markets = 6 credits/sport/fetch).
-    # Supported: h2h, totals, spreads, h2h_h1, totals_h1, btts (soccer only).
-    "odds_markets": "h2h",
+    # Which Odds API markets to pull. Default includes all the profitable ones:
+    # h2h (always on - Kalshi's winner markets), totals (full-game O/U), the
+    # 1H variants where retail books are loosest, and BTTS for soccer.
+    # Spreads intentionally left out (rare edges). Each market adds 1 credit/region.
+    "odds_markets": "h2h,totals,h2h_h1,totals_h1,btts",
     # Cache TTL for live odds in seconds. 3600 = 1h.
     "odds_live_ttl": 3600,
     # Books the agent will shop against Pinnacle fair, in addition to Kalshi.
@@ -52,6 +52,8 @@ _DEFAULTS: Dict[str, Any] = {
     "daily_exposure_cap_pct": 0.25,
     # Theme: "dark" (default) or "light".
     "theme": "dark",
+    # How many picks the main agent table surfaces (slider: 5, 10, 15, 20, 25).
+    "agent_picks_shown": 10,
 }
 
 
