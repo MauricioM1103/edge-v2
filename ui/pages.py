@@ -328,7 +328,8 @@ def render_dashboard(settings: dict):
         return
 
     # quick calc feed above the grid
-    _render_quick_calculator(merged, unit_pct, bankroll_units, sport)
+    _quick_label = ",".join(sports_list) if multi_sport_mode else sport_setting
+    _render_quick_calculator(merged, unit_pct, bankroll_units, _quick_label)
 
     # Game grid - per-sport sections in all-sports mode, flat grid otherwise.
     st.markdown('### Today\'s matchups')
@@ -414,7 +415,13 @@ def _render_agent_panel(odds_games, kalshi_cash, settings, kalshi_probs_by_game=
         markets=("h2h", "spreads", "totals"),
     )
     # Apply total-exposure cap so cumulative stake stays within daily_cap_pct of bankroll.
-    edges = agent_calc.apply_daily_cap(edges, kalshi_cash, daily_cap_pct)
+    # getattr fallback keeps the panel rendering even if a cold deploy hasn't picked up the fn yet.
+    _cap_fn = getattr(agent_calc, "apply_daily_cap", None)
+    if callable(_cap_fn):
+        try:
+            edges = _cap_fn(edges, kalshi_cash, daily_cap_pct)
+        except Exception:
+            pass
     summary = agent_calc.summarize_edges(edges)
     exposure_pct = (summary['total_stake'] / kalshi_cash) * 100 if kalshi_cash else 0
     cap_dollars = kalshi_cash * daily_cap_pct
@@ -1224,7 +1231,8 @@ def render_backtest(settings: dict):
         top_n = st.number_input("Top-N picks/day", 1, 30, 5, 1, key="bt_topn")
 
     # ----- credit preflight -----
-    cost_per_snapshot = odds_history.estimated_credit_cost_per_snapshot("us", "h2h,spreads,totals")
+    bt_regions = settings_store.load().get("odds_regions", "us,eu")
+    cost_per_snapshot = odds_history.estimated_credit_cost_per_snapshot(bt_regions, "h2h,spreads,totals")
     est_requests = len(picked_sports) * int(days)
     est_credits = est_requests * cost_per_snapshot
     credit_status = odds_api.get_credit_status()

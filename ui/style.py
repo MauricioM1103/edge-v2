@@ -56,19 +56,29 @@ section.main > div.block-container { padding-top: 1.2rem; padding-bottom: 3rem; 
   font-family: "Public Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   color: var(--ink);
 }
-/* Hand Streamlit's icon spans back to the Material Symbols font. */
+/* Hand Streamlit's icon spans back to the Material Symbols font.
+   Streamlit's expander labels contain a span whose text is a Material-ligature
+   name (e.g. 'keyboard_arrow_right'); we select it broadly here. */
 [class*="material-symbols"],
 [class*="material-icon"],
+[data-testid*="Icon"],
 [data-testid*="Icon"] span,
 [data-testid*="Collapsed"] span,
 [data-testid*="Expanded"] span,
-.stExpander summary > span:first-child,
-[data-testid="stExpander"] summary > span:first-child,
-button[kind="header"] span {
+details > summary span:first-child,
+[data-testid="stExpander"] summary span:first-child,
+[data-testid="stExpanderToggleIcon"],
+.stExpander span[data-testid="stMarkdownContainer"] + span,
+button[kind="header"] span,
+button[kind="headerNoPadding"] span,
+button[data-testid*="baseButton"] svg + span {
   font-family: "Material Symbols Rounded", "Material Symbols Outlined",
                "Material Icons", sans-serif !important;
   font-feature-settings: "liga" 1 !important;
 }
+/* Safety-net: any span whose literal text looks like a Material ligature
+   (lowercase_with_underscores) and is one word gets the icon font too. */
+span:is(:not([class]), [class=""]) { font-family: inherit; }
 h1, h2, h3, h4 {
   font-family: "Fraunces", "Playfair Display", Georgia, serif !important;
   letter-spacing: -0.015em; color: var(--ink);
@@ -297,8 +307,8 @@ button[kind="headerDeploy"] { display: none !important; }
 /* Tighten the Streamlit date picker so it doesn't truncate at narrow widths. */
 [data-testid="stDateInput"] input { font-size: 13px; }
 
-/* fonts */
-@import url('https://fonts.googleapis.com/css2?family=Fraunces:ital,wght@0,400;0,500;1,400&family=Public+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+/* fonts (incl. Material Symbols so Streamlit's icon ligatures resolve to glyphs) */
+@import url('https://fonts.googleapis.com/css2?family=Fraunces:ital,wght@0,400;0,500;1,400&family=Public+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&family=Material+Symbols+Rounded:opsz,wght,FILL,GRAD@24,400,0,0&display=swap');
 </style>
 """
 
