@@ -210,11 +210,14 @@ def game_card(event: dict, odds_meta: Optional[dict] = None, prob_sources: Optio
                 return "—"
             return f"{v*100:.1f}%"
         rows = []
-        # order: Kalshi (prediction market), DK (sportsbook), consensus (all books)
+        # order: Pinnacle (sharpest book) → exchanges (no-vig) → DK (public book) → consensus
         for label, key, chip_cls in [
-            ("Kalshi",    "kalshi",    "accent"),
-            ("DraftKings","dk",        "warn"),
-            ("Consensus", "consensus", ""),
+            ("Pinnacle",   "pinnacle",   "good"),
+            ("Kalshi",     "kalshi",     "accent"),
+            ("Polymarket", "polymarket", "accent"),
+            ("Betfair",    "betfair",    "accent"),
+            ("DraftKings", "dk",         "warn"),
+            ("Consensus",  "consensus",  ""),
         ]:
             src = prob_sources.get(key) or {}
             ah = _fmt(src.get("away"))

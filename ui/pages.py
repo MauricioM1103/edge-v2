@@ -6,7 +6,7 @@ from typing import List, Optional
 
 import streamlit as st
 
-from apis import espn, odds as odds_api, kalshi
+from apis import espn, odds as odds_api, kalshi, polymarket, betfair
 from apis.team_mapping import same_team
 from apis.book_filter import book_market
 from apis.kalshi_match import find_event_markets, home_implied_prob
@@ -64,21 +64,50 @@ def load_kalshi_balance():
         return {"usd": None, "source": None}
 
 
-def _prob_sources_for(game_meta, kalshi_prob_home):
-    """Build the prob-strip dict: Kalshi + DK + consensus implied probs per side."""
+@st.cache_data(ttl=120, show_spinner=False)
+def load_polymarket_markets():
+    try:
+        return polymarket.list_active_markets(limit=500)
+    except Exception:
+        return []
+
+
+@st.cache_data(ttl=120, show_spinner=False)
+def load_betfair_configured() -> bool:
+    try:
+        return betfair.is_configured()
+    except Exception:
+        return False
+
+
+def _prob_sources_for(game_meta, kalshi_prob_home, polymarket_prob_home=None, betfair_prob_home=None):
+    """Build the prob-strip dict: Pinnacle + DK + Kalshi + Polymarket + Betfair + consensus."""
     sources = {}
-    if kalshi_prob_home is not None:
-        sources["kalshi"] = {"home": kalshi_prob_home, "away": 1.0 - kalshi_prob_home}
-    # DK extracted from raw odds payload
     raw = (game_meta or {}).get("raw")
+    # Pinnacle (sharpest book, from Odds API if present)
     if raw:
+        pin = book_market(raw, "Pinnacle", "h2h") or book_market(raw, "pinnacle", "h2h")
+        if pin:
+            pin_h = implied_prob_american(pin.get("home_price"))
+            pin_a = implied_prob_american(pin.get("away_price"))
+            if pin_h is not None or pin_a is not None:
+                sources["pinnacle"] = {"home": pin_h, "away": pin_a}
         dk = book_market(raw, "DraftKings", "h2h") or book_market(raw, "draftkings", "h2h")
         if dk:
-            dk_home_imp = implied_prob_american(dk.get("home_price"))
-            dk_away_imp = implied_prob_american(dk.get("away_price"))
-            if dk_home_imp is not None or dk_away_imp is not None:
-                sources["dk"] = {"home": dk_home_imp, "away": dk_away_imp}
-    # Consensus from the pre-computed h2h bundle
+            dk_h = implied_prob_american(dk.get("home_price"))
+            dk_a = implied_prob_american(dk.get("away_price"))
+            if dk_h is not None or dk_a is not None:
+                sources["dk"] = {"home": dk_h, "away": dk_a}
+    # Kalshi (prediction market, no vig)
+    if kalshi_prob_home is not None:
+        sources["kalshi"] = {"home": kalshi_prob_home, "away": 1.0 - kalshi_prob_home}
+    # Polymarket (prediction market, no vig)
+    if polymarket_prob_home is not None:
+        sources["polymarket"] = {"home": polymarket_prob_home, "away": 1.0 - polymarket_prob_home}
+    # Betfair Exchange (peer-to-peer, no vig)
+    if betfair_prob_home is not None:
+        sources["betfair"] = {"home": betfair_prob_home, "away": 1.0 - betfair_prob_home}
+    # Consensus from all sportsbooks (vig-included)
     h2h = (game_meta or {}).get("h2h") or {}
     ch_imp = implied_prob_american(h2h.get("home_price"))
     ca_imp = implied_prob_american(h2h.get("away_price"))
@@ -87,8 +116,16 @@ def _prob_sources_for(game_meta, kalshi_prob_home):
     return sources or None
 
 
-def _merge_events_with_odds(events, odds_games, kalshi_markets=None):
-    """Attach consensus odds (h2h/spreads/totals) + Kalshi market to each ESPN event."""
+def _merge_events_with_odds(
+    events, odds_games,
+    kalshi_markets=None, polymarket_markets=None, sport_key=None,
+):
+    """Attach odds + Kalshi + Polymarket + Betfair implied probs to each ESPN event.
+
+    Returns list of (event, odds_meta, exchange_probs) where exchange_probs
+    is a dict with keys 'kalshi' / 'polymarket' / 'betfair' (each a float P(home) or None).
+    """
+    betfair_available = load_betfair_configured()
     out = []
     for ev in events:
         home_name = (ev.get("home") or {}).get("name")
@@ -106,7 +143,8 @@ def _merge_events_with_odds(events, odds_games, kalshi_markets=None):
                 "totals": odds_api.consensus_market(matched, "totals"),
                 "raw": matched,
             }
-        kalshi_prob_home = None
+        exch_probs = {"kalshi": None, "polymarket": None, "betfair": None}
+        # Kalshi
         if kalshi_markets:
             home_abbr = (ev.get("home") or {}).get("abbr") or ""
             away_abbr = (ev.get("away") or {}).get("abbr") or ""
@@ -115,8 +153,23 @@ def _merge_events_with_odds(events, odds_games, kalshi_markets=None):
                 home_abbr, away_abbr, home_name, away_name,
             )
             if event_markets:
-                kalshi_prob_home = home_implied_prob(event_markets, home_name, home_abbr)
-        out.append((ev, odds_meta, kalshi_prob_home))
+                exch_probs["kalshi"] = home_implied_prob(event_markets, home_name, home_abbr)
+        # Polymarket
+        if polymarket_markets:
+            pm = polymarket.find_game_market(
+                polymarket_markets, home_name, away_name, ev.get("start_utc"),
+            )
+            if pm:
+                exch_probs["polymarket"] = polymarket.home_implied_prob(pm, home_name, away_name)
+        # Betfair - only if auth configured; otherwise skip the round-trip
+        if betfair_available and sport_key:
+            try:
+                exch_probs["betfair"] = betfair.home_implied_prob_from_event(
+                    sport_key, home_name, away_name,
+                )
+            except Exception:
+                exch_probs["betfair"] = None
+        out.append((ev, odds_meta, exch_probs))
     return out
 
 
@@ -136,7 +189,13 @@ def render_dashboard(settings: dict):
     events = load_espn_scoreboard(sport)
     odds_games = load_odds(sport)
     kalshi_markets = load_kalshi_markets(sport)
-    merged = _merge_events_with_odds(events, odds_games, kalshi_markets)
+    polymarket_markets = load_polymarket_markets()
+    merged = _merge_events_with_odds(
+        events, odds_games,
+        kalshi_markets=kalshi_markets,
+        polymarket_markets=polymarket_markets,
+        sport_key=sport,
+    )
 
     # summary metrics
     picks = picks_store.list_picks()
@@ -177,9 +236,14 @@ def render_dashboard(settings: dict):
     # 3-column game grid - Streamlit columns to get real multi-column
     st.markdown('### Today\'s matchups')
     cols = st.columns(2)
-    for i, (ev, odds_meta, kalshi_prob_home) in enumerate(merged):
+    for i, (ev, odds_meta, exch_probs) in enumerate(merged):
         with cols[i % 2]:
-            prob_sources = _prob_sources_for(odds_meta, kalshi_prob_home)
+            prob_sources = _prob_sources_for(
+                odds_meta,
+                kalshi_prob_home=exch_probs.get("kalshi"),
+                polymarket_prob_home=exch_probs.get("polymarket"),
+                betfair_prob_home=exch_probs.get("betfair"),
+            )
             game_card(ev, odds_meta, prob_sources=prob_sources)
             _add_pick_control(ev, odds_meta, unit_pct, bankroll_units)
 
@@ -269,14 +333,14 @@ def _render_quick_calculator(merged, unit_pct, bankroll_units, sport):
         return
     labels = [
         f"{ev['away']['short'] or ev['away']['name']} @ {ev['home']['short'] or ev['home']['name']}"
-        for ev, _, _ in merged
+        for ev, _odds_meta, _exch in merged
     ]
     html('<h3>Quick-glance EV scanner</h3>')
     pick_idx = st.selectbox(
         "Pick a game", options=list(range(len(labels))),
         format_func=lambda i: labels[i], key="quick_pick", label_visibility="collapsed",
     )
-    ev, odds_meta, _kalshi_prob = merged[pick_idx]
+    ev, odds_meta, _exch_probs = merged[pick_idx]
     projected_home = st.slider(
         "Your projected home win probability",
         min_value=0.0, max_value=1.0, value=0.55, step=0.01,
