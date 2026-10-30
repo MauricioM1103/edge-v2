@@ -87,9 +87,19 @@ def _format_point(point) -> str:
     return f" {sign}{v}"
 
 
-def game_card(event: dict, odds_meta: Optional[dict] = None, prob_sources: Optional[dict] = None):
+def game_card(
+    event: dict,
+    odds_meta: Optional[dict] = None,
+    prob_sources: Optional[dict] = None,
+    primary_book: str = "kalshi",
+    kalshi_prob_home: Optional[float] = None,
+):
     """Render a single game card with ESPN schedule info and odds markets.
 
+    primary_book: which book's prices to show as the main 'lines' block.
+      One of "kalshi" | "pinnacle" | "draftkings" | "consensus".
+    kalshi_prob_home: P(home wins) implied by the Kalshi market, used when
+      primary_book == 'kalshi'. If None, falls back to consensus with a note.
     prob_sources (optional): per-side implied probabilities from different venues
     for the side-by-side comparison strip. Shape:
       {
@@ -159,31 +169,82 @@ def game_card(event: dict, odds_meta: Optional[dict] = None, prob_sources: Optio
         </div>
         """
 
+    def _resolve_book_prices():
+        """Return (h2h, spr, tot, book_label, book_source_note) for primary_book."""
+        if not odds_meta:
+            return None, None, None, (primary_book or "kalshi").title(), "no odds data"
+        h2h_c = odds_meta.get("h2h") or {}
+        spr_c = odds_meta.get("spreads") or {}
+        tot_c = odds_meta.get("totals") or {}
+        raw = odds_meta.get("raw")
+        if primary_book == "kalshi":
+            # Kalshi only has moneyline. Build a synthetic h2h from kalshi_prob_home.
+            if kalshi_prob_home is not None:
+                try:
+                    from calc.odds import decimal_to_american
+                    hp = decimal_to_american(1.0 / kalshi_prob_home) if kalshi_prob_home > 0 else None
+                    ap = decimal_to_american(1.0 / (1.0 - kalshi_prob_home)) if kalshi_prob_home < 1 else None
+                    return (
+                        {"home_price": hp, "away_price": ap, "book_count": 1},
+                        None, None,
+                        "Kalshi", "exchange — no vig",
+                    )
+                except Exception:
+                    pass
+            return None, None, None, "Kalshi", "no matching market"
+        if primary_book == "pinnacle" and raw:
+            from apis.book_filter import book_market
+            h2h_b = book_market(raw, "Pinnacle", "h2h") or {}
+            spr_b = book_market(raw, "Pinnacle", "spreads") or {}
+            tot_b = book_market(raw, "Pinnacle", "totals") or {}
+            if h2h_b or spr_b or tot_b:
+                return h2h_b, spr_b, tot_b, "Pinnacle", "sharpest book"
+            return None, None, None, "Pinnacle", "not quoted by this feed"
+        if primary_book == "draftkings" and raw:
+            from apis.book_filter import book_market
+            h2h_b = book_market(raw, "DraftKings", "h2h") or {}
+            spr_b = book_market(raw, "DraftKings", "spreads") or {}
+            tot_b = book_market(raw, "DraftKings", "totals") or {}
+            if h2h_b or spr_b or tot_b:
+                return h2h_b, spr_b, tot_b, "DraftKings", "US retail book"
+            return None, None, None, "DraftKings", "not quoted"
+        # default/consensus
+        return h2h_c, spr_c, tot_c, "Consensus", f"{h2h_c.get('book_count') or 0} books"
+
     lines_html = ""
-    if odds_meta:
+    if odds_meta or kalshi_prob_home is not None:
+        h2h, spr, tot, book_label, book_note = _resolve_book_prices()
         move_html = ""
-        h2h = odds_meta.get("h2h") or {}
-        spr = odds_meta.get("spreads") or {}
-        tot = odds_meta.get("totals") or {}
-        # line move indicator (home h2h move)
-        if h2h and h2h.get("home_opener") is not None:
-            delta = line_move_prob_delta(h2h.get("home_opener"), h2h.get("home_price"))
+        h2h = h2h or {}
+        spr = spr or {}
+        tot = tot or {}
+        # line move indicator (home h2h move, consensus only)
+        c_h2h = (odds_meta or {}).get("h2h") or {}
+        if c_h2h and c_h2h.get("home_opener") is not None:
+            delta = line_move_prob_delta(c_h2h.get("home_opener"), c_h2h.get("home_price"))
             label = classify_move(delta)
             if delta is not None and abs(delta) >= 0.005:
                 move_html = f'<span class="chip {("good" if delta>0 else "warn")}">{label} {delta*100:+.1f}%</span>'
 
+        def _na_block(label):
+            return f'<div class="gc-line"><div class="label">{label}</div><div class="row"><span class="side" style="font-size:10.5px;">not on {book_label}</span></div></div>'
+
+        ml_block = _market_block("Moneyline", h2h.get("home_price"), h2h.get("away_price")) if h2h.get("home_price") is not None or h2h.get("away_price") is not None else _na_block("Moneyline")
+        sp_block = _market_block("Spread", spr.get("home_price"), spr.get("away_price"), spr.get("home_point"), spr.get("away_point")) if spr.get("home_price") is not None or spr.get("away_price") is not None else _na_block("Spread")
+        tt_block = _market_block("Total", tot.get("home_price"), tot.get("away_price")) if tot.get("home_price") is not None or tot.get("away_price") is not None else _na_block("Total")
+
         lines_html = f"""
         <div class="gc-head">
           <div style="display:flex; gap:6px; align-items:center;">
-            <span class="chip">Consensus · {h2h.get('book_count') or spr.get('book_count') or tot.get('book_count') or 0} books</span>
+            <span class="chip accent">{book_label}</span>
+            <span class="chip" style="font-size:9px;">{book_note}</span>
             {move_html}
           </div>
-          <div class="chip">Best price shown live</div>
         </div>
         <div class="gc-lines">
-          {_market_block("Moneyline", h2h.get("home_price"), h2h.get("away_price"))}
-          {_market_block("Spread", spr.get("home_price"), spr.get("away_price"), spr.get("home_point"), spr.get("away_point"))}
-          {_market_block("Total", tot.get("home_price"), tot.get("away_price"))}
+          {ml_block}
+          {sp_block}
+          {tt_block}
         </div>
         """
     else:

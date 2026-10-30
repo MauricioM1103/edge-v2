@@ -42,6 +42,38 @@ BASE = "https://api.elections.kalshi.com/trade-api/v2"
 # key resolution
 # ---------------------------------------------------------------------------
 
+def _session_val(key: str) -> Optional[str]:
+    """Read a value from Streamlit session_state if available."""
+    try:
+        import streamlit as st
+        return st.session_state.get(key)
+    except Exception:
+        return None
+
+
+def set_runtime_credentials(access_key_id: str, private_key_pem: str) -> None:
+    """Store Kalshi credentials in the current session only (never written to disk).
+
+    Called from the sidebar 'Connect Kalshi' expander. Overrides env/secrets.
+    """
+    try:
+        import streamlit as st
+        st.session_state["_kalshi_rt_key_id"] = access_key_id or ""
+        st.session_state["_kalshi_rt_pem"] = private_key_pem or ""
+    except Exception:
+        pass
+
+
+def clear_runtime_credentials() -> None:
+    try:
+        import streamlit as st
+        for k in ("_kalshi_rt_key_id", "_kalshi_rt_pem"):
+            if k in st.session_state:
+                del st.session_state[k]
+    except Exception:
+        pass
+
+
 def _get_secret(name_env: str, name_secrets: str) -> Optional[str]:
     v = os.environ.get(name_env)
     if v:
@@ -61,11 +93,18 @@ def _get_secret(name_env: str, name_secrets: str) -> Optional[str]:
 
 
 def get_access_key_id() -> Optional[str]:
+    # Session (sidebar-entered) credentials take precedence.
+    sv = _session_val("_kalshi_rt_key_id")
+    if sv:
+        return sv
     return _get_secret("KALSHI_ACCESS_KEY_ID", "kalshi_access_key_id")
 
 
 def get_private_key_pem() -> Optional[str]:
-    """Return PEM string (either loaded from a file path or inlined in secrets)."""
+    """Return PEM string (session value, inline secret, or file path)."""
+    sv = _session_val("_kalshi_rt_pem")
+    if sv:
+        return sv
     inline = _get_secret("KALSHI_PRIVATE_KEY_PEM", "kalshi_private_key_pem")
     if inline:
         return inline

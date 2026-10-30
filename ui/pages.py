@@ -235,6 +235,7 @@ def render_dashboard(settings: dict):
 
     # 3-column game grid - Streamlit columns to get real multi-column
     st.markdown('### Today\'s matchups')
+    primary_book = settings.get("primary_book") or "kalshi"
     cols = st.columns(2)
     for i, (ev, odds_meta, exch_probs) in enumerate(merged):
         with cols[i % 2]:
@@ -244,7 +245,12 @@ def render_dashboard(settings: dict):
                 polymarket_prob_home=exch_probs.get("polymarket"),
                 betfair_prob_home=exch_probs.get("betfair"),
             )
-            game_card(ev, odds_meta, prob_sources=prob_sources)
+            game_card(
+                ev, odds_meta,
+                prob_sources=prob_sources,
+                primary_book=primary_book,
+                kalshi_prob_home=exch_probs.get("kalshi"),
+            )
             _add_pick_control(ev, odds_meta, unit_pct, bankroll_units)
 
 
@@ -431,11 +437,22 @@ def _add_pick_control(event, odds_meta, unit_pct, bankroll_units):
             "Methodology", options=["Model Edge", "Line Move", "Situational", "Fade the Public"],
             key=f"{key_prefix}_meth",
         )
-        notes = st.text_area(
-            "Quantitative breakdown",
-            placeholder="Why this pick? EV, line move, situational angle, model vs. market...",
-            key=f"{key_prefix}_notes", height=80,
-        )
+        # Breakdown field is hidden until the user explicitly asks for it.
+        show_breakdown_key = f"{key_prefix}_show_notes"
+        if st.session_state.get(show_breakdown_key):
+            notes = st.text_area(
+                "Quantitative breakdown",
+                placeholder="Why this pick? EV, line move, situational angle, model vs. market...",
+                key=f"{key_prefix}_notes", height=100,
+            )
+            if st.button("Hide breakdown", key=f"{key_prefix}_hide_notes"):
+                st.session_state[show_breakdown_key] = False
+                st.rerun()
+        else:
+            notes = st.session_state.get(f"{key_prefix}_notes", "")
+            if st.button("＋ Add quantitative breakdown", key=f"{key_prefix}_add_notes"):
+                st.session_state[show_breakdown_key] = True
+                st.rerun()
 
         evp = ev_percent(projected, price)
         units_rec = recommend_units(evp)

@@ -54,17 +54,49 @@ def _sidebar_settings() -> dict:
         )
         st.markdown("---")
 
-        # ----- KALSHI CASH -----
-        st.markdown("#### Kalshi cash")
+        # ----- KALSHI LIVE CONNECTION -----
+        st.markdown("#### Kalshi")
+        with st.expander("Connect Kalshi (live cash)", expanded=False):
+            st.caption(
+                "Credentials live in this browser session only — never written to disk. "
+                "Get keys at kalshi.com → Account → API Keys."
+            )
+            kid_in = st.text_input(
+                "Access key ID",
+                value=st.session_state.get("_kalshi_rt_key_id", ""),
+                key="sb_k_kid", type="password",
+            )
+            pem_in = st.text_area(
+                "RSA private key (PEM)",
+                value=st.session_state.get("_kalshi_rt_pem", ""),
+                key="sb_k_pem", height=120,
+                placeholder="-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----",
+            )
+            c_a, c_b = st.columns(2)
+            if c_a.button("Connect", use_container_width=True, type="primary"):
+                if kid_in.strip() and pem_in.strip():
+                    kalshi.set_runtime_credentials(kid_in.strip(), pem_in.strip())
+                    st.cache_data.clear()
+                    st.success("Credentials saved for this session. Reloading…")
+                    st.rerun()
+                else:
+                    st.warning("Both the access key ID and PEM are required.")
+            if c_b.button("Disconnect", use_container_width=True):
+                kalshi.clear_runtime_credentials()
+                st.cache_data.clear()
+                st.success("Session credentials cleared.")
+                st.rerun()
+
+        # Resolve current balance (session creds take priority, then env/secrets).
         balance = load_kalshi_balance() or {"usd": None, "source": None}
         live_usd = balance.get("usd")
         live_src = balance.get("source")
         if live_src == "live":
-            st.success(f"Live balance: ${live_usd:,.2f}")
+            st.success(f"Live Kalshi balance: ${live_usd:,.2f}")
         elif live_src == "manual":
             st.info(f"Manual balance (env): ${live_usd:,.2f}")
         else:
-            st.caption("No live Kalshi connection — enter cash manually below.")
+            st.caption("Not connected — enter cash manually below.")
 
         kalshi_cash = st.number_input(
             "Available Kalshi cash ($)",
@@ -72,10 +104,27 @@ def _sidebar_settings() -> dict:
             value=float(live_usd) if live_usd is not None else 500.0,
             step=25.0,
             key="sb_kalshi_cash",
-            help="The agent sizes recommendations against this balance. Comes from "
-                 "the live Kalshi API when a key pair is configured, otherwise enter manually.",
+            help="The agent sizes recommendations against this balance. Live when "
+                 "connected above; otherwise this manual value.",
         )
         kalshi_source = live_src or ("manual" if kalshi_cash else None)
+
+        # ----- PRIMARY BOOK (sets which book shows in each game card's lines block) -----
+        st.markdown("#### Lines display")
+        primary_book = st.selectbox(
+            "Primary book (shown on game cards)",
+            options=["kalshi", "pinnacle", "draftkings", "consensus"],
+            format_func=lambda k: {
+                "kalshi": "Kalshi (prediction market)",
+                "pinnacle": "Pinnacle (sharpest book)",
+                "draftkings": "DraftKings",
+                "consensus": "Consensus (all books)",
+            }[k],
+            index=0,
+            key="sb_primary_book",
+            help="Pick which book's lines show as the main numbers on each game card. "
+                 "All sources still appear in the implied-probability strip.",
+        )
 
         # ----- CLASSIC UNITS -----
         st.markdown("#### Unit sizing")
@@ -149,6 +198,7 @@ def _sidebar_settings() -> dict:
         "bankroll_units": bankroll_units,
         "kalshi_cash": kalshi_cash,
         "kalshi_source": kalshi_source,
+        "primary_book": primary_book,
         "agent_kelly": agent_kelly,
         "agent_min_edge": agent_min_edge,
         "agent_min_books": agent_min_books,
