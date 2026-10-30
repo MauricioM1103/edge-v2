@@ -59,6 +59,32 @@ def load_odds(sport_key: str, regions: str = "eu", markets: str = "h2h", cache_t
         return []
 
 
+@st.cache_data(ttl=6 * 3600, show_spinner=False)
+def load_alt_markets(sport_key: str, event_ids_tuple: tuple, regions: str, alt_markets: str, cache_ttl: int = 6 * 3600):
+    """Fetch alt markets (1H totals / BTTS / spreads_h1) for a batch of events
+    via the per-event endpoint. Returns {event_id: event_data_dict}.
+
+    Streamlit's cache_data takes the tuple of event IDs as part of the key so
+    the same slate hits the cache; the underlying on-disk cache in apis.odds
+    also persists across container restarts. Credit cost is markets × regions
+    PER EVENT, which is why this is opt-in via the odds_alt_markets setting."""
+    odds_sport = espn.ODDS_API_SPORT_KEYS.get(sport_key)
+    if not odds_sport or not event_ids_tuple or not (alt_markets or "").strip():
+        return {}
+    out = {}
+    for eid in event_ids_tuple:
+        try:
+            d = odds_api.get_event_odds(
+                odds_sport, eid,
+                regions=regions, markets=alt_markets, cache_ttl=cache_ttl,
+            )
+        except Exception:
+            d = None
+        if d:
+            out[eid] = d
+    return out
+
+
 @st.cache_data(ttl=60, show_spinner=False)
 def load_kalshi_markets(sport_key: str):
     try:
@@ -236,6 +262,12 @@ def render_dashboard(settings: dict):
     regions = saved_cfg.get("odds_regions") or "eu"
     markets_cfg = saved_cfg.get("odds_markets") or "h2h"
     live_ttl = int(saved_cfg.get("odds_live_ttl") or 3600)
+    # Alt markets opt-in: comma-separated like "totals_h1,spreads_h1". When
+    # non-empty, per-event endpoint runs for each sport in odds_alt_sports
+    # (or every sport if that list is empty — be careful on credits).
+    alt_markets_cfg = (saved_cfg.get("odds_alt_markets") or "").strip()
+    alt_sports_allow = {str(x).strip().lower() for x in (saved_cfg.get("odds_alt_sports") or []) if str(x).strip()}
+    alt_ttl = int(saved_cfg.get("odds_alt_ttl") or 6 * 3600)
 
     # Per-sport fetches, aggregated. CREDIT GUARD: only hit the Odds API
     # for sports that actually have ESPN games on the selected date.
@@ -249,6 +281,22 @@ def render_dashboard(settings: dict):
         # Skip Odds API fetch entirely when ESPN shows no games on this date for this sport.
         has_games = bool(events_sp)
         odds_games_sp = load_odds(sp, regions=regions, markets=markets_cfg, cache_ttl=live_ttl) if (is_today and has_games) else []
+        # Per-event alt-market enrichment: fetch 1H / BTTS lines for THIS sport's
+        # events and merge them into the bookmakers list so the agent scanner
+        # finds those edges without changing its interface. Gated by:
+        #  - alt_markets_cfg non-empty (user opted in via Settings)
+        #  - sport in allowlist (or allowlist empty = all applicable sports)
+        #  - at least one game returned from the batch endpoint (else nothing
+        #    to enrich, and no sense wasting credits)
+        if alt_markets_cfg and odds_games_sp and is_today and (not alt_sports_allow or sp in alt_sports_allow):
+            eids = tuple(og.get("id") for og in odds_games_sp if og.get("id"))
+            if eids:
+                try:
+                    alt_data = load_alt_markets(sp, eids, regions, alt_markets_cfg, cache_ttl=alt_ttl)
+                except Exception:
+                    alt_data = {}
+                if alt_data:
+                    odds_api.merge_alt_markets_into_games(odds_games_sp, alt_data)
         for og in odds_games_sp or []:
             og["_sport"] = sp
             all_odds_games_tagged.append((sp, og))
@@ -498,6 +546,15 @@ def _render_agent_panel(odds_games, kalshi_cash, settings,
         return []
     shop_books = saved_cfg.get("shop_books") or ["Bovada", "LowVig.ag", "BetOnline.ag", "BetUS", "MyBookie.ag"]
     markets_list = [m.strip() for m in (saved_cfg.get("odds_markets") or "h2h").split(",") if m.strip()]
+    # When the per-event fetcher ran, those alt markets are now in each game's
+    # bookmakers list. Append them to markets_list so the scanner iterates them
+    # alongside the batch-endpoint markets.
+    alt_markets_cfg = (saved_cfg.get("odds_alt_markets") or "").strip()
+    if alt_markets_cfg:
+        for m in alt_markets_cfg.split(","):
+            m = m.strip()
+            if m and m not in markets_list:
+                markets_list.append(m)
     scan_other_fn = getattr(agent_calc, "scan_offshore_markets_vs_pinnacle", None)
     for sp in (sports_list or []):
         sp_kalshi = kalshi_markets_by_sport.get(sp, {})
@@ -1637,22 +1694,32 @@ def render_settings(settings: dict):
             n = len(new_regions.split(","))
             st.success(f"Regions: {new_regions} → {n * len(cur_markets.split(','))} credits per sport per fetch.")
 
-    # Markets picker — more markets = more edges but linearly more credits.
+    # Markets picker — split into two groups by API endpoint, because the two
+    # cost VERY differently. Batch markets cost regions*markets credits per
+    # SPORT. Alt markets cost regions*markets credits per EVENT - 10-100x more.
     st.markdown("### Markets to scan")
-    all_markets = ["h2h", "totals", "spreads", "h2h_h1", "totals_h1", "btts"]
+    st.caption(
+        "**Batch endpoint** markets cost regions × markets credits per sport "
+        "fetch. **Per-event** markets (1H lines, BTTS) cost that much per event "
+        "— 10-100× more. Only enable per-event markets if your plan can afford it."
+    )
+    batch_markets = ["h2h", "totals", "spreads"]
+    alt_markets_opts = ["totals_h1", "spreads_h1", "h2h_h1", "btts"]
     labels = {
         "h2h": "Moneyline (h2h) — required for Kalshi",
         "totals": "Full-game totals (O/U)",
         "spreads": "Point spreads",
         "h2h_h1": "1st-half moneyline",
         "totals_h1": "1st-half totals (O/U)",
+        "spreads_h1": "1st-half spread",
         "btts": "Both teams to score (soccer only)",
     }
     cur_markets_list = [m.strip() for m in (saved.get("odds_markets") or "h2h").split(",") if m.strip()]
+    # Batch picker — the standard /odds endpoint.
     new_markets = st.multiselect(
-        "Markets",
-        options=all_markets,
-        default=cur_markets_list,
+        "Batch markets (`/odds` endpoint)",
+        options=batch_markets,
+        default=[m for m in cur_markets_list if m in batch_markets],
         format_func=lambda m: labels.get(m, m),
         key="set_markets",
     )
@@ -1663,14 +1730,60 @@ def render_settings(settings: dict):
     n_markets = len(new_markets)
     new_cost = n_regions * n_markets
     st.caption(
-        f"Credit cost preview: **{new_cost} credits** per sport per fetch "
-        f"(regions × markets = {n_regions} × {n_markets}). "
-        f"ESPN pre-filter already skips sports with no games today."
+        f"Batch cost: **{new_cost} credits per sport per fetch** "
+        f"({n_regions} regions × {n_markets} markets)."
     )
     if new_markets_str != (saved.get("odds_markets") or "h2h"):
         settings_store.save({"odds_markets": new_markets_str})
         st.cache_data.clear()
-        st.success(f"Markets: {new_markets_str}")
+        st.success(f"Batch markets: {new_markets_str}")
+
+    # Per-event picker — opt-in because of credit cost.
+    cur_alt = (saved.get("odds_alt_markets") or "").strip()
+    cur_alt_list = [m.strip() for m in cur_alt.split(",") if m.strip()] if cur_alt else []
+    new_alt = st.multiselect(
+        "Alt markets (`/events/{id}/odds` endpoint) — one call per event",
+        options=alt_markets_opts,
+        default=cur_alt_list,
+        format_func=lambda m: labels.get(m, m),
+        key="set_alt_markets",
+        help="These markets are served ONLY by the per-event endpoint. Each "
+             "selection adds 1 credit per region per event. Cache TTL is 6h.",
+    )
+    new_alt_str = ",".join(new_alt)
+    # Allowlist of sports the per-event fetcher runs on - only shown when alt
+    # markets are enabled, because it's a credit guard, not a feature.
+    if new_alt:
+        all_sport_keys = sorted(espn.ODDS_API_SPORT_KEYS.keys())
+        display_names = espn.DISPLAY_NAMES if hasattr(espn, "DISPLAY_NAMES") else {}
+        cur_alt_sports = list(saved.get("odds_alt_sports") or [])
+        new_alt_sports = st.multiselect(
+            "Alt-markets allowlist (sports)",
+            options=all_sport_keys,
+            default=cur_alt_sports,
+            format_func=lambda s: display_names.get(s, s.upper()),
+            key="set_alt_sports",
+            help="ONLY these sports hit the per-event endpoint for alt markets. "
+                 "Leaving this empty runs it on EVERY sport with games today "
+                 "— credit blowup risk. Start with 2-3 sports.",
+        )
+        if new_alt_sports != cur_alt_sports:
+            settings_store.save({"odds_alt_sports": new_alt_sports})
+            st.cache_data.clear()
+        _alt_sports_for_cost = new_alt_sports or ["(all applicable sports)"]
+        st.caption(
+            f"Alt cost: **{n_regions * len(new_alt)} credits per event per refresh**, "
+            f"on {len(_alt_sports_for_cost)} sport(s). "
+            f"A 20-event slate = {n_regions * len(new_alt) * 20} credits per refresh. "
+            f"6h cache keeps it to ~4 refreshes/day."
+        )
+    if new_alt_str != cur_alt:
+        settings_store.save({"odds_alt_markets": new_alt_str})
+        st.cache_data.clear()
+        if new_alt_str:
+            st.success(f"Alt markets enabled: {new_alt_str}")
+        else:
+            st.info("Alt markets disabled.")
     with c3:
         if st.button("Clear Odds API disk cache"):
             import shutil, os

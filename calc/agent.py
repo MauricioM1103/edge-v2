@@ -580,6 +580,7 @@ MARKET_LABELS = {
     "spreads": "Spread",
     "h2h_h1": "1H Moneyline",
     "totals_h1": "1H Total",
+    "spreads_h1": "1H Spread",
     "btts": "BTTS",
 }
 
@@ -697,7 +698,7 @@ def scan_offshore_markets_vs_pinnacle(
             if fair_home is None:
                 continue
             # For totals / spreads, require half-point lines (no push risk).
-            if mk in ("spreads", "totals", "totals_h1") and half_points_only:
+            if mk in ("spreads", "totals", "totals_h1", "spreads_h1") and half_points_only:
                 if not (_is_half_pt(pin_entry.get("home_pt")) or _is_half_pt(pin_entry.get("away_pt"))):
                     continue
             # Pre-attach ESPN state for grading.
@@ -737,6 +738,8 @@ def scan_offshore_markets_vs_pinnacle(
                 pt = best.get("point")
                 if mk in ("totals", "totals_h1") and pt is not None:
                     side_label = f"{side_label} {pt}"
+                elif mk in ("spreads", "spreads_h1") and pt is not None:
+                    side_label = f"{side_label} {pt:+g}"
                 elif mk == "spreads" and pt is not None:
                     try:
                         pt_f = float(pt)

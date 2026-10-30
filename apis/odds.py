@@ -222,6 +222,86 @@ def estimated_credit_cost(regions: str, markets: str) -> int:
     return max(1, r * m)
 
 
+def list_events(sport: str, cache_ttl: int = 1800) -> List[dict]:
+    """List upcoming events for a sport. Free (0 credits) and used to drive
+    per-event alternate-market fetches without burning credits upfront.
+    Returns [] on missing key / error."""
+    if not sport:
+        return []
+    data = _get(
+        f"/sports/{sport}/events",
+        {"dateFormat": "iso"},
+        cache_ttl=cache_ttl,
+    )
+    if not data or not isinstance(data, list):
+        return []
+    return data
+
+
+def get_event_odds(
+    sport: str,
+    event_id: str,
+    regions: str = "us,eu",
+    markets: str = "totals_h1",
+    odds_format: str = "american",
+    cache_ttl: int = 6 * 3600,
+) -> Optional[dict]:
+    """Fetch alternate markets (1H lines, BTTS, player props) for ONE event.
+
+    These markets are NOT served by the batch /odds endpoint - requesting them
+    there returns 0 games. Only the per-event endpoint carries them.
+
+    Cost: markets × regions credits per call. 1H totals × us,eu = 2 credits per
+    event. Cache aggressively (6h default) because 1H lines barely move after
+    the market opens. Returns None on error."""
+    if not sport or not event_id:
+        return None
+    data = _get(
+        f"/sports/{sport}/events/{event_id}/odds",
+        {
+            "regions": regions,
+            "markets": markets,
+            "oddsFormat": odds_format,
+            "dateFormat": "iso",
+        },
+        cache_ttl=cache_ttl,
+    )
+    if not data or not isinstance(data, dict):
+        return None
+    return data
+
+
+def merge_alt_markets_into_games(odds_games: List[dict], alt_data_by_eid: dict) -> List[dict]:
+    """Extend each game's bookmakers with alt-market data from per-event fetch.
+
+    `odds_games`: list of games from `get_odds` (batch endpoint).
+    `alt_data_by_eid`: {event_id: event_data_from_get_event_odds, ...}
+
+    For each matching event, merges every alt bookmaker's markets into the
+    main-fetch bookmakers list. Existing markets are not overwritten; new
+    ones are appended. Returns the mutated list (also in-place)."""
+    for og in odds_games:
+        eid = og.get("id")
+        if not eid or eid not in alt_data_by_eid:
+            continue
+        alt_g = alt_data_by_eid[eid] or {}
+        existing_books = {b.get("key"): b for b in (og.get("bookmakers") or [])}
+        for alt_bk in (alt_g.get("bookmakers") or []):
+            alt_key = alt_bk.get("key")
+            alt_markets = alt_bk.get("markets") or []
+            if not alt_markets:
+                continue
+            if alt_key in existing_books:
+                existing = existing_books[alt_key]
+                have_keys = {m.get("key") for m in (existing.get("markets") or [])}
+                for m in alt_markets:
+                    if m.get("key") and m.get("key") not in have_keys:
+                        existing.setdefault("markets", []).append(m)
+            else:
+                og.setdefault("bookmakers", []).append(alt_bk)
+    return odds_games
+
+
 def get_scores(sport: str, days_from: int = 1) -> List[dict]:
     """Fetch completed and in-progress scores from The Odds API."""
     if not sport:

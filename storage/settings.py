@@ -38,12 +38,24 @@ _DEFAULTS: Dict[str, Any] = {
     # (Bovada, LowVig, BetOnline) alongside Pinnacle - these tolerate winning
     # accounts and produce bigger edges than the sharp exchanges alone.
     "odds_regions": "us,eu",
-    # Which Odds API markets to pull. The standard /odds endpoint only serves
-    # core markets: h2h (moneyline) and totals (over/under). Alternate markets
-    # (1H lines, BTTS, player props) require higher-tier plan AND the per-event
-    # endpoint - requesting them on the standard endpoint returns 0 games.
-    # Spreads intentionally left out (edges rare, costs 1 credit/region).
-    "odds_markets": "h2h,totals",
+    # Which Odds API markets to pull from the BATCH /odds endpoint. Only core
+    # markets (h2h, totals, spreads) work there - alternate markets (1H, BTTS,
+    # props) return 0 games. Each market adds 1 credit/region.
+    "odds_markets": "h2h,totals,spreads",
+    # Alternate markets to pull via the PER-EVENT /events/{id}/odds endpoint.
+    # These are opt-in because they cost markets×regions credits PER EVENT
+    # (vs per sport for the batch endpoint). Empty string disables.
+    # Supported: totals_h1, spreads_h1, h2h_h1 (team sports), btts (soccer).
+    # Only runs for sports in `odds_alt_sports` to prevent credit blowup.
+    "odds_alt_markets": "",
+    # Allowlist of sports the per-event alt-market fetcher may hit. Default
+    # is empty = run on everything, but credit cost scales with event count,
+    # so narrowing this to the sports you actually need (e.g. ["nba","nfl"])
+    # cuts the burn rate dramatically. Only applied when odds_alt_markets is set.
+    "odds_alt_sports": [],
+    # Cache TTL for per-event alt-market fetches. 1H lines don't move much
+    # after open, so 6h cache + manual "Clear cache" when needed is sane.
+    "odds_alt_ttl": 6 * 3600,
     # Cache TTL for live odds in seconds. 3600 = 1h.
     "odds_live_ttl": 3600,
     # Books the agent will shop against Pinnacle fair, in addition to Kalshi.
@@ -76,11 +88,16 @@ def load() -> Dict[str, Any]:
         with open(_path(), "r", encoding="utf-8") as f:
             disk = json.load(f)
         if isinstance(disk, dict):
-            # Migration 1: old odds_markets defaults were either "h2h" (too
-            # narrow) or the ambitious "h2h,totals,h2h_h1,totals_h1,btts"
-            # which triggers an API error (alternate markets need per-event
-            # endpoint). Snap any retired default to the current safe set.
-            _RETIRED_MARKETS = {"h2h", "h2h,totals,h2h_h1,totals_h1,btts"}
+            # Migration 1: previous odds_markets defaults ("h2h" too narrow,
+            # the "h2h,totals,h2h_h1,totals_h1,btts" string that triggers a 0-
+            # games API response, and the plain "h2h,totals" that preceded
+            # spreads) each get snapped forward to the current default so the
+            # batch endpoint actually fetches the full featured-market set.
+            _RETIRED_MARKETS = {
+                "h2h",
+                "h2h,totals",
+                "h2h,totals,h2h_h1,totals_h1,btts",
+            }
             if disk.get("odds_markets") in _RETIRED_MARKETS:
                 disk["odds_markets"] = _DEFAULTS["odds_markets"]
             # Migration 2: old unit_pct_of_kalshi default was 0.10 (10%); then
