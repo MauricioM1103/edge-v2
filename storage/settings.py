@@ -23,14 +23,24 @@ _DEFAULTS: Dict[str, Any] = {
     "extra_sources": [],  # extra rows in the prob strip
     # Agent
     "agent_kelly": 0.25,
-    "agent_min_edge": 0.02,
+    # 1% default - Kalshi vs Pinnacle are both near-fair markets, so edges are
+    # smaller than the 2% you'd see scanning retail US books. Raise this to
+    # trim down to only the biggest edges.
+    "agent_min_edge": 0.01,
     "agent_min_books": 3,
     "agent_max_bet_pct": 0.05,
     # Fair prob source order (configurable, default = Pinnacle sharp).
     "agent_fair_source": "pinnacle",
-    # Odds API regions. "us,eu" includes Pinnacle (sharpest book) at 2× credit cost.
-    # Set to "us" to halve the credit cost (and lose Pinnacle fair).
-    "odds_regions": "us,eu",
+    # Odds API regions. The default "eu" is Pinnacle-only (1 credit per request)
+    # because Pinnacle is the fair-prob source and Kalshi is the book we bet on.
+    # Only broaden this if you also want to shop other books in the UI.
+    "odds_regions": "eu",
+    # Which Odds API markets to pull. "h2h" is enough for moneyline edges on
+    # Kalshi (which only lists winner markets). Each extra market adds 1 credit.
+    "odds_markets": "h2h",
+    # Cache TTL for live odds in seconds. 3600 = 1h. The Odds API line only
+    # moves ~once/hour on average; shorter TTL burns credits for marginal freshness.
+    "odds_live_ttl": 3600,
     # Daily total-exposure cap as a fraction of Kalshi cash. Prevents the agent
     # from recommending more stakes than the bankroll can cover across many picks.
     "daily_exposure_cap_pct": 0.25,

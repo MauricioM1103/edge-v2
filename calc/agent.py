@@ -325,6 +325,146 @@ def scan_all(
     return out
 
 
+def scan_kalshi_vs_pinnacle(
+    kalshi_markets_by_game: dict,     # {(home_name,away_name): [kalshi_markets...]}
+    pinnacle_games: List[dict],       # Odds API games with Pinnacle quotes (regions=eu, markets=h2h)
+    bankroll_cash: float,
+    sport_key: str = "",
+    kelly_mult: float = 0.25,
+    min_edge_pct: float = 0.02,
+    max_bet_pct: float = 0.05,
+) -> List[dict]:
+    """Credit-efficient scanner: Kalshi (free) as the book, Pinnacle no-vig as fair.
+
+    One row per Kalshi game outcome we have both sides of. Edge = Pinnacle-fair
+    minus Kalshi implied prob at that outcome. If positive, you're buying the
+    outcome on Kalshi at longer odds than the sharp consensus says it should be.
+
+    Returns a list of edge dicts shaped like scan_all's rows so the UI table stays
+    compatible, with an extra `kalshi_ticker` and `kalshi_url` for direct-click.
+    """
+    from apis.team_mapping import canonical, same_team
+    from apis import kalshi as kalshi_api
+
+    out = []
+    if not pinnacle_games or not kalshi_markets_by_game:
+        return out
+    try:
+        bankroll_cash = float(bankroll_cash)
+    except (TypeError, ValueError):
+        return out
+    if bankroll_cash <= 0:
+        return out
+
+    max_stake = bankroll_cash * max_bet_pct
+
+    # Build lookup: canonical team pair -> pinnacle game dict.
+    pin_by_key = {}
+    for g in pinnacle_games:
+        home = g.get("home_team") or ""
+        away = g.get("away_team") or ""
+        if home and away:
+            pin_by_key[(canonical(home), canonical(away))] = g
+
+    for (home_name, away_name), markets in kalshi_markets_by_game.items():
+        if not markets:
+            continue
+        # Find the Pinnacle game.
+        pin_game = pin_by_key.get((canonical(home_name), canonical(away_name)))
+        if not pin_game:
+            # Try swapped (ESPN vs Odds API home/away sometimes differ).
+            pin_game = pin_by_key.get((canonical(away_name), canonical(home_name)))
+            if not pin_game:
+                continue
+        # Pinnacle h2h prices.
+        pin_h = pin_a = None
+        for b in (pin_game.get("bookmakers") or []):
+            if (b.get("key") or "").lower() != "pinnacle" and (b.get("title") or "").lower() != "pinnacle":
+                continue
+            for m in (b.get("markets") or []):
+                if m.get("key") != "h2h":
+                    continue
+                for o in (m.get("outcomes") or []):
+                    price = o.get("price")
+                    try:
+                        price = float(price) if price is not None else None
+                    except (TypeError, ValueError):
+                        price = None
+                    if price is None:
+                        continue
+                    if same_team(o.get("name"), pin_game.get("home_team")):
+                        pin_h = price
+                    elif same_team(o.get("name"), pin_game.get("away_team")):
+                        pin_a = price
+        if pin_h is None or pin_a is None:
+            continue
+        fair_home, fair_away = no_vig_two_way(pin_h, pin_a)
+        if fair_home is None:
+            continue
+
+        # Pinnacle's canonical home maps to the Odds API game's home_team.
+        # Rebind the Kalshi 'home' to that same team so fair_home/fair_away match orientation.
+        pin_home_name = pin_game.get("home_team") or home_name
+        pin_away_name = pin_game.get("away_team") or away_name
+
+        for market in markets:
+            yes_prob = kalshi_api.market_implied_yes_prob(market)
+            if yes_prob is None or yes_prob <= 0 or yes_prob >= 1:
+                continue
+            yes_team = (market.get("yes_sub_title") or "").strip()
+            if not yes_team:
+                continue
+            # Which Pinnacle side does "YES" map to?
+            if same_team(yes_team, pin_home_name):
+                fair_for_yes = fair_home
+                yes_side = pin_home_name
+            elif same_team(yes_team, pin_away_name):
+                fair_for_yes = fair_away
+                yes_side = pin_away_name
+            else:
+                continue
+            edge = fair_for_yes - yes_prob
+            if edge < min_edge_pct:
+                continue
+            # Convert Kalshi yes prob to American for display consistency.
+            from calc.odds import decimal_to_american
+            try:
+                price_american = decimal_to_american(1.0 / yes_prob) if yes_prob > 0 else None
+            except Exception:
+                price_american = None
+            # Kelly stake using fair prob + Kalshi price (yes_prob is the decimal_odds^-1).
+            kf = kelly_fraction(fair_for_yes, price_american, kelly_mult) or 0.0
+            stake = min(bankroll_cash * kf, max_stake)
+            ticker = market.get("ticker") or ""
+            kalshi_url = (
+                f"https://kalshi.com/markets/{ticker.lower()}" if ticker else "https://kalshi.com/markets"
+            )
+            out.append({
+                "_sport": sport_key,
+                "event_id": market.get("event_ticker"),
+                "home_team": pin_home_name,
+                "away_team": pin_away_name,
+                "matchup": f"{pin_away_name} @ {pin_home_name}",
+                "market": "h2h",
+                "side_label": f"{yes_side} YES",
+                "point": None,
+                "price": price_american,
+                "price_cents": int(round(yes_prob * 100)),
+                "book": "Kalshi",
+                "book_implied": yes_prob,
+                "fair_prob": fair_for_yes,
+                "fair_source": "Pinnacle no-vig",
+                "edge": edge,
+                "edge_pct": edge * 100.0,
+                "kelly_frac": kf,
+                "stake_dollars": stake,
+                "kalshi_ticker": ticker,
+                "kalshi_url": kalshi_url,
+            })
+    out.sort(key=lambda r: -r["edge"])
+    return out
+
+
 def apply_daily_cap(edges: List[dict], bankroll_cash: float, daily_cap_pct: float = 0.25) -> List[dict]:
     """Top-N selection: take picks in edge-rank order until the cap is used.
 

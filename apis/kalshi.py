@@ -350,27 +350,54 @@ def fetch_sport_markets(sport_key: str) -> List[dict]:
     return out
 
 
-def market_implied_yes_prob(market: dict) -> Optional[float]:
-    """Mid of yes bid/ask (cents 0-99) as a probability 0-1. None if no quote."""
-    if not market:
-        return None
-    yb = market.get("yes_bid")
-    ya = market.get("yes_ask")
-    lp = market.get("last_price")
-    if yb is None and ya is None and lp is None:
+def _coerce_price(v):
+    """Parse a Kalshi price field. Supports:
+      * new API: dollar string '0.5500' -> 0.55
+      * legacy: integer cents 55 -> 0.55
+    Returns None if unparseable or zero (zero means 'no quote').
+    """
+    if v is None:
         return None
     try:
-        if yb is not None and ya is not None:
-            mid = (float(yb) + float(ya)) / 2.0
-        elif ya is not None:
-            mid = float(ya)
-        elif yb is not None:
-            mid = float(yb)
-        else:
-            mid = float(lp)
+        f = float(v)
     except (TypeError, ValueError):
         return None
-    return max(0.0, min(1.0, mid / 100.0))
+    if f <= 0:
+        return None
+    # Values >1 are legacy cents format.
+    if f > 1:
+        return f / 100.0
+    return f
+
+
+def market_implied_yes_prob(market: dict) -> Optional[float]:
+    """Mid of YES bid/ask as a probability 0-1. None if no live quote.
+
+    Supports both the current Kalshi API (`yes_bid_dollars`, `yes_ask_dollars`,
+    `last_price_dollars` as dollar strings) and the legacy integer-cents fields
+    (`yes_bid`, `yes_ask`, `last_price`).
+    """
+    if not market:
+        return None
+    # Prefer new "_dollars" fields; fall back to legacy.
+    yb = _coerce_price(market.get("yes_bid_dollars"))
+    ya = _coerce_price(market.get("yes_ask_dollars"))
+    lp = _coerce_price(market.get("last_price_dollars"))
+    if yb is None and ya is None and lp is None:
+        yb = _coerce_price(market.get("yes_bid"))
+        ya = _coerce_price(market.get("yes_ask"))
+        lp = _coerce_price(market.get("last_price"))
+    if yb is None and ya is None and lp is None:
+        return None
+    if yb is not None and ya is not None:
+        mid = (yb + ya) / 2.0
+    elif ya is not None:
+        mid = ya
+    elif yb is not None:
+        mid = yb
+    else:
+        mid = lp
+    return max(0.0, min(1.0, mid))
 
 
 # ---------------------------------------------------------------------------

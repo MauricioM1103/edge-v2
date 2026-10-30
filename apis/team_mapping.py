@@ -63,7 +63,13 @@ def canonical(name) -> str:
 
 
 def same_team(a, b) -> bool:
-    """True when a and b map to the same canonical team key."""
+    """True when a and b map to the same canonical team key.
+
+    Matches tolerate common differences across data sources:
+      * Full name vs city-only ("Chicago Bulls" <-> "Chicago", "LA Lakers" <-> "LA")
+      * Full name vs nickname ("Boston Celtics" <-> "Celtics")
+      * Alias dictionary ("LA Lakers" <-> "Los Angeles Lakers")
+    """
     if not a or not b:
         return False
     ca, cb = canonical(a), canonical(b)
@@ -71,10 +77,19 @@ def same_team(a, b) -> bool:
         return False
     if ca == cb:
         return True
-    # last-word fallback: "lakers" matches "los angeles lakers"
-    return ca.split()[-1] == cb.split()[-1] and ca.split()[-1] not in {
-        "giants", "cardinals", "rangers", "kings"  # ambiguous across sports/cities
-    }
+    toks_a = ca.split()
+    toks_b = cb.split()
+    # One is a strict prefix of the other (city match): "chicago" vs "chicago bulls".
+    if toks_a and toks_b:
+        min_len = min(len(toks_a), len(toks_b))
+        if toks_a[:min_len] == toks_b[:min_len]:
+            return True
+    # last-word match (nickname): "lakers" <-> "los angeles lakers"
+    # Guarded against ambiguous nicknames that collide across sports/cities.
+    ambiguous = {"giants", "cardinals", "rangers", "kings", "jets"}
+    if toks_a[-1] == toks_b[-1] and toks_a[-1] not in ambiguous:
+        return True
+    return False
 
 
 def find_match(target_name, candidates) -> Optional[int]:
