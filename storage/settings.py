@@ -37,7 +37,9 @@ _DEFAULTS: Dict[str, Any] = {
     # accounts and produce bigger edges than the sharp exchanges alone.
     "odds_regions": "us,eu",
     # Which Odds API markets to pull. "h2h" is enough for moneyline edges on
-    # Kalshi (which only lists winner markets). Each extra market adds 1 credit.
+    # Kalshi (which only lists winner markets). Each extra market multiplies
+    # credit cost (us,eu × 3 markets = 6 credits/sport/fetch).
+    # Supported: h2h, totals, spreads, h2h_h1, totals_h1, btts (soccer only).
     "odds_markets": "h2h",
     # Cache TTL for live odds in seconds. 3600 = 1h.
     "odds_live_ttl": 3600,

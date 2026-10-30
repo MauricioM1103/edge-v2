@@ -574,6 +574,212 @@ def scan_kalshi_vs_pinnacle(
     return out
 
 
+MARKET_LABELS = {
+    "h2h": "Moneyline",
+    "totals": "Total",
+    "spreads": "Spread",
+    "h2h_h1": "1H Moneyline",
+    "totals_h1": "1H Total",
+    "btts": "BTTS",
+}
+
+
+def scan_offshore_markets_vs_pinnacle(
+    pinnacle_games: List[dict],
+    bankroll_cash: float,
+    sport_key: str = "",
+    markets: Optional[List[str]] = None,
+    shop_books: Optional[List[str]] = None,
+    kelly_mult: float = 0.25,
+    min_edge_pct: float = 0.02,
+    max_bet_pct: float = 0.05,
+    espn_events_by_game: Optional[dict] = None,
+    half_points_only: bool = True,
+) -> List[dict]:
+    """Shop offshore books vs Pinnacle no-vig fair on markets Kalshi doesn't carry
+    (totals, 1H h2h, 1H totals, BTTS, spreads).
+
+    Only two-way markets handled — totals/BTTS/moneyline/spreads all fit the
+    (outcome_A, outcome_B) structure that no_vig_two_way works on.
+    """
+    from apis.team_mapping import same_team
+    from calc.odds import implied_prob_american
+
+    out = []
+    if not pinnacle_games or not markets:
+        return out
+    try:
+        bankroll_cash = float(bankroll_cash)
+    except (TypeError, ValueError):
+        return out
+    if bankroll_cash <= 0:
+        return out
+
+    shop_books = shop_books or ["Bovada", "LowVig.ag", "BetOnline.ag", "BetUS", "MyBookie.ag"]
+    shop_books_lower = {b.lower() for b in shop_books}
+    max_stake = bankroll_cash * max_bet_pct
+    espn_events_by_game = espn_events_by_game or {}
+
+    def _is_half_pt(pt):
+        if pt is None:
+            return False
+        try:
+            return abs(float(pt) - round(float(pt))) > 0.49
+        except (TypeError, ValueError):
+            return False
+
+    def _collect_market(game, market_key):
+        """Return {book_name: {home: price, away: price, home_pt, away_pt, labels}} for one market."""
+        home_team = game.get("home_team")
+        away_team = game.get("away_team")
+        out = {}
+        for b in (game.get("bookmakers") or []):
+            bk_title = b.get("title") or b.get("key") or ""
+            for m in (b.get("markets") or []):
+                if m.get("key") != market_key:
+                    continue
+                hp = ap = None
+                hpt = apt = None
+                hlabel = alabel = None
+                for o in (m.get("outcomes") or []):
+                    price = o.get("price")
+                    point = o.get("point")
+                    name = o.get("name") or ""
+                    try:
+                        price = float(price) if price is not None else None
+                    except (TypeError, ValueError):
+                        price = None
+                    if price is None:
+                        continue
+                    name_l = name.lower()
+                    # Two-way outcome names across markets we support:
+                    # h2h / h2h_h1 / spreads  -> team names
+                    # totals / totals_h1      -> "Over" / "Under"
+                    # btts                    -> "Yes" / "No"
+                    if name_l == "over":
+                        hp = price; hpt = point; hlabel = "Over"
+                    elif name_l == "under":
+                        ap = price; apt = point; alabel = "Under"
+                    elif name_l == "yes":
+                        hp = price; hlabel = "Yes"
+                    elif name_l == "no":
+                        ap = price; alabel = "No"
+                    elif same_team(name, home_team):
+                        hp = price; hpt = point; hlabel = home_team
+                    elif same_team(name, away_team):
+                        ap = price; apt = point; alabel = away_team
+                if hp is not None and ap is not None:
+                    out[bk_title] = {
+                        "home": hp, "away": ap,
+                        "home_pt": hpt, "away_pt": apt,
+                        "home_label": hlabel or "home",
+                        "away_label": alabel or "away",
+                    }
+        return out
+
+    for g in pinnacle_games:
+        for mk in markets:
+            if mk == "h2h":
+                continue  # handled by scan_kalshi_vs_pinnacle
+            all_books = _collect_market(g, mk)
+            if not all_books:
+                continue
+            # Pinnacle sets fair.
+            pin_entry = None
+            for bk_name, data in all_books.items():
+                if bk_name.lower() == "pinnacle":
+                    pin_entry = data
+                    break
+            if not pin_entry:
+                continue
+            fair_home, fair_away = no_vig_two_way(pin_entry["home"], pin_entry["away"])
+            if fair_home is None:
+                continue
+            # For totals / spreads, require half-point lines (no push risk).
+            if mk in ("spreads", "totals", "totals_h1") and half_points_only:
+                if not (_is_half_pt(pin_entry.get("home_pt")) or _is_half_pt(pin_entry.get("away_pt"))):
+                    continue
+            # Pre-attach ESPN state for grading.
+            home_name = g.get("home_team")
+            away_name = g.get("away_team")
+            espn_ev = (
+                espn_events_by_game.get((home_name, away_name))
+                or espn_events_by_game.get((away_name, home_name))
+                or {}
+            )
+            # Shop best price per side across offshore books.
+            for side_key, fair_prob, label_fallback, point_key in [
+                ("home", fair_home, pin_entry.get("home_label"), "home_pt"),
+                ("away", fair_away, pin_entry.get("away_label"), "away_pt"),
+            ]:
+                candidates = []
+                for bk_name, data in all_books.items():
+                    if bk_name.lower() not in shop_books_lower:
+                        continue
+                    price = data.get(side_key)
+                    if price is None:
+                        continue
+                    imp = implied_prob_american(price)
+                    if imp is None:
+                        continue
+                    candidates.append({"book": bk_name, "price": price, "implied": imp,
+                                       "point": data.get(point_key)})
+                if not candidates:
+                    continue
+                best = min(candidates, key=lambda c: c["implied"])
+                edge = fair_prob - best["implied"]
+                if edge < min_edge_pct:
+                    continue
+                kf = kelly_fraction(fair_prob, best["price"], kelly_mult) or 0.0
+                stake = min(bankroll_cash * kf, max_stake)
+                side_label = label_fallback or side_key.upper()
+                pt = best.get("point")
+                if mk in ("totals", "totals_h1") and pt is not None:
+                    side_label = f"{side_label} {pt}"
+                elif mk == "spreads" and pt is not None:
+                    try:
+                        pt_f = float(pt)
+                        side_label = f"{side_label} {pt_f:+g}"
+                    except (TypeError, ValueError):
+                        pass
+                out.append({
+                    "_sport": sport_key,
+                    "event_id": g.get("id"),
+                    "home_team": home_name,
+                    "away_team": away_name,
+                    "matchup": f"{away_name} @ {home_name}",
+                    "market": mk,
+                    "market_label": MARKET_LABELS.get(mk, mk),
+                    "side_label": side_label,
+                    "point": pt,
+                    "price": best["price"],
+                    "price_cents": int(round(best["implied"] * 100)),
+                    "book": best["book"],
+                    "book_implied": best["implied"],
+                    "fair_prob": fair_prob,
+                    "fair_source": "Pinnacle no-vig",
+                    "edge": edge,
+                    "edge_pct": edge * 100.0,
+                    "kelly_frac": kf,
+                    "stake_dollars": stake,
+                    # Kalshi not applicable for non-h2h markets.
+                    "kalshi_price_cents": None,
+                    "kalshi_implied": None,
+                    "kalshi_ticker": None,
+                    "kalshi_url": None,
+                    # ESPN state
+                    "start_utc": espn_ev.get("start_utc"),
+                    "status_state": espn_ev.get("status_state"),
+                    "status_detail": espn_ev.get("status_detail"),
+                    "home_score": (espn_ev.get("home") or {}).get("score"),
+                    "away_score": (espn_ev.get("away") or {}).get("score"),
+                    "picked_side_key": side_key,
+                    "grade": None,  # grading non-h2h markets is non-trivial; left for later
+                })
+    out.sort(key=lambda r: -r["edge"])
+    return out
+
+
 def apply_daily_cap(edges: List[dict], bankroll_cash: float, daily_cap_pct: float = 0.25) -> List[dict]:
     """Top-N selection: take picks in edge-rank order until the cap is used.
 

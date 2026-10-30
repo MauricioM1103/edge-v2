@@ -475,30 +475,52 @@ def _render_agent_panel(odds_games, kalshi_cash, settings,
         html('<div class="hint err">Agent scanner missing — try reloading.</div>')
         return
     shop_books = saved_cfg.get("shop_books") or ["Bovada", "LowVig.ag", "BetOnline.ag", "BetUS", "MyBookie.ag"]
+    markets_list = [m.strip() for m in (saved_cfg.get("odds_markets") or "h2h").split(",") if m.strip()]
+    scan_other_fn = getattr(agent_calc, "scan_offshore_markets_vs_pinnacle", None)
     for sp in (sports_list or []):
         sp_kalshi = kalshi_markets_by_sport.get(sp, {})
-        if not sp_kalshi:
-            continue
-        try:
-            sport_edges = scan_fn(
-                kalshi_markets_by_game=sp_kalshi,
-                pinnacle_games=pinnacle_games_by_sport.get(sp, []),
-                bankroll_cash=kalshi_cash,
-                sport_key=sp,
-                kelly_mult=kelly_mult,
-                min_edge_pct=min_edge,
-                max_bet_pct=max_bet,
-                shop_books=shop_books,
-                espn_events_by_game=espn_events_by_sport.get(sp, {}),
-            )
-        except Exception:
-            sport_edges = []
-        edges.extend(sport_edges)
-    # Deduplicate across sports — any single Kalshi market belongs to one sport.
+        sp_pin = pinnacle_games_by_sport.get(sp, [])
+        sp_espn = espn_events_by_sport.get(sp, {})
+        # h2h via Kalshi+shop vs Pinnacle
+        if sp_kalshi:
+            try:
+                sport_edges = scan_fn(
+                    kalshi_markets_by_game=sp_kalshi,
+                    pinnacle_games=sp_pin,
+                    bankroll_cash=kalshi_cash,
+                    sport_key=sp,
+                    kelly_mult=kelly_mult,
+                    min_edge_pct=min_edge,
+                    max_bet_pct=max_bet,
+                    shop_books=shop_books,
+                    espn_events_by_game=sp_espn,
+                )
+            except Exception:
+                sport_edges = []
+            edges.extend(sport_edges)
+        # Non-h2h markets (totals, 1H h2h, 1H totals, BTTS, spreads) via offshore shop vs Pinnacle
+        other_markets = [m for m in markets_list if m != "h2h"]
+        if other_markets and callable(scan_other_fn) and sp_pin:
+            try:
+                other_edges = scan_other_fn(
+                    pinnacle_games=sp_pin,
+                    bankroll_cash=kalshi_cash,
+                    sport_key=sp,
+                    markets=other_markets,
+                    shop_books=shop_books,
+                    kelly_mult=kelly_mult,
+                    min_edge_pct=min_edge,
+                    max_bet_pct=max_bet,
+                    espn_events_by_game=sp_espn,
+                )
+            except Exception:
+                other_edges = []
+            edges.extend(other_edges)
+    # Deduplicate across sports — key by (event, market, side).
     seen = set()
     deduped = []
     for e in edges:
-        key = (e.get("event_id"), e.get("side_label"))
+        key = (e.get("event_id"), e.get("market"), e.get("side_label"))
         if key in seen:
             continue
         seen.add(key)
@@ -640,11 +662,13 @@ def _render_agent_panel(odds_games, kalshi_cash, settings,
         strong_open = "<strong>" if highlight else ""
         strong_close = "</strong>" if highlight else ""
         sport_label = (e.get("_sport") or "").upper() or "—"
+        market_label = e.get("market_label") or agent_calc.MARKET_LABELS.get(e.get("market", "h2h"), "Moneyline")
         return (
             f'<tr{row_style}>'
             f'<td><span class="chip" style="padding:1px 6px; font-size:9.5px;">{sport_label}</span></td>'
             f'<td>{_status_cell(e)}</td>'
             f'<td>{strong_open}{e["matchup"]}{strong_close}</td>'
+            f'<td class="mono" style="color:var(--muted); font-size:11px;">{market_label}</td>'
             f'<td>{strong_open}{side_label}{strong_close}</td>'
             f'<td>{best_book_html}</td>'
             f'<td class="num mono"><strong>{best_price}</strong></td>'
@@ -663,14 +687,15 @@ def _render_agent_panel(odds_games, kalshi_cash, settings,
         '<th>Sport</th>'
         '<th>Status</th>'
         '<th>Matchup</th>'
+        '<th>Market</th>'
         '<th>Bet on</th>'
         '<th>Best book</th>'
         '<th class="num" title="Best price across Kalshi + shop books">Price</th>'
         '<th class="num">Best IP</th>'
-        '<th class="num" title="Kalshi\'s YES price for comparison">Kalshi ¢</th>'
+        '<th class="num" title="Kalshi\'s YES price for comparison (h2h only)">Kalshi ¢</th>'
         '<th class="num" title="Pinnacle no-vig fair probability">Pinn fair</th>'
         '<th class="num">Edge (pts)</th>'
-        '<th class="num" title="Stake in units. 1u = your configured unit size (default 1% of Kalshi cash).">Stake (u)</th>'
+        '<th class="num" title="Stake in units. 1u = your configured unit size.">Stake (u)</th>'
         '<th>Result</th>'
         '<th></th>'
         '</tr></thead>'
@@ -1356,6 +1381,41 @@ def render_settings(settings: dict):
             st.cache_data.clear()
             n = len(new_regions.split(","))
             st.success(f"Regions: {new_regions} → {n * len(cur_markets.split(','))} credits per sport per fetch.")
+
+    # Markets picker — more markets = more edges but linearly more credits.
+    st.markdown("### Markets to scan")
+    all_markets = ["h2h", "totals", "spreads", "h2h_h1", "totals_h1", "btts"]
+    labels = {
+        "h2h": "Moneyline (h2h) — required for Kalshi",
+        "totals": "Full-game totals (O/U)",
+        "spreads": "Point spreads",
+        "h2h_h1": "1st-half moneyline",
+        "totals_h1": "1st-half totals (O/U)",
+        "btts": "Both teams to score (soccer only)",
+    }
+    cur_markets_list = [m.strip() for m in (saved.get("odds_markets") or "h2h").split(",") if m.strip()]
+    new_markets = st.multiselect(
+        "Markets",
+        options=all_markets,
+        default=cur_markets_list,
+        format_func=lambda m: labels.get(m, m),
+        key="set_markets",
+    )
+    if "h2h" not in new_markets:
+        new_markets = ["h2h"] + new_markets  # always keep h2h for Kalshi
+    new_markets_str = ",".join(new_markets)
+    n_regions = len(cur_regions.split(","))
+    n_markets = len(new_markets)
+    new_cost = n_regions * n_markets
+    st.caption(
+        f"Credit cost preview: **{new_cost} credits** per sport per fetch "
+        f"(regions × markets = {n_regions} × {n_markets}). "
+        f"ESPN pre-filter already skips sports with no games today."
+    )
+    if new_markets_str != (saved.get("odds_markets") or "h2h"):
+        settings_store.save({"odds_markets": new_markets_str})
+        st.cache_data.clear()
+        st.success(f"Markets: {new_markets_str}")
     with c3:
         if st.button("Clear Odds API disk cache"):
             import shutil, os
