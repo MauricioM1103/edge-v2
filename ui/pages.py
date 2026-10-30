@@ -31,8 +31,9 @@ from backtest import engine as backtest_engine
 # cached data loaders - respect API rate limits
 # ============================================================================
 
-@st.cache_data(ttl=120, show_spinner=False)
+@st.cache_data(ttl=60, show_spinner=False)
 def load_espn_scoreboard(sport_key: str, date_str: Optional[str] = None):
+    """ESPN scoreboard - 60s TTL so live scores stay fresh. ESPN is free, so no credit worry."""
     try:
         return espn.get_scoreboard(sport_key, date_str)
     except Exception:
@@ -317,16 +318,18 @@ def render_dashboard(settings: dict):
     # we assemble {(home,away): [kalshi_markets...]} and pass alongside the
     # Pinnacle-only odds_games payload. The scanner finds +EV plays on Kalshi.
     kalshi_markets_by_game: Dict[tuple, list] = {}
+    espn_events_by_game: Dict[tuple, dict] = {}
     for sp in sports_list:
         if not is_today:
             continue
         all_markets_sp = load_kalshi_markets(sp)
-        if not all_markets_sp:
-            continue
-        # Walk ESPN events for this sport to key each Kalshi market by (home,away).
-        for ev in load_espn_scoreboard(sp, date_str=date_str_api) or []:
+        espn_events_sp = load_espn_scoreboard(sp, date_str=date_str_api) or []
+        for ev in espn_events_sp:
             home_name = (ev.get("home") or {}).get("name")
             away_name = (ev.get("away") or {}).get("name")
+            espn_events_by_game[(home_name, away_name)] = ev
+            if not all_markets_sp:
+                continue
             home_abbr = (ev.get("home") or {}).get("abbr") or ""
             away_abbr = (ev.get("away") or {}).get("abbr") or ""
             event_markets = find_event_markets(
@@ -338,6 +341,7 @@ def render_dashboard(settings: dict):
     _render_agent_panel(
         odds_games, kalshi_cash, settings,
         kalshi_markets_by_game=kalshi_markets_by_game,
+        espn_events_by_game=espn_events_by_game,
         sports_list=sports_list,
     )
 
@@ -402,7 +406,7 @@ def render_dashboard(settings: dict):
             _render_one_card(ev, odds_meta, exch_probs)
 
 
-def _render_agent_panel(odds_games, kalshi_cash, settings, kalshi_markets_by_game=None, sports_list=None):
+def _render_agent_panel(odds_games, kalshi_cash, settings, kalshi_markets_by_game=None, sports_list=None, espn_events_by_game=None):
     """Agent edge-scanner — Kalshi (free) as the book, Pinnacle no-vig as fair."""
     saved_cfg = settings_store.load()
     st.markdown("### Agent · Kalshi vs Pinnacle edge scanner")
@@ -459,6 +463,7 @@ def _render_agent_panel(odds_games, kalshi_cash, settings, kalshi_markets_by_gam
                 min_edge_pct=min_edge,
                 max_bet_pct=max_bet,
                 shop_books=shop_books,
+                espn_events_by_game=espn_events_by_game,
             )
         except Exception:
             sport_edges = []
@@ -527,7 +532,44 @@ def _render_agent_panel(odds_games, kalshi_cash, settings, kalshi_markets_by_gam
     funded = [e for e in filtered if (e.get("stake_dollars") or 0) > 0]
     dropped = [e for e in filtered if (e.get("stake_dollars") or 0) <= 0]
 
-    # Table shows the BEST book per outcome + Kalshi price alongside for comparison.
+    # Build a status/score cell for an edge based on ESPN state.
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    CT = ZoneInfo("America/Chicago")
+
+    def _status_cell(e):
+        state = e.get("status_state")
+        hs = e.get("home_score"); as_ = e.get("away_score")
+        if state == "post":
+            score = f"{as_}–{hs}" if hs is not None and as_ is not None else "final"
+            return f'<span class="chip" style="padding:2px 7px; font-size:9px;">FINAL</span><br><span class="mono" style="font-size:11px;">{score}</span>'
+        if state == "in":
+            score = f"{as_}–{hs}" if hs is not None and as_ is not None else ""
+            detail = (e.get("status_detail") or "LIVE")[:18]
+            return (
+                f'<span class="chip live" style="padding:2px 7px; font-size:9px;">● {detail}</span>'
+                + (f'<br><span class="mono" style="font-size:11px;">{score}</span>' if score else '')
+            )
+        # pre-game: show start time in CT
+        start = e.get("start_utc")
+        if start:
+            try:
+                t = start.astimezone(CT).strftime("%I:%M %p").lstrip("0") + " CT"
+                return f'<span class="mono" style="font-size:11px; color:var(--muted);">{t}</span>'
+            except Exception:
+                pass
+        return '<span style="color:var(--muted);">—</span>'
+
+    def _grade_cell(e):
+        g = e.get("grade")
+        if g == "win":    return '<span class="chip good" style="padding:2px 7px; font-size:9px;">✓ WIN</span>'
+        if g == "loss":   return '<span class="chip bad"  style="padding:2px 7px; font-size:9px;">✗ LOSS</span>'
+        if g == "push":   return '<span class="chip warn" style="padding:2px 7px; font-size:9px;">= PUSH</span>'
+        if g == "winning":return '<span class="chip good" style="padding:2px 7px; font-size:9px;">▲ ahead</span>'
+        if g == "losing": return '<span class="chip bad"  style="padding:2px 7px; font-size:9px;">▼ behind</span>'
+        if g == "tied":   return '<span class="chip" style="padding:2px 7px; font-size:9px;">= tied</span>'
+        return '<span style="color:var(--muted); font-size:11px;">—</span>'
+
     def _row(e, highlight: bool = False):
         edge_pct = e["edge"] * 100.0
         tone = "ev-plus" if edge_pct > 0 else "ev-minus"
@@ -545,7 +587,7 @@ def _render_agent_panel(odds_games, kalshi_cash, settings, kalshi_markets_by_gam
         if is_kalshi_best:
             link_cell = (
                 f'<a href="{kalshi_url}" target="_blank" rel="noopener" '
-                'style="color:var(--accent); text-decoration:none; font-size:11px;">Open on Kalshi ↗</a>'
+                'style="color:var(--accent); text-decoration:none; font-size:11px;">Open ↗</a>'
             )
             best_book_html = f'<span class="chip accent" style="padding:2px 7px; font-size:9.5px;">Kalshi</span>'
         else:
@@ -561,6 +603,7 @@ def _render_agent_panel(odds_games, kalshi_cash, settings, kalshi_markets_by_gam
         return (
             f'<tr{row_style}>'
             f'<td><span class="chip" style="padding:1px 6px; font-size:9.5px;">{sport_label}</span></td>'
+            f'<td>{_status_cell(e)}</td>'
             f'<td>{strong_open}{e["matchup"]}{strong_close}</td>'
             f'<td>{strong_open}{side_label}{strong_close}</td>'
             f'<td>{best_book_html}</td>'
@@ -570,6 +613,7 @@ def _render_agent_panel(odds_games, kalshi_cash, settings, kalshi_markets_by_gam
             f'<td class="num mono" style="color:var(--good);">{e["fair_prob"]*100:.1f}%</td>'
             f'<td class="num mono {tone}"><strong>{edge_pct:+.2f}</strong></td>'
             f'<td class="num mono"><strong>${e["stake_dollars"]:,.2f}</strong></td>'
+            f'<td>{_grade_cell(e)}</td>'
             f'<td>{link_cell}</td>'
             f'</tr>'
         )
@@ -577,15 +621,17 @@ def _render_agent_panel(odds_games, kalshi_cash, settings, kalshi_markets_by_gam
     header = (
         '<thead><tr>'
         '<th>Sport</th>'
+        '<th>Status</th>'
         '<th>Matchup</th>'
         '<th>Bet on</th>'
         '<th>Best book</th>'
-        '<th class="num" title="Best price available on this outcome across Kalshi + shop books">Price</th>'
-        '<th class="num" title="Implied probability at that best price">Best IP</th>'
-        '<th class="num" title="Kalshi\'s YES price for comparison, in cents (0-99)">Kalshi ¢</th>'
-        '<th class="num" title="Pinnacle no-vig fair probability — the sharp consensus for this outcome">Pinn fair</th>'
+        '<th class="num" title="Best price across Kalshi + shop books">Price</th>'
+        '<th class="num">Best IP</th>'
+        '<th class="num" title="Kalshi\'s YES price for comparison">Kalshi ¢</th>'
+        '<th class="num" title="Pinnacle no-vig fair probability">Pinn fair</th>'
         '<th class="num">Edge (pts)</th>'
         '<th class="num">Stake</th>'
+        '<th>Result</th>'
         '<th></th>'
         '</tr></thead>'
     )

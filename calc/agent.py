@@ -334,6 +334,7 @@ def scan_kalshi_vs_pinnacle(
     min_edge_pct: float = 0.02,
     max_bet_pct: float = 0.05,
     shop_books: Optional[List[str]] = None,  # Extra books to scan against Pinnacle
+    espn_events_by_game: Optional[dict] = None,  # {(home_name,away_name): espn_event_dict}
 ) -> List[dict]:
     """Multi-book shop: Kalshi + offshore books vs Pinnacle no-vig fair.
 
@@ -366,6 +367,7 @@ def scan_kalshi_vs_pinnacle(
     shop_books = shop_books or ["Bovada", "LowVig.ag", "BetOnline.ag", "BetUS", "MyBookie.ag"]
     shop_books_lower = {b.lower() for b in shop_books}
     max_stake = bankroll_cash * max_bet_pct
+    espn_events_by_game = espn_events_by_game or {}
 
     # Lookup Pinnacle games by canonical team pair.
     pin_by_key = {}
@@ -500,6 +502,39 @@ def scan_kalshi_vs_pinnacle(
             kalshi_url = (
                 f"https://kalshi.com/markets/{kalshi_ticker.lower()}" if kalshi_ticker else "https://kalshi.com/markets"
             )
+            # Attach ESPN status/score/time for in-table grading + live tracking.
+            espn_ev = (
+                espn_events_by_game.get((home_name, away_name))
+                or espn_events_by_game.get((pin_home_name, pin_away_name))
+                or espn_events_by_game.get((pin_away_name, pin_home_name))
+                or {}
+            )
+            home_score = (espn_ev.get("home") or {}).get("score") if espn_ev else None
+            away_score = (espn_ev.get("away") or {}).get("score") if espn_ev else None
+            # Grade the pick side vs the current score (useful for live + final).
+            # Pick is "YES on <team>" — team has to be winning (or won) to be ahead.
+            grade = None  # "winning" | "losing" | "tied" | "win" | "loss" | "push"
+            if home_score is not None and away_score is not None:
+                try:
+                    hs, as_ = int(home_score), int(away_score)
+                except (TypeError, ValueError):
+                    hs, as_ = None, None
+                if hs is not None:
+                    picked_home = side_key == "home"
+                    if espn_ev.get("is_final"):
+                        if hs == as_:
+                            grade = "push"
+                        elif (hs > as_) == picked_home:
+                            grade = "win"
+                        else:
+                            grade = "loss"
+                    elif espn_ev.get("is_live"):
+                        if hs == as_:
+                            grade = "tied"
+                        elif (hs > as_) == picked_home:
+                            grade = "winning"
+                        else:
+                            grade = "losing"
             out.append({
                 "_sport": sport_key,
                 "event_id": market.get("event_ticker"),
@@ -520,12 +555,20 @@ def scan_kalshi_vs_pinnacle(
                 "edge_pct": edge * 100.0,
                 "kelly_frac": kf,
                 "stake_dollars": stake,
-                # Kalshi comparison (shown alongside the best book even if not best)
+                # Kalshi comparison
                 "kalshi_price_cents": int(round(yes_prob * 100)) if yes_prob else None,
                 "kalshi_implied": kalshi_implied,
                 "kalshi_ticker": kalshi_ticker,
                 "kalshi_url": kalshi_url,
-                "candidates": candidates,  # for optional expansion in UI
+                "candidates": candidates,
+                # ESPN status/score for live grading
+                "start_utc": espn_ev.get("start_utc"),
+                "status_state": espn_ev.get("status_state"),  # pre | in | post
+                "status_detail": espn_ev.get("status_detail"),
+                "home_score": home_score,
+                "away_score": away_score,
+                "picked_side_key": side_key,  # home | away (which Pinnacle side the pick is on)
+                "grade": grade,
             })
     out.sort(key=lambda r: -r["edge"])
     return out
