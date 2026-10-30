@@ -69,6 +69,102 @@ def add_pick(pick: dict, path: Optional[str] = None) -> dict:
     return p
 
 
+def _dedup_key(p: dict) -> tuple:
+    """Stable key for deduplicating picks across auto-log runs.
+
+    Agent-logged picks replay every dashboard load, so we key on the sport,
+    the resolved ESPN event id (not the Kalshi ticker, which doesn't carry a
+    unique game id when the per-event Kalshi path changes), the market, and
+    the exact side label. Manual picks share the same shape so a manual log
+    before the agent one is still preserved as the canonical row.
+    """
+    return (
+        (p.get("sport") or "").lower(),
+        str(p.get("event_id") or ""),
+        (p.get("market") or "h2h").lower(),
+        (p.get("selection") or "").strip().lower(),
+    )
+
+
+def upsert_agent_pick(pick: dict, path: Optional[str] = None) -> Optional[dict]:
+    """Insert a pick only if no matching row already exists.
+
+    Returns the stored row on insert, or None when a dedup hit skipped it.
+    Agent picks also get a `source: "agent-auto"` tag so the ledger can
+    distinguish bot-written rows from manually logged ones.
+    """
+    p = dict(pick or {})
+    p.setdefault("source", "agent-auto")
+    file_path = path or _default_path()
+    picks = _load(file_path)
+    key = _dedup_key(p)
+    for existing in picks:
+        if _dedup_key(existing) == key:
+            return None
+    return add_pick(p, path=file_path)
+
+
+def auto_log_agent_edges(edges: list, settings: dict, path: Optional[str] = None) -> int:
+    """Write every funded edge into the ledger (dedup-aware), then settle.
+
+    Returns the number of new rows inserted. Called from the dashboard every
+    time the agent panel re-renders, so the ledger ends up being a complete
+    audit trail of what the agent recommended — not just the picks the user
+    bothered to click "Log" on.
+    """
+    if not edges:
+        return 0
+    kalshi_cash = float(settings.get("kalshi_cash") or 0) or 1.0
+    unit_pct = float(settings.get("unit_pct") or 0.01) or 0.01
+    unit_dollars = kalshi_cash * unit_pct
+    inserted = 0
+    for e in edges:
+        if (e.get("stake_dollars") or 0) <= 0:
+            continue  # don't track cap-dropped / rounded-to-zero rows
+        espn_eid = e.get("espn_event_id") or e.get("event_id")
+        matchup = e.get("matchup") or ""
+        best_book = e.get("book") or "?"
+        edge_pct = (e.get("edge") or 0) * 100.0
+        stake_dollars = float(e.get("stake_dollars") or 0)
+        risk_units = round(stake_dollars / max(1e-6, unit_dollars), 2)
+        row = {
+            "sport": (e.get("_sport") or "").lower(),
+            "event_id": espn_eid,
+            "kalshi_ticker": e.get("kalshi_ticker"),
+            "event_name": matchup,
+            "market": e.get("market") or "h2h",
+            "selection": e.get("side_label") or "",
+            "point": e.get("point"),
+            "price_american": e.get("price"),
+            "projected_prob": e.get("fair_prob"),
+            "implied_prob": e.get("book_implied"),
+            "risk_units": risk_units,
+            "win_units": None,
+            "methodology": "Agent · Pinnacle fair",
+            "source": "agent-auto",
+            "notes": (
+                f"{best_book} @ {e.get('price')} vs Pinnacle · "
+                f"edge {edge_pct:+.2f}pts · "
+                f"Kalshi {int(e.get('kalshi_price_cents') or 0)}¢"
+                if e.get("kalshi_price_cents") is not None else
+                f"{best_book} @ {e.get('price')} vs Pinnacle · edge {edge_pct:+.2f}pts"
+            ),
+        }
+        # If the game is already final/live, carry the current grade across so
+        # the Ledger shows a status without waiting for the next auto-settle.
+        grade = e.get("grade")
+        if grade in ("win", "loss", "push"):
+            row["status"] = grade
+        if upsert_agent_pick(row, path=path):
+            inserted += 1
+    # One auto-settle sweep — grabs any games finished since the last tick.
+    try:
+        auto_settle(path=path)
+    except Exception:
+        pass
+    return inserted
+
+
 def delete_pick(pick_id: str, path: Optional[str] = None) -> bool:
     file_path = path or _default_path()
     picks = _load(file_path)

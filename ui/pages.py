@@ -825,6 +825,20 @@ def _render_agent_panel(odds_games, kalshi_cash, settings,
     # Attach stable anchor ids so the analysis boards can scroll-nav back and forth.
     for i, e in enumerate(top):
         e["_anchor"] = f"pick-{i+1}"
+
+    # Auto-log every funded pick the agent surfaces so the Picks Ledger is a
+    # complete record of what it recommended. Dedup is handled inside the
+    # store (keyed by sport + ESPN event id + market + side), so re-renders
+    # don't double-write. Toggle off from the Settings tab if you want to
+    # keep the ledger strictly manual.
+    if saved_cfg.get("agent_auto_log", True):
+        try:
+            inserted = picks_store.auto_log_agent_edges(funded, settings)
+        except Exception:
+            inserted = 0
+        if inserted:
+            st.toast(f"Logged {inserted} new agent pick(s) to the ledger.", icon="📝")
+
     html('<div id="agent-table-top" style="position:relative; top:-40px;"></div>')
     if not top:
         # Re-scan at progressively looser thresholds to tell the user WHY they see nothing.
@@ -1627,7 +1641,7 @@ def render_pro_tools(settings: dict):
 def render_picks(settings: dict):
     brand_bar("Verified Picks Ledger")
 
-    cols = st.columns([1, 1, 1, 1, 1])
+    cols = st.columns([1, 1, 1, 1, 1, 1])
     with cols[0]:
         if st.button("↻ Auto-settle from ESPN"):
             n = picks_store.auto_settle()
@@ -1644,6 +1658,13 @@ def render_picks(settings: dict):
             key="ledger_sport_filter", label_visibility="collapsed",
         )
     with cols[3]:
+        # Source filter — distinguishes picks the agent auto-logged from manual
+        # entries so users can audit either stream in isolation.
+        filter_source = st.selectbox(
+            "Source", options=["All", "Agent (auto)", "Manual"],
+            key="ledger_source_filter", label_visibility="collapsed",
+        )
+    with cols[4]:
         # Ported from V1 Bet Log — one-click CSV download. Streams everything
         # currently in the ledger, not just the filtered rows, so users can
         # grab a full history without having to toggle filters off first.
@@ -1696,6 +1717,11 @@ def render_picks(settings: dict):
             return False
         if filter_sport != "All" and p.get("sport") != filter_sport:
             return False
+        src = p.get("source") or "manual"
+        if filter_source == "Agent (auto)" and src != "agent-auto":
+            return False
+        if filter_source == "Manual" and src == "agent-auto":
+            return False
         return True
     rows = [p for p in picks if _keep(p)]
 
@@ -1708,10 +1734,10 @@ def render_picks(settings: dict):
     <table class="ledger">
       <thead>
         <tr>
-          <th>Logged</th><th>Sport</th><th>Match-up</th><th>Market</th>
+          <th>Logged</th><th>Src</th><th>Sport</th><th>Match-up</th><th>Market</th>
           <th>Selection</th><th class="num">Price</th><th class="num">Imp</th>
           <th class="num">Proj</th><th>Method</th><th class="num">Risk</th>
-          <th class="num">To Win</th><th>Status</th><th class="num">CLV</th><th>Action</th>
+          <th class="num">To Win</th><th>Status</th><th class="num">CLV</th>
         </tr>
       </thead>
       <tbody>
@@ -1729,9 +1755,16 @@ def render_picks(settings: dict):
             "Model Edge": "model", "Line Move": "line",
             "Situational": "sit", "Fade the Public": "fade",
         }.get(meth, "model")
+        src = p.get("source") or "manual"
+        src_chip = (
+            '<span class="chip accent" style="padding:1px 7px; font-size:9.5px;">AGENT</span>'
+            if src == "agent-auto" else
+            '<span class="chip" style="padding:1px 7px; font-size:9.5px;">MANUAL</span>'
+        )
         html(f"""
         <tr>
           <td class="mono" style="font-size:11px; color:var(--muted);">{(p.get('created_at') or '')[:16]}</td>
+          <td>{src_chip}</td>
           <td class="mono" style="color:var(--muted);">{(p.get('sport') or '').upper()}</td>
           <td>{p.get('event_name') or '-'}</td>
           <td class="mono" style="color:var(--muted);">{(p.get('market') or '').upper()}</td>
@@ -1744,7 +1777,6 @@ def render_picks(settings: dict):
           <td class="num mono">{(p.get('win_units') or 0):.2f}u</td>
           <td><span class="chip {status_cls}">{status_lbl}</span></td>
           <td class="num mono">{clv_s}</td>
-          <td class="mono" style="font-size:11px;"></td>
         </tr>
         """)
     html("</tbody></table>")
@@ -2285,6 +2317,31 @@ def render_settings(settings: dict):
             "regions=eu, markets=h2h, cache=60min, min-edge=1%, unit=10% of Kalshi cash, "
             "daily cap=25%, theme=dark. "
             "Does **not** clear your API keys or Kalshi connection."
+        )
+
+    # ----- Agent auto-logging -----
+    st.markdown("### Agent auto-log")
+    al1, al2 = st.columns([1, 3])
+    with al1:
+        auto_log = st.toggle(
+            "Record every funded edge",
+            value=bool(saved.get("agent_auto_log", True)),
+            key="set_auto_log",
+            help="On: every funded pick the agent surfaces is written to the "
+                 "Picks Ledger automatically (dedup-aware) and settled from "
+                 "ESPN. Off: ledger stays manual — only picks you click Log "
+                 "on are recorded.",
+        )
+        if auto_log != bool(saved.get("agent_auto_log", True)):
+            settings_store.save({"agent_auto_log": bool(auto_log)})
+            st.cache_data.clear()
+            st.success(f"Auto-log is now {'ON' if auto_log else 'OFF'}.")
+    with al2:
+        st.caption(
+            "The ledger (and Performance / Calibration tabs) only know what the agent did "
+            "if its picks were saved. Auto-log keeps that record for you — dedup is on sport × "
+            "ESPN event × market × side, so re-renders don't double-write. "
+            "Settle from ESPN finals runs after each log."
         )
 
     # ----- Theme + exposure cap -----

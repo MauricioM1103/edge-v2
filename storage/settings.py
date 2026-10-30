@@ -70,6 +70,10 @@ _DEFAULTS: Dict[str, Any] = {
     "theme": "dark",
     # How many picks the main agent table surfaces (slider: 5, 10, 15, 20, 25).
     "agent_picks_shown": 10,
+    # When true, every funded edge the agent surfaces is written to the picks
+    # ledger automatically (dedup-aware), so you get a complete record of what
+    # the agent recommended — not just what you clicked "Log" on.
+    "agent_auto_log": True,
 }
 
 
