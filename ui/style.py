@@ -296,41 +296,53 @@ table.ledger tr:hover { background: color-mix(in oklab, var(--rule) 30%, transpa
    that appears when both the collapse control AND the brand mark land near the top-left). */
 /* Prominent 'Settings' button that appears when the sidebar is collapsed.
    The native Streamlit collapse control is a tiny chevron that's easy to miss;
-   we turn it into a labeled pill the user can actually see. */
-[data-testid="collapsedControl"] {
+   we turn it into a floating pill the user can't miss, across every known
+   Streamlit testid for the control. */
+[data-testid="collapsedControl"],
+[data-testid="stSidebarCollapsedControl"],
+button[kind="header"][aria-label*="idebar" i] {
   display: inline-flex !important;
   align-items: center !important;
+  justify-content: center !important;
   gap: 8px !important;
-  padding: 8px 14px 8px 10px !important;
-  margin: 10px 10px 0 !important;
-  background: var(--card) !important;
-  border: 1px solid var(--rule-strong) !important;
+  padding: 10px 18px 10px 14px !important;
+  position: fixed !important;
+  top: 12px !important;
+  left: 12px !important;
+  z-index: 999999 !important;
+  background: var(--accent) !important;
+  border: 1px solid var(--accent) !important;
   border-radius: 999px !important;
-  box-shadow: 0 2px 6px rgba(0,0,0,0.15) !important;
-  color: var(--ink) !important;
-  cursor: pointer;
-  transition: background 160ms ease, border-color 160ms ease;
+  box-shadow: 0 4px 14px rgba(0,0,0,0.35) !important;
+  color: var(--accent-ink) !important;
+  cursor: pointer !important;
+  transition: transform 160ms ease, box-shadow 160ms ease;
+  min-height: 40px !important;
+  opacity: 1 !important;
+  visibility: visible !important;
 }
-[data-testid="collapsedControl"]:hover {
-  background: var(--card-elev) !important;
-  border-color: var(--accent) !important;
+[data-testid="collapsedControl"]:hover,
+[data-testid="stSidebarCollapsedControl"]:hover {
+  transform: translateY(-1px) !important;
+  box-shadow: 0 6px 18px rgba(0,0,0,0.45) !important;
 }
-[data-testid="collapsedControl"] svg {
+[data-testid="collapsedControl"] svg,
+[data-testid="stSidebarCollapsedControl"] svg {
   height: 18px !important;
   width: 18px !important;
-  color: var(--accent) !important;
+  color: var(--accent-ink) !important;
   fill: currentColor !important;
 }
-/* Append a readable label after the icon via a pseudo-element.
-   Pointer-events none keeps the whole button clickable without this blocking it. */
-[data-testid="collapsedControl"]::after {
-  content: "Settings";
+[data-testid="collapsedControl"]::after,
+[data-testid="stSidebarCollapsedControl"]::after {
+  content: "Open Settings";
   font-family: "Public Sans", -apple-system, sans-serif;
   font-size: 13px;
-  font-weight: 500;
+  font-weight: 600;
   letter-spacing: 0.02em;
-  color: var(--ink);
+  color: var(--accent-ink);
   pointer-events: none;
+  white-space: nowrap;
 }
 header[data-testid="stHeader"] { background: transparent; }
 /* Hide Streamlit's own deploy promo + decoration bars. */

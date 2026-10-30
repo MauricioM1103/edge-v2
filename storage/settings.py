@@ -29,7 +29,9 @@ _DEFAULTS: Dict[str, Any] = {
     # trim down to only the biggest edges.
     "agent_min_edge": 0.01,
     "agent_min_books": 3,
-    "agent_max_bet_pct": 0.05,
+    # 2.5% per-bet cap means max play = 2.5u (with 1u = 1%), and 10 top picks
+    # at 2.5u each fit exactly inside the 25% daily cap. Keeps stakes human.
+    "agent_max_bet_pct": 0.025,
     # Fair prob source order (configurable, default = Pinnacle sharp).
     "agent_fair_source": "pinnacle",
     # Odds API regions. "us,eu" = 2 credits/sport but unlocks offshore US books
@@ -63,12 +65,39 @@ def _path() -> str:
 
 
 def load() -> Dict[str, Any]:
-    """Load persisted settings merged over defaults."""
+    """Load persisted settings merged over defaults.
+
+    Also performs silent migrations for stale saved values from earlier releases
+    so users don't have to click 'Reset to defaults' to get the new behavior.
+    """
     out = dict(_DEFAULTS)
     try:
         with open(_path(), "r", encoding="utf-8") as f:
             disk = json.load(f)
         if isinstance(disk, dict):
+            # Migration 1: old odds_markets default was "h2h" only. If the user
+            # never explicitly broadened it, upgrade to the new full set so
+            # totals / 1H / BTTS markets actually get fetched.
+            if disk.get("odds_markets") == "h2h":
+                disk["odds_markets"] = _DEFAULTS["odds_markets"]
+            # Migration 2: old unit_pct_of_kalshi default was 0.10 (10%); then
+            # 0.01 (1%). If the saved value is one of those defaults, snap to
+            # the current default so stake units stay in the familiar 0.5u-5u range.
+            if disk.get("unit_pct_of_kalshi") in (0.10, 0.1):
+                disk["unit_pct_of_kalshi"] = _DEFAULTS["unit_pct_of_kalshi"]
+            # Migration 3: retired 5% default produced oversized stakes. Snap
+            # anyone still on 0.05 forward to the new 2.5% default so a single
+            # pick can't dominate the daily cap.
+            if disk.get("agent_max_bet_pct") == 0.05:
+                disk["agent_max_bet_pct"] = _DEFAULTS["agent_max_bet_pct"]
+            # Migration 4: unit_pct that got dialed below 0.5% makes stake
+            # units read as 20u / 30u / 50u which is confusing. Pin to default.
+            upct = disk.get("unit_pct_of_kalshi")
+            try:
+                if upct is not None and float(upct) < 0.005:
+                    disk["unit_pct_of_kalshi"] = _DEFAULTS["unit_pct_of_kalshi"]
+            except (TypeError, ValueError):
+                pass
             out.update(disk)
     except (OSError, json.JSONDecodeError, ValueError):
         pass
