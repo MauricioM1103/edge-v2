@@ -430,13 +430,15 @@ def _render_agent_panel(odds_games, kalshi_cash, settings, kalshi_markets_by_gam
         )
         return
 
-    # Credit tip: if the user is paying extra for data the new flow doesn't need.
-    if (saved_cfg.get("odds_regions") or "eu") != "eu":
+    # Credit tip: us,eu is the preferred combo (gives both Pinnacle fair + offshore shop books).
+    # Only warn when the user has gone wider than us,eu, which burns credits with no payoff.
+    cur_regions = saved_cfg.get("odds_regions") or "us,eu"
+    if cur_regions not in ("us,eu", "eu"):
         html(
             '<div class="hint warn">You are on <code>'
-            f'{saved_cfg.get("odds_regions")}</code> regions — spending extra credits. '
-            'The new Kalshi-vs-Pinnacle agent only needs <code>eu</code> (1 credit/sport). '
-            'Switch in the Settings tab.</div>'
+            f'{cur_regions}</code> regions — spending extra credits. '
+            '<code>us,eu</code> (2 credits/sport) gives both Pinnacle fair AND the offshore shop books. '
+            'Switch in Settings.</div>'
         )
 
     # Scan ALL sports (we grouped Kalshi markets by game, Pinnacle by sport).
@@ -445,7 +447,7 @@ def _render_agent_panel(odds_games, kalshi_cash, settings, kalshi_markets_by_gam
     if not callable(scan_fn):
         html('<div class="hint err">Agent scanner missing — try reloading.</div>')
         return
-    # Group kalshi markets by sport the way sports_list expects.
+    shop_books = saved_cfg.get("shop_books") or ["Bovada", "LowVig.ag", "BetOnline.ag", "BetUS", "MyBookie.ag"]
     for sp in (sports_list or []):
         try:
             sport_edges = scan_fn(
@@ -456,6 +458,7 @@ def _render_agent_panel(odds_games, kalshi_cash, settings, kalshi_markets_by_gam
                 kelly_mult=kelly_mult,
                 min_edge_pct=min_edge,
                 max_bet_pct=max_bet,
+                shop_books=shop_books,
             )
         except Exception:
             sport_edges = []
@@ -524,16 +527,30 @@ def _render_agent_panel(odds_games, kalshi_cash, settings, kalshi_markets_by_gam
     funded = [e for e in filtered if (e.get("stake_dollars") or 0) > 0]
     dropped = [e for e in filtered if (e.get("stake_dollars") or 0) <= 0]
 
-    # Table columns: Sport · Matchup · YES side · Kalshi price (¢) · Kalshi IP · Pinnacle fair IP · Edge · Stake · Open on Kalshi.
+    # Table shows the BEST book per outcome + Kalshi price alongside for comparison.
     def _row(e, highlight: bool = False):
         edge_pct = e["edge"] * 100.0
         tone = "ev-plus" if edge_pct > 0 else "ev-minus"
         side_label = e.get("side_label", "")
-        price_cents = e.get("price_cents")
-        if price_cents is None:
-            price_cents_s = "—"
+        best_book = e.get("book", "?")
+        is_kalshi_best = best_book.lower() == "kalshi"
+        best_price = format_american(e.get("price"))
+        best_imp = f"{e['book_implied']*100:.1f}%"
+        kalshi_cents = e.get("kalshi_price_cents")
+        kalshi_cell = (
+            f'<span class="mono">{int(kalshi_cents)}¢</span>'
+            if kalshi_cents is not None else '<span style="color:var(--muted);">—</span>'
+        )
+        kalshi_url = e.get("kalshi_url") or "https://kalshi.com/markets"
+        if is_kalshi_best:
+            link_cell = (
+                f'<a href="{kalshi_url}" target="_blank" rel="noopener" '
+                'style="color:var(--accent); text-decoration:none; font-size:11px;">Open on Kalshi ↗</a>'
+            )
+            best_book_html = f'<span class="chip accent" style="padding:2px 7px; font-size:9.5px;">Kalshi</span>'
         else:
-            price_cents_s = f"{int(price_cents)}¢"
+            link_cell = f'<span style="color:var(--muted); font-size:11px;">— offshore —</span>'
+            best_book_html = f'<span class="chip warn" style="padding:2px 7px; font-size:9.5px;">{best_book}</span>'
         row_style = (
             ' style="background: color-mix(in oklab, var(--good) 10%, transparent);"'
             if highlight else ""
@@ -541,18 +558,15 @@ def _render_agent_panel(odds_games, kalshi_cash, settings, kalshi_markets_by_gam
         strong_open = "<strong>" if highlight else ""
         strong_close = "</strong>" if highlight else ""
         sport_label = (e.get("_sport") or "").upper() or "—"
-        kalshi_url = e.get("kalshi_url") or "https://kalshi.com/markets"
-        link_cell = (
-            f'<a href="{kalshi_url}" target="_blank" rel="noopener" '
-            'style="color:var(--accent); text-decoration:none; font-size:11px;">Open ↗</a>'
-        )
         return (
             f'<tr{row_style}>'
             f'<td><span class="chip" style="padding:1px 6px; font-size:9.5px;">{sport_label}</span></td>'
             f'<td>{strong_open}{e["matchup"]}{strong_close}</td>'
             f'<td>{strong_open}{side_label}{strong_close}</td>'
-            f'<td class="num mono"><strong>{price_cents_s}</strong></td>'
-            f'<td class="num mono">{e["book_implied"]*100:.1f}%</td>'
+            f'<td>{best_book_html}</td>'
+            f'<td class="num mono"><strong>{best_price}</strong></td>'
+            f'<td class="num mono">{best_imp}</td>'
+            f'<td class="num" style="text-align:right;">{kalshi_cell}</td>'
             f'<td class="num mono" style="color:var(--good);">{e["fair_prob"]*100:.1f}%</td>'
             f'<td class="num mono {tone}"><strong>{edge_pct:+.2f}</strong></td>'
             f'<td class="num mono"><strong>${e["stake_dollars"]:,.2f}</strong></td>'
@@ -564,10 +578,12 @@ def _render_agent_panel(odds_games, kalshi_cash, settings, kalshi_markets_by_gam
         '<thead><tr>'
         '<th>Sport</th>'
         '<th>Matchup</th>'
-        '<th>YES on</th>'
-        '<th class="num" title="Kalshi YES-mid price in cents (0-99)">Price</th>'
-        '<th class="num" title="Implied probability at Kalshi\'s current price (= price / 100)">Kalshi IP</th>'
-        '<th class="num" title="Pinnacle no-vig fair probability — the sharp consensus for this outcome">Pinnacle fair</th>'
+        '<th>Bet on</th>'
+        '<th>Best book</th>'
+        '<th class="num" title="Best price available on this outcome across Kalshi + shop books">Price</th>'
+        '<th class="num" title="Implied probability at that best price">Best IP</th>'
+        '<th class="num" title="Kalshi\'s YES price for comparison, in cents (0-99)">Kalshi ¢</th>'
+        '<th class="num" title="Pinnacle no-vig fair probability — the sharp consensus for this outcome">Pinn fair</th>'
         '<th class="num">Edge (pts)</th>'
         '<th class="num">Stake</th>'
         '<th></th>'
@@ -624,19 +640,24 @@ def _render_agent_panel(odds_games, kalshi_cash, settings, kalshi_markets_by_gam
             edge_pct = e["edge"] * 100
             matchup = e.get("matchup", "?")
             side_label = e.get("side_label", "")
+            best_book = e.get("book", "?")
+            best_price = format_american(e.get("price"))
             kurl = e.get("kalshi_url") or "https://kalshi.com/markets"
             cols = st.columns([5, 1, 1, 1, 1])
             with cols[0]:
                 st.markdown(
                     f"**{matchup}** — {side_label}  "
-                    f"<span style='color:var(--muted);font-size:12px;'>· "
+                    f"<span style='color:var(--muted);font-size:12px;'>· {best_book} @ **{best_price}** · "
                     f"<span style='color:var(--good);'>+{edge_pct:.2f}pts</span> · "
                     f"${e.get('stake_dollars'):,.2f}</span>",
                     unsafe_allow_html=True,
                 )
-            cols[1].markdown(f"**{int(e.get('price_cents', 0))}¢**")
+            cols[1].markdown(f"**{best_price}**")
             cols[2].markdown(f"{e.get('_sport', '').upper()}")
-            cols[3].markdown(f"[Open ↗]({kurl})")
+            if best_book.lower() == "kalshi":
+                cols[3].markdown(f"[Open ↗]({kurl})")
+            else:
+                cols[3].markdown(f"_{best_book}_")
             if cols[4].button("Log", key=f"agent_log_{i}_{e.get('event_id','?')}_{side_label[:6]}"):
                 picks_store.add_pick({
                     "sport": (e.get("_sport") or "").lower(),
@@ -651,10 +672,10 @@ def _render_agent_panel(odds_games, kalshi_cash, settings, kalshi_markets_by_gam
                     "risk_units": round(e.get("stake_dollars", 0) / max(1e-6, kalshi_cash * (settings.get("unit_pct") or 0.1)), 2),
                     "win_units": None,
                     "methodology": "Model Edge",
-                    "notes": f"Kalshi vs Pinnacle · {int(e.get('price_cents', 0))}¢ · edge {edge_pct:+.2f}pts · {kurl}",
+                    "notes": f"{best_book} @ {best_price} vs Pinnacle · edge {edge_pct:+.2f}pts · Kalshi {int(e.get('kalshi_price_cents') or 0)}¢",
                 })
                 st.cache_data.clear()
-                st.toast(f"Logged: {side_label} @ {int(e.get('price_cents', 0))}¢", icon="✅")
+                st.toast(f"Logged: {side_label} @ {best_price} ({best_book})", icon="✅")
 
     if overflow_funded:
         with st.expander(f"➕ {len(overflow_funded)} more funded picks", expanded=False):
@@ -684,13 +705,12 @@ def _render_agent_panel(odds_games, kalshi_cash, settings, kalshi_markets_by_gam
                 )
     html(
         '<div class="hint" style="margin-top:10px;">'
-        f'Stakes = <strong>{kelly_mult*100:.0f}%-Kelly</strong> × Kalshi cash '
-        f'(<strong>${kalshi_cash:,.2f}</strong>), per-bet cap <strong>{max_bet*100:.1f}%</strong>, '
-        f'daily total-exposure cap <strong>{daily_cap_pct*100:.0f}%</strong>. '
-        '<strong>Pinnacle fair</strong> is the no-vig implied prob from Pinnacle, the sharpest book. '
-        '<strong>Kalshi IP</strong> is the YES-mid price in cents / 100. '
-        '<strong>Edge (pts)</strong> = Pinnacle fair − Kalshi IP. '
-        'Click "Open ↗" to place the bet directly on Kalshi.'
+        f'Agent compares <strong>Kalshi</strong> + offshore books '
+        f'(<em>Bovada, LowVig.ag, BetOnline.ag, BetUS, MyBookie.ag</em>) against <strong>Pinnacle no-vig</strong>. '
+        f'For each outcome, the <strong>best price</strong> wins the row — bet on whichever book is shown. '
+        f'Offshore books tolerate winning accounts; retail (DK/FD/MGM) are deliberately excluded. '
+        f'Stakes = <strong>{kelly_mult*100:.0f}%-Kelly</strong> × ${kalshi_cash:,.2f}, '
+        f'per-bet cap <strong>{max_bet*100:.1f}%</strong>, daily exposure cap <strong>{daily_cap_pct*100:.0f}%</strong>.'
         '</div>'
     )
 
@@ -1227,15 +1247,16 @@ def render_settings(settings: dict):
             settings_store.save({"fallback_book": new_fallback})
             st.success(f"Fallback book saved: {new_fallback}")
     with c2:
-        current_regions = saved.get("odds_regions") or "eu"
-        region_options = ["eu", "us", "us,eu", "us,us2,eu", "us,eu,uk,au"]
+        current_regions = saved.get("odds_regions") or "us,eu"
+        region_options = ["us,eu", "eu", "us", "us,us2,eu", "us,eu,uk,au"]
         new_regions = st.selectbox(
             "Odds API regions",
             options=region_options,
             index=region_options.index(current_regions) if current_regions in region_options else 0,
             key="set_regions",
-            help="eu alone = Pinnacle only = 1 credit per sport (recommended). "
-                 "Add US books only if you want to compare multiple sportsbooks on the dashboard.",
+            help="us,eu (recommended) = Pinnacle fair + offshore shop books (Bovada/LowVig/BetOnline), "
+                 "2 credits per sport. eu alone = Pinnacle only (1 credit), smaller edges because you "
+                 "can only bet on Kalshi.",
         )
         if new_regions != current_regions:
             settings_store.save({"odds_regions": new_regions})

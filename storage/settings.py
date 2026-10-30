@@ -31,16 +31,19 @@ _DEFAULTS: Dict[str, Any] = {
     "agent_max_bet_pct": 0.05,
     # Fair prob source order (configurable, default = Pinnacle sharp).
     "agent_fair_source": "pinnacle",
-    # Odds API regions. The default "eu" is Pinnacle-only (1 credit per request)
-    # because Pinnacle is the fair-prob source and Kalshi is the book we bet on.
-    # Only broaden this if you also want to shop other books in the UI.
-    "odds_regions": "eu",
+    # Odds API regions. "us,eu" = 2 credits/sport but unlocks offshore US books
+    # (Bovada, LowVig, BetOnline) alongside Pinnacle - these tolerate winning
+    # accounts and produce bigger edges than the sharp exchanges alone.
+    "odds_regions": "us,eu",
     # Which Odds API markets to pull. "h2h" is enough for moneyline edges on
     # Kalshi (which only lists winner markets). Each extra market adds 1 credit.
     "odds_markets": "h2h",
-    # Cache TTL for live odds in seconds. 3600 = 1h. The Odds API line only
-    # moves ~once/hour on average; shorter TTL burns credits for marginal freshness.
+    # Cache TTL for live odds in seconds. 3600 = 1h.
     "odds_live_ttl": 3600,
+    # Books the agent will shop against Pinnacle fair, in addition to Kalshi.
+    # Offshore books tolerate sharp action - DK/FanDuel/MGM/Caesars will ban
+    # winning accounts within weeks so they are intentionally excluded.
+    "shop_books": ["Bovada", "LowVig.ag", "BetOnline.ag", "BetUS", "MyBookie.ag"],
     # Daily total-exposure cap as a fraction of Kalshi cash. Prevents the agent
     # from recommending more stakes than the bankroll can cover across many picks.
     "daily_exposure_cap_pct": 0.25,
