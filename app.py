@@ -160,7 +160,7 @@ def _sidebar_settings() -> dict:
         if abs(unit_pct_of_kalshi - saved.get("unit_pct_of_kalshi", 0.01)) > 1e-6:
             settings_store.save({"unit_pct_of_kalshi": unit_pct_of_kalshi})
         unit_dollars = kalshi_cash * unit_pct_of_kalshi
-        st.caption(f"1u = **${unit_dollars:,.2f}** · max bet {(settings_store.load().get('agent_max_bet_pct', 0.05))/unit_pct_of_kalshi:.1f}u · daily cap {(settings_store.load().get('daily_exposure_cap_pct', 0.25))/unit_pct_of_kalshi:.1f}u")
+        st.caption(f"1u = **${unit_dollars:,.2f}** · max bet {(settings_store.load().get('agent_max_bet_pct', 0.025))/unit_pct_of_kalshi:.1f}u · daily cap {(settings_store.load().get('daily_exposure_cap_pct', 0.25))/unit_pct_of_kalshi:.1f}u")
 
         # ----- PRIMARY BOOK (sets which book shows in each game card's lines block) -----
         st.markdown("#### Lines display")
@@ -223,10 +223,15 @@ def _sidebar_settings() -> dict:
         )
         agent_max_bet_pct = st.slider(
             "Max bet per edge (%)",
-            min_value=0.5, max_value=15.0, value=5.0, step=0.5,
+            min_value=0.5, max_value=15.0,
+            value=float(saved.get("agent_max_bet_pct", 0.025)) * 100,
+            step=0.5,
             key="sb_agent_max_bet",
-            help="Hard cap on any single stake, as % of Kalshi cash.",
+            help="Hard cap on any single stake, as % of Kalshi cash. "
+                 "2.5% keeps the 25% daily cap funding 10 picks.",
         ) / 100.0
+        if abs(agent_max_bet_pct - saved.get("agent_max_bet_pct", 0.025)) > 1e-6:
+            settings_store.save({"agent_max_bet_pct": agent_max_bet_pct})
 
         agent_picks_shown = st.select_slider(
             "Picks shown on main board",
