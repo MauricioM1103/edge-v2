@@ -314,34 +314,51 @@ def render_dashboard(settings: dict):
     else:
         html(f'<div class="hint" style="margin-bottom:6px;"><strong>{date_str_pretty}</strong> — upcoming. Live odds appear closer to game time.</div>')
 
-    # Agent recommendations panel. New Kalshi-vs-Pinnacle flow uses raw markets:
-    # we assemble {(home,away): [kalshi_markets...]} and pass alongside the
-    # Pinnacle-only odds_games payload. The scanner finds +EV plays on Kalshi.
-    kalshi_markets_by_game: Dict[tuple, list] = {}
-    espn_events_by_game: Dict[tuple, dict] = {}
+    # Agent recommendations panel.
+    # BUG FIX: previously we passed a flat dict across all sports to the scanner,
+    # then looped sports_list and re-tagged each edge with whatever sport came first.
+    # Teams like "Giants" (SF Giants MLB vs NY Giants NFL) could even collide.
+    # Fix: split everything per-sport so each scan sees only that sport's data.
+    kalshi_markets_by_sport: Dict[str, dict] = {}
+    espn_events_by_sport: Dict[str, dict] = {}
+    pinnacle_games_by_sport: Dict[str, list] = {}
     for sp in sports_list:
         if not is_today:
             continue
-        all_markets_sp = load_kalshi_markets(sp)
         espn_events_sp = load_espn_scoreboard(sp, date_str=date_str_api) or []
+        espn_by_game = {}
         for ev in espn_events_sp:
             home_name = (ev.get("home") or {}).get("name")
             away_name = (ev.get("away") or {}).get("name")
-            espn_events_by_game[(home_name, away_name)] = ev
-            if not all_markets_sp:
-                continue
+            if home_name and away_name:
+                espn_by_game[(home_name, away_name)] = ev
+        espn_events_by_sport[sp] = espn_by_game
+
+        all_markets_sp = load_kalshi_markets(sp)
+        kalshi_by_game = {}
+        for ev in espn_events_sp:
+            home_name = (ev.get("home") or {}).get("name")
+            away_name = (ev.get("away") or {}).get("name")
             home_abbr = (ev.get("home") or {}).get("abbr") or ""
             away_abbr = (ev.get("away") or {}).get("abbr") or ""
+            if not all_markets_sp:
+                continue
             event_markets = find_event_markets(
                 all_markets_sp, ev.get("start_utc"),
                 home_abbr, away_abbr, home_name, away_name,
             )
             if event_markets:
-                kalshi_markets_by_game[(home_name, away_name)] = event_markets
+                kalshi_by_game[(home_name, away_name)] = event_markets
+        kalshi_markets_by_sport[sp] = kalshi_by_game
+
+        # Partition the already-fetched pinnacle games by their sport tag.
+        pinnacle_games_by_sport[sp] = [og for og in odds_games if og.get("_sport") == sp]
+
     _render_agent_panel(
         odds_games, kalshi_cash, settings,
-        kalshi_markets_by_game=kalshi_markets_by_game,
-        espn_events_by_game=espn_events_by_game,
+        kalshi_markets_by_sport=kalshi_markets_by_sport,
+        espn_events_by_sport=espn_events_by_sport,
+        pinnacle_games_by_sport=pinnacle_games_by_sport,
         sports_list=sports_list,
     )
 
@@ -406,7 +423,9 @@ def render_dashboard(settings: dict):
             _render_one_card(ev, odds_meta, exch_probs)
 
 
-def _render_agent_panel(odds_games, kalshi_cash, settings, kalshi_markets_by_game=None, sports_list=None, espn_events_by_game=None):
+def _render_agent_panel(odds_games, kalshi_cash, settings,
+                        kalshi_markets_by_sport=None, sports_list=None,
+                        espn_events_by_sport=None, pinnacle_games_by_sport=None):
     """Agent edge-scanner — Kalshi (free) as the book, Pinnacle no-vig as fair."""
     saved_cfg = settings_store.load()
     st.markdown("### Agent · Kalshi vs Pinnacle edge scanner")
@@ -426,8 +445,12 @@ def _render_agent_panel(odds_games, kalshi_cash, settings, kalshi_markets_by_gam
         html('<div class="hint">Agent is waiting on Pinnacle odds (used as the fair-prob reference).</div>')
         return
 
-    kalshi_markets_by_game = kalshi_markets_by_game or {}
-    if not kalshi_markets_by_game:
+    kalshi_markets_by_sport = kalshi_markets_by_sport or {}
+    espn_events_by_sport = espn_events_by_sport or {}
+    pinnacle_games_by_sport = pinnacle_games_by_sport or {}
+    # Total matched Kalshi markets across all sports.
+    total_matched = sum(len(v) for v in kalshi_markets_by_sport.values())
+    if total_matched == 0:
         html(
             '<div class="hint">No matching Kalshi markets found for today\'s games. The agent only '
             'picks spots where it can bet on Kalshi — nothing to show yet.</div>'
@@ -453,17 +476,20 @@ def _render_agent_panel(odds_games, kalshi_cash, settings, kalshi_markets_by_gam
         return
     shop_books = saved_cfg.get("shop_books") or ["Bovada", "LowVig.ag", "BetOnline.ag", "BetUS", "MyBookie.ag"]
     for sp in (sports_list or []):
+        sp_kalshi = kalshi_markets_by_sport.get(sp, {})
+        if not sp_kalshi:
+            continue
         try:
             sport_edges = scan_fn(
-                kalshi_markets_by_game=kalshi_markets_by_game,
-                pinnacle_games=odds_games,
+                kalshi_markets_by_game=sp_kalshi,
+                pinnacle_games=pinnacle_games_by_sport.get(sp, []),
                 bankroll_cash=kalshi_cash,
                 sport_key=sp,
                 kelly_mult=kelly_mult,
                 min_edge_pct=min_edge,
                 max_bet_pct=max_bet,
                 shop_books=shop_books,
-                espn_events_by_game=espn_events_by_game,
+                espn_events_by_game=espn_events_by_sport.get(sp, {}),
             )
         except Exception:
             sport_edges = []
@@ -644,12 +670,18 @@ def _render_agent_panel(odds_games, kalshi_cash, settings, kalshi_markets_by_gam
         for try_thr in (0.01, 0.005, 0.0):
             try_edges = []
             for sp in (sports_list or []):
+                sp_kalshi = kalshi_markets_by_sport.get(sp, {})
+                if not sp_kalshi:
+                    continue
                 try:
                     try_edges += scan_fn(
-                        kalshi_markets_by_game=kalshi_markets_by_game,
-                        pinnacle_games=odds_games, bankroll_cash=kalshi_cash,
+                        kalshi_markets_by_game=sp_kalshi,
+                        pinnacle_games=pinnacle_games_by_sport.get(sp, []),
+                        bankroll_cash=kalshi_cash,
                         sport_key=sp, kelly_mult=kelly_mult,
                         min_edge_pct=try_thr, max_bet_pct=max_bet,
+                        shop_books=shop_books,
+                        espn_events_by_game=espn_events_by_sport.get(sp, {}),
                     )
                 except Exception:
                     pass
