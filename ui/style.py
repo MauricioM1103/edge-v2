@@ -294,8 +294,44 @@ table.ledger tr:hover { background: color-mix(in oklab, var(--rule) 30%, transpa
 
 /* Clean up Streamlit's sidebar collapsed-state controls (prevents the "double arrow"
    that appears when both the collapse control AND the brand mark land near the top-left). */
-[data-testid="collapsedControl"] { padding: 6px; }
-[data-testid="collapsedControl"] svg { height: 20px; width: 20px; }
+/* Prominent 'Settings' button that appears when the sidebar is collapsed.
+   The native Streamlit collapse control is a tiny chevron that's easy to miss;
+   we turn it into a labeled pill the user can actually see. */
+[data-testid="collapsedControl"] {
+  display: inline-flex !important;
+  align-items: center !important;
+  gap: 8px !important;
+  padding: 8px 14px 8px 10px !important;
+  margin: 10px 10px 0 !important;
+  background: var(--card) !important;
+  border: 1px solid var(--rule-strong) !important;
+  border-radius: 999px !important;
+  box-shadow: 0 2px 6px rgba(0,0,0,0.15) !important;
+  color: var(--ink) !important;
+  cursor: pointer;
+  transition: background 160ms ease, border-color 160ms ease;
+}
+[data-testid="collapsedControl"]:hover {
+  background: var(--card-elev) !important;
+  border-color: var(--accent) !important;
+}
+[data-testid="collapsedControl"] svg {
+  height: 18px !important;
+  width: 18px !important;
+  color: var(--accent) !important;
+  fill: currentColor !important;
+}
+/* Append a readable label after the icon via a pseudo-element.
+   Pointer-events none keeps the whole button clickable without this blocking it. */
+[data-testid="collapsedControl"]::after {
+  content: "Settings";
+  font-family: "Public Sans", -apple-system, sans-serif;
+  font-size: 13px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  color: var(--ink);
+  pointer-events: none;
+}
 header[data-testid="stHeader"] { background: transparent; }
 /* Hide Streamlit's own deploy promo + decoration bars. */
 [data-testid="stDecoration"] { display: none; }
