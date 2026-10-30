@@ -52,9 +52,24 @@ CUSTOM_CSS = r"""
 /* ===== Streamlit chrome overrides ===== */
 .stApp { background: var(--bg); }
 section.main > div.block-container { padding-top: 1.2rem; padding-bottom: 3rem; max-width: 1320px; }
-.stApp, .stMarkdown, .stText, .stCaption, p, div, span, label, li {
-  font-family: "Public Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif !important;
+.stApp, .stMarkdown, .stText, .stCaption, p, div, label, li {
+  font-family: "Public Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   color: var(--ink);
+}
+/* Only non-icon spans get the body font. */
+span:not([class*="material"]):not([class*="icon"]):not([data-testid*="icon"]) {
+  font-family: inherit;
+}
+/* Hands back Material Symbols to Streamlit's icon spans. */
+[class*="material-symbols"],
+[class*="material-icon"],
+[data-testid*="Icon"] span,
+.stExpander [aria-expanded] svg + span,
+.stExpander summary > span:first-child,
+[data-testid="stExpander"] summary > span:first-child {
+  font-family: "Material Symbols Rounded", "Material Symbols Outlined",
+               "Material Icons", sans-serif !important;
+  font-feature-settings: "liga" 1;
 }
 h1, h2, h3, h4 {
   font-family: "Fraunces", "Playfair Display", Georgia, serif !important;
