@@ -294,13 +294,15 @@ table.ledger tr:hover { background: color-mix(in oklab, var(--rule) 30%, transpa
 
 /* Clean up Streamlit's sidebar collapsed-state controls (prevents the "double arrow"
    that appears when both the collapse control AND the brand mark land near the top-left). */
-/* Prominent 'Settings' button that appears when the sidebar is collapsed.
-   The native Streamlit collapse control is a tiny chevron that's easy to miss;
-   we turn it into a floating pill the user can't miss, across every known
-   Streamlit testid for the control. */
+/* Modern Streamlit renders the sidebar expand control as data-testid=
+   "stExpandSidebarButton" with 0x0 dimensions, so the only way to re-open
+   the sidebar is a near-invisible 1px wide click target. Force it to be a
+   large floating pill the user can't miss. Also target legacy testids. */
+[data-testid="stExpandSidebarButton"],
 [data-testid="collapsedControl"],
 [data-testid="stSidebarCollapsedControl"],
-button[kind="header"][aria-label*="idebar" i] {
+button[aria-label="Expand sidebar"],
+button[aria-label*="idebar" i][kind="headerNoPadding"] {
   display: inline-flex !important;
   align-items: center !important;
   justify-content: center !important;
@@ -309,40 +311,59 @@ button[kind="header"][aria-label*="idebar" i] {
   position: fixed !important;
   top: 12px !important;
   left: 12px !important;
-  z-index: 999999 !important;
+  z-index: 2147483647 !important; /* highest safe z-index */
   background: var(--accent) !important;
   border: 1px solid var(--accent) !important;
   border-radius: 999px !important;
-  box-shadow: 0 4px 14px rgba(0,0,0,0.35) !important;
+  box-shadow: 0 4px 14px rgba(0,0,0,0.45) !important;
   color: var(--accent-ink) !important;
   cursor: pointer !important;
-  transition: transform 160ms ease, box-shadow 160ms ease;
+  transition: transform 160ms ease, box-shadow 160ms ease !important;
   min-height: 40px !important;
+  min-width: 150px !important;
+  height: auto !important;
+  width: auto !important;
   opacity: 1 !important;
   visibility: visible !important;
+  pointer-events: auto !important;
+  overflow: visible !important;
+  transform: none !important;
 }
+[data-testid="stExpandSidebarButton"]:hover,
 [data-testid="collapsedControl"]:hover,
-[data-testid="stSidebarCollapsedControl"]:hover {
+[data-testid="stSidebarCollapsedControl"]:hover,
+button[aria-label="Expand sidebar"]:hover {
   transform: translateY(-1px) !important;
-  box-shadow: 0 6px 18px rgba(0,0,0,0.45) !important;
+  box-shadow: 0 6px 18px rgba(0,0,0,0.55) !important;
 }
+[data-testid="stExpandSidebarButton"] svg,
 [data-testid="collapsedControl"] svg,
-[data-testid="stSidebarCollapsedControl"] svg {
+[data-testid="stSidebarCollapsedControl"] svg,
+button[aria-label="Expand sidebar"] svg {
   height: 18px !important;
   width: 18px !important;
   color: var(--accent-ink) !important;
   fill: currentColor !important;
+  display: inline-block !important;
 }
+[data-testid="stExpandSidebarButton"]::after,
 [data-testid="collapsedControl"]::after,
-[data-testid="stSidebarCollapsedControl"]::after {
-  content: "Open Settings";
-  font-family: "Public Sans", -apple-system, sans-serif;
-  font-size: 13px;
-  font-weight: 600;
-  letter-spacing: 0.02em;
-  color: var(--accent-ink);
-  pointer-events: none;
-  white-space: nowrap;
+[data-testid="stSidebarCollapsedControl"]::after,
+button[aria-label="Expand sidebar"]::after {
+  content: "Open Settings" !important;
+  font-family: "Public Sans", -apple-system, sans-serif !important;
+  font-size: 13px !important;
+  font-weight: 600 !important;
+  letter-spacing: 0.02em !important;
+  color: var(--accent-ink) !important;
+  pointer-events: none !important;
+  white-space: nowrap !important;
+}
+/* The Streamlit parent wrapper also gets 0x0 - force it to flow normally. */
+[data-testid="stExpandSidebarButton"] * {
+  display: inline-block !important;
+  opacity: 1 !important;
+  visibility: visible !important;
 }
 header[data-testid="stHeader"] { background: transparent; }
 /* Hide Streamlit's own deploy promo + decoration bars. */
