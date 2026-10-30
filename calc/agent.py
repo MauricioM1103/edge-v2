@@ -679,8 +679,9 @@ def scan_offshore_markets_vs_pinnacle(
 
     for g in pinnacle_games:
         for mk in markets:
-            if mk == "h2h":
-                continue  # handled by scan_kalshi_vs_pinnacle
+            # h2h is normally handled by scan_kalshi_vs_pinnacle. We also handle it
+            # here when the caller passes it in (used for sports without Kalshi
+            # markets like soccer/tennis - the h2h scanner can't run there).
             all_books = _collect_market(g, mk)
             if not all_books:
                 continue

@@ -486,8 +486,12 @@ def _render_agent_panel(odds_games, kalshi_cash, settings,
         sp_kalshi = kalshi_markets_by_sport.get(sp, {})
         sp_pin = pinnacle_games_by_sport.get(sp, [])
         sp_espn = espn_events_by_sport.get(sp, {})
-        # h2h via Kalshi+shop vs Pinnacle
-        if sp_kalshi:
+        if not sp_pin:
+            continue  # no Pinnacle data for this sport today - skip entirely
+        want_h2h = "h2h" in markets_list
+
+        # h2h via Kalshi+shop vs Pinnacle - only when Kalshi has markets for this sport.
+        if want_h2h and sp_kalshi:
             try:
                 sport_edges = scan_fn(
                     kalshi_markets_by_game=sp_kalshi,
@@ -503,9 +507,14 @@ def _render_agent_panel(odds_games, kalshi_cash, settings,
             except Exception:
                 sport_edges = []
             edges.extend(sport_edges)
-        # Non-h2h markets (totals, 1H h2h, 1H totals, BTTS, spreads) via offshore shop vs Pinnacle
+
+        # Non-h2h markets ALWAYS go through the offshore scanner.
+        # When this sport has NO Kalshi (soccer / tennis / F1 / UFC / etc.),
+        # ALSO add h2h to the offshore list so we don't silently skip the sport.
         other_markets = [m for m in markets_list if m != "h2h"]
-        if other_markets and callable(scan_other_fn) and sp_pin:
+        if want_h2h and not sp_kalshi:
+            other_markets = ["h2h"] + other_markets
+        if other_markets and callable(scan_other_fn):
             try:
                 other_edges = scan_other_fn(
                     pinnacle_games=sp_pin,
@@ -570,7 +579,11 @@ def _render_agent_panel(odds_games, kalshi_cash, settings,
         return []
     # ----- Filter controls -----
     all_sports = sorted({(e.get("_sport") or "").upper() for e in edges if e.get("_sport")})
-    fc1, fc2 = st.columns([3, 1])
+    all_markets_present = sorted({e.get("market") or "h2h" for e in edges})
+    all_books_present = sorted({e.get("book") or "" for e in edges if e.get("book")})
+    all_venues = ["Kalshi", "Offshore shop"]  # grouped venue filter
+
+    fc1, fc2, fc3, fc4 = st.columns([2, 2, 2, 1])
     with fc1:
         f_sports = st.multiselect(
             "Sport", options=all_sports, default=all_sports,
@@ -578,13 +591,31 @@ def _render_agent_panel(odds_games, kalshi_cash, settings,
             placeholder="Sport filter",
         )
     with fc2:
+        f_markets = st.multiselect(
+            "Market", options=all_markets_present, default=all_markets_present,
+            format_func=lambda m: agent_calc.MARKET_LABELS.get(m, m),
+            key="agent_f_markets", label_visibility="collapsed",
+            placeholder="Market filter",
+        )
+    with fc3:
+        f_books = st.multiselect(
+            "Book", options=all_books_present, default=all_books_present,
+            key="agent_f_books", label_visibility="collapsed",
+            placeholder="Book filter",
+        )
+    with fc4:
         f_min_edge = st.number_input(
             "Min edge %", 0.0, 50.0, min_edge * 100, 0.5,
             key="agent_f_min_edge", label_visibility="collapsed",
         )
-    # Apply filters
+    # Apply filters - every toggle is independent and multi-select so turning
+    # one off doesn't force you to re-tick everything.
     def _keep(e):
         if f_sports and (e.get("_sport") or "").upper() not in f_sports:
+            return False
+        if f_markets and (e.get("market") or "h2h") not in f_markets:
+            return False
+        if f_books and (e.get("book") or "") not in f_books:
             return False
         if e.get("edge", 0) * 100 < f_min_edge:
             return False

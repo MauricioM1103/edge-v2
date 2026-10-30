@@ -56,9 +56,10 @@ def _sidebar_settings() -> dict:
             picked = st.multiselect(
                 "Sports to scan",
                 options=group_sports,
-                default=group_sports,
+                default=group_sports,  # EVERY sport in the All-sports list is on by default
                 format_func=lambda k: espn.DISPLAY_NAMES.get(k, k.upper()),
                 key="sb_sports_multi",
+                help="Default scans every sport. Untick any to trim your credit burn.",
             )
             sport = picked or group_sports
         else:
