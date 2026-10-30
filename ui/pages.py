@@ -354,23 +354,31 @@ def render_dashboard(settings: dict):
         # Partition the already-fetched pinnacle games by their sport tag.
         pinnacle_games_by_sport[sp] = [og for og in odds_games if og.get("_sport") == sp]
 
-    _render_agent_panel(
+    top_picks = _render_agent_panel(
         odds_games, kalshi_cash, settings,
         kalshi_markets_by_sport=kalshi_markets_by_sport,
         espn_events_by_sport=espn_events_by_sport,
         pinnacle_games_by_sport=pinnacle_games_by_sport,
         sports_list=sports_list,
-    )
+    ) or []
+
+    # Per-pick quantitative analysis boards.
+    if top_picks:
+        _render_analysis_boards(top_picks, settings, kalshi_cash)
 
     if not merged:
         html('<div class="hint">No games on the slate for this sport right now. Try another sport in the sidebar, or check back later.</div>')
         return
 
-    # quick calc feed above the grid
-    _quick_label = ",".join(sports_list) if multi_sport_mode else sport_setting
-    _render_quick_calculator(merged, unit_pct, bankroll_units, _quick_label)
+    # Everything below is secondary — collapse it so the main agent board stays prominent.
+    with st.expander("🎯 Quick-glance EV scanner + today's matchups", expanded=False):
+        _quick_label = ",".join(sports_list) if multi_sport_mode else sport_setting
+        _render_quick_calculator(merged, unit_pct, bankroll_units, _quick_label)
+        _render_matchups_grid(merged, sports_list, settings, unit_pct, bankroll_units, multi_sport_mode)
 
-    # Game grid - per-sport sections in all-sports mode, flat grid otherwise.
+
+def _render_matchups_grid(merged, sports_list, settings, unit_pct, bankroll_units, multi_sport_mode):
+    """Game card grid - per-sport sections in all-sports mode, flat grid otherwise."""
     st.markdown('### Today\'s matchups')
     primary_book = settings.get("primary_book") or "kalshi"
     extra_sources = set(settings.get("extra_sources") or [])
@@ -439,12 +447,10 @@ def _render_agent_panel(odds_games, kalshi_cash, settings,
             '<div class="hint warn">Agent is <strong>idle</strong>: configure Kalshi cash so '
             'recommendations can be sized in dollars.</div>'
         )
-        return
-
+        return []
     if not odds_games:
         html('<div class="hint">Agent is waiting on Pinnacle odds (used as the fair-prob reference).</div>')
-        return
-
+        return []
     kalshi_markets_by_sport = kalshi_markets_by_sport or {}
     espn_events_by_sport = espn_events_by_sport or {}
     pinnacle_games_by_sport = pinnacle_games_by_sport or {}
@@ -455,8 +461,7 @@ def _render_agent_panel(odds_games, kalshi_cash, settings,
             '<div class="hint">No matching Kalshi markets found for today\'s games. The agent only '
             'picks spots where it can bet on Kalshi — nothing to show yet.</div>'
         )
-        return
-
+        return []
     # Credit tip: us,eu is the preferred combo (gives both Pinnacle fair + offshore shop books).
     # Only warn when the user has gone wider than us,eu, which burns credits with no payoff.
     cur_regions = saved_cfg.get("odds_regions") or "us,eu"
@@ -473,7 +478,7 @@ def _render_agent_panel(odds_games, kalshi_cash, settings,
     scan_fn = getattr(agent_calc, "scan_kalshi_vs_pinnacle", None)
     if not callable(scan_fn):
         html('<div class="hint err">Agent scanner missing — try reloading.</div>')
-        return
+        return []
     shop_books = saved_cfg.get("shop_books") or ["Bovada", "LowVig.ag", "BetOnline.ag", "BetUS", "MyBookie.ag"]
     markets_list = [m.strip() for m in (saved_cfg.get("odds_markets") or "h2h").split(",") if m.strip()]
     scan_other_fn = getattr(agent_calc, "scan_offshore_markets_vs_pinnacle", None)
@@ -562,8 +567,7 @@ def _render_agent_panel(odds_games, kalshi_cash, settings,
 
     if not edges:
         html('<div class="hint">No edges meet the threshold right now. Lower the edge requirement in the Settings tab to see thinner opportunities.</div>')
-        return
-
+        return []
     # ----- Filter controls -----
     all_sports = sorted({(e.get("_sport") or "").upper() for e in edges if e.get("_sport")})
     fc1, fc2 = st.columns([3, 1])
@@ -588,8 +592,7 @@ def _render_agent_panel(odds_games, kalshi_cash, settings,
     filtered = [e for e in edges if _keep(e)]
     if not filtered:
         html('<div class="hint">Every edge was filtered out. Clear a filter above to see picks again.</div>')
-        return
-
+        return []
     # Separate funded picks from cap-dropped picks so the main table only shows actionable rows.
     funded = [e for e in filtered if (e.get("stake_dollars") or 0) > 0]
     dropped = [e for e in filtered if (e.get("stake_dollars") or 0) <= 0]
@@ -703,6 +706,10 @@ def _render_agent_panel(odds_games, kalshi_cash, settings,
 
     top = funded[:15]
     overflow_funded = funded[15:]
+    # Attach stable anchor ids so the analysis boards can scroll-nav back and forth.
+    for i, e in enumerate(top):
+        e["_anchor"] = f"pick-{i+1}"
+    html('<div id="agent-table-top" style="position:relative; top:-40px;"></div>')
     if not top:
         # Re-scan at progressively looser thresholds to tell the user WHY they see nothing.
         suggestion = ""
@@ -744,7 +751,7 @@ def _render_agent_panel(odds_games, kalshi_cash, settings,
                 "so this happens on efficient slates. Check back closer to game time."
             )
         html(f'<div class="hint">{suggestion}</div>')
-        return
+        return []
     html(
         '<table class="ledger" style="margin-top:4px;">'
         + header
@@ -830,6 +837,204 @@ def _render_agent_panel(odds_games, kalshi_cash, settings,
         f'Stakes sized at <strong>{kelly_mult*100:.0f}%-Kelly</strong>, 1u = {unit_pct*100:.1f}% of your Kalshi cash, '
         f'per-bet cap <strong>{max_bet/unit_pct:.1f}u</strong>, daily total cap <strong>{daily_cap_pct/unit_pct:.1f}u</strong>.'
         '</div>'
+    )
+
+    # Jump-nav to the per-pick analysis boards.
+    if top:
+        nav_links = " ".join(
+            f'<a href="#{e["_anchor"]}" style="padding:3px 10px; background:var(--card-elev); '
+            f'border:1px solid var(--rule); border-radius:999px; text-decoration:none; '
+            f'color:var(--ink); font-family:JetBrains Mono,monospace; font-size:11px;">'
+            f'#{i+1}</a>'
+            for i, e in enumerate(top)
+        )
+        html(
+            '<div style="margin-top:14px; padding:10px 14px; background:var(--card); '
+            'border:1px solid var(--rule); border-radius:10px; display:flex; align-items:center; '
+            'gap:10px; flex-wrap:wrap;">'
+            '<span style="font-family:JetBrains Mono,monospace; font-size:10px; letter-spacing:0.14em; '
+            'text-transform:uppercase; color:var(--muted);">Jump to analysis →</span>'
+            f'{nav_links}'
+            '</div>'
+        )
+    return top
+
+
+def _render_analysis_boards(top_picks, settings, kalshi_cash):
+    """One detailed quantitative-analysis card per top pick, with scroll-nav back to the main table."""
+    if not top_picks:
+        return
+    saved_cfg = settings_store.load()
+    unit_pct = settings.get("unit_pct") or 0.01
+    unit_dollars = kalshi_cash * unit_pct
+    kelly_mult = settings.get("agent_kelly") or 0.25
+    max_bet = settings.get("agent_max_bet_pct") or 0.05
+    daily_cap_pct = saved_cfg.get("daily_exposure_cap_pct", 0.25)
+
+    def _units_rounded(dollars):
+        if unit_dollars <= 0:
+            return 0.0
+        return round((dollars / unit_dollars) * 2) / 2
+
+    html(
+        '<h3 id="analysis-top" style="margin-top:34px; padding-top:10px; '
+        'border-top:1px solid var(--rule);">Quantitative analysis</h3>'
+        '<p style="color:var(--muted); font-size:13px; margin-top:-6px;">'
+        'Each funded pick, decomposed: the fair-price source, the Kelly math, '
+        'alternate venues, and current ESPN state.</p>'
+    )
+
+    for i, e in enumerate(top_picks):
+        _render_single_pick_analysis(e, i + 1, len(top_picks), unit_dollars,
+                                     _units_rounded, kelly_mult, max_bet, daily_cap_pct)
+
+
+def _render_single_pick_analysis(e, idx, total, unit_dollars, _units_fn, kelly_mult, max_bet, daily_cap_pct):
+    """Render one pick's detailed analysis card with its own anchor + navigation."""
+    from calc.odds import american_to_decimal, implied_prob_american
+    anchor = e.get("_anchor") or f"pick-{idx}"
+    matchup = e.get("matchup") or "?"
+    sport = (e.get("_sport") or "").upper()
+    market_label = e.get("market_label") or agent_calc.MARKET_LABELS.get(e.get("market", "h2h"), "Moneyline")
+    side_label = e.get("side_label") or ""
+    best_book = e.get("book") or "?"
+    best_price = format_american(e.get("price"))
+    best_imp = e.get("book_implied") or 0
+    fair_prob = e.get("fair_prob") or 0
+    edge_pct = (e.get("edge") or 0) * 100
+    stake_u = _units_fn(e.get("stake_dollars") or 0)
+    stake_dollars = e.get("stake_dollars") or 0
+    kelly_frac = e.get("kelly_frac") or 0
+    status_detail = e.get("status_detail") or ""
+    status_state = e.get("status_state") or ""
+    hs = e.get("home_score"); as_ = e.get("away_score")
+    kalshi_url = e.get("kalshi_url")
+
+    # EV calculation
+    dec = american_to_decimal(e.get("price"))
+    profit_on_win = (dec - 1) * stake_dollars if dec and stake_dollars else 0
+    ev_dollars = (fair_prob * profit_on_win) - ((1 - fair_prob) * stake_dollars)
+    ev_pct = (ev_dollars / stake_dollars * 100) if stake_dollars > 0 else 0
+
+    # Alternate books from candidates list (if present)
+    candidates = e.get("candidates") or []
+    if candidates:
+        candidates_sorted = sorted(candidates, key=lambda c: c["implied"])
+        best_imp_val = candidates_sorted[0]["implied"]
+    else:
+        candidates_sorted = []
+        best_imp_val = best_imp
+
+    # Prev/next anchors
+    prev_a = f"pick-{idx-1}" if idx > 1 else "agent-table-top"
+    next_a = f"pick-{idx+1}" if idx < total else "agent-table-top"
+    prev_label = f"← Pick #{idx-1}" if idx > 1 else "↑ Main board"
+    next_label = f"Pick #{idx+1} →" if idx < total else "↑ Main board"
+
+    # Live/final status chip
+    status_chip = ""
+    if status_state == "post":
+        score = f"{as_}–{hs}" if hs is not None and as_ is not None else "final"
+        status_chip = f'<span class="chip" style="padding:3px 10px;">FINAL · {score}</span>'
+    elif status_state == "in":
+        score = f"{as_}–{hs}" if hs is not None and as_ is not None else ""
+        status_chip = f'<span class="chip live" style="padding:3px 10px;">● LIVE · {status_detail} · {score}</span>'
+    elif e.get("start_utc"):
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+        try:
+            t = e["start_utc"].astimezone(ZoneInfo("America/Chicago")).strftime("%a %I:%M %p").lstrip("0") + " CT"
+            status_chip = f'<span class="chip" style="padding:3px 10px;">{t}</span>'
+        except Exception:
+            pass
+
+    # Alt-book table
+    alt_rows = ""
+    for c in candidates_sorted:
+        is_best = c["implied"] == best_imp_val
+        tone_style = 'style="color:var(--good); font-weight:600;"' if is_best else 'style="color:var(--muted);"'
+        alt_rows += (
+            f'<tr>'
+            f'<td class="mono">{c["book"]}</td>'
+            f'<td class="num mono">{format_american(c["price"])}</td>'
+            f'<td class="num mono" {tone_style}>{c["implied"]*100:.2f}%</td>'
+            f'<td class="num mono" {tone_style}>{(fair_prob - c["implied"])*100:+.2f} pts</td>'
+            f'</tr>'
+        )
+    alt_table = ""
+    if alt_rows:
+        alt_table = (
+            '<div style="margin-top:14px;">'
+            '<div class="mono" style="font-size:10px; letter-spacing:0.14em; text-transform:uppercase; '
+            'color:var(--muted); margin-bottom:6px;">Price comparison</div>'
+            '<table class="ledger" style="margin:0;">'
+            '<thead><tr><th>Venue</th><th class="num">Price</th><th class="num">Implied</th><th class="num">Edge vs Pinn</th></tr></thead>'
+            f'<tbody>{alt_rows}</tbody></table>'
+            '</div>'
+        )
+
+    # Open-bet CTA
+    cta_html = ""
+    if kalshi_url and best_book.lower() == "kalshi":
+        cta_html = (
+            f'<a href="{kalshi_url}" target="_blank" rel="noopener" '
+            'style="display:inline-block; padding:8px 16px; background:var(--accent); color:var(--accent-ink); '
+            'border-radius:8px; text-decoration:none; font-weight:600; font-size:13px;">'
+            f'Open on Kalshi ↗</a>'
+        )
+
+    # Main board
+    html(
+        f'<div id="{anchor}" style="position:relative; top:-20px;"></div>'
+        f'<div style="background:var(--card); border:1px solid var(--rule); border-radius:12px; '
+        f'padding:20px 24px; margin-top:16px;">'
+        # Header row
+        f'<div style="display:flex; justify-content:space-between; align-items:flex-start; '
+        f'flex-wrap:wrap; gap:12px; padding-bottom:12px; border-bottom:1px solid var(--rule); margin-bottom:14px;">'
+        f'<div>'
+        f'<div style="display:flex; align-items:center; gap:8px; margin-bottom:4px;">'
+        f'<span class="chip accent" style="padding:3px 10px;">#{idx}</span>'
+        f'<span class="chip" style="padding:3px 10px;">{sport}</span>'
+        f'<span class="chip" style="padding:3px 10px;">{market_label}</span>'
+        f'{status_chip}'
+        f'</div>'
+        f'<div style="font-family:Fraunces,serif; font-style:italic; font-size:22px; margin-top:4px;">{matchup}</div>'
+        f'<div style="font-size:15px; color:var(--ink); margin-top:4px;"><strong>{side_label}</strong></div>'
+        f'</div>'
+        f'<div style="text-align:right;">'
+        f'<div class="mono" style="font-size:10px; color:var(--muted); letter-spacing:0.12em; text-transform:uppercase;">Edge</div>'
+        f'<div class="mono ev-plus" style="font-size:28px; font-weight:500;">{edge_pct:+.2f}pts</div>'
+        f'{cta_html}'
+        f'</div>'
+        f'</div>'
+        # Metric blocks
+        f'<div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(140px, 1fr)); gap:10px;">'
+        f'<div class="metric-card"><div class="label">Price</div><div class="value">{best_price}</div><div class="foot">{best_book}</div></div>'
+        f'<div class="metric-card"><div class="label">Market IP</div><div class="value">{best_imp*100:.2f}%</div><div class="foot">at that price</div></div>'
+        f'<div class="metric-card"><div class="label">Pinnacle fair</div><div class="value accent">{fair_prob*100:.2f}%</div><div class="foot">no-vig consensus</div></div>'
+        f'<div class="metric-card"><div class="label">Kelly</div><div class="value">{kelly_frac*100:.2f}%</div><div class="foot">{kelly_mult*100:.0f}% × full Kelly</div></div>'
+        f'<div class="metric-card"><div class="label">Stake</div><div class="value accent">{stake_u:.1f}u</div><div class="foot">of {max_bet/0.01:.0f}u max</div></div>'
+        f'<div class="metric-card"><div class="label">EV / 100u</div><div class="value {"good" if ev_pct > 0 else ""}">{ev_pct:+.2f}%</div><div class="foot">expected per 100u risked</div></div>'
+        f'</div>'
+        # Reasoning
+        f'<div style="margin-top:16px; padding:12px 14px; background:var(--card-elev); border-radius:8px; '
+        f'font-size:13px; color:var(--ink-dim); line-height:1.6;">'
+        f'<strong>Rationale.</strong> Pinnacle\'s no-vig fair prob says this outcome happens '
+        f'<strong>{fair_prob*100:.2f}%</strong> of the time. {best_book} is offering it at '
+        f'<strong>{best_price}</strong> ({best_imp*100:.2f}% implied), underestimating the true prob by '
+        f'<strong>{edge_pct:+.2f} pts</strong>. Quarter-Kelly says stake '
+        f'<strong>{kelly_frac*100:.2f}%</strong> of bankroll (<strong>{stake_u:.1f}u</strong>), capped by '
+        f'the <strong>{max_bet/0.01:.0f}u</strong> per-bet rule and <strong>{daily_cap_pct/0.01:.0f}u</strong> daily cap.'
+        f'</div>'
+        f'{alt_table}'
+        # Nav footer
+        f'<div style="margin-top:16px; padding-top:12px; border-top:1px solid var(--rule); '
+        f'display:flex; justify-content:space-between; align-items:center;">'
+        f'<a href="#{prev_a}" style="color:var(--muted); text-decoration:none; font-size:12px;">{prev_label}</a>'
+        f'<a href="#agent-table-top" style="color:var(--accent); text-decoration:none; font-size:12px; font-weight:500;">↑ Main board</a>'
+        f'<a href="#{next_a}" style="color:var(--muted); text-decoration:none; font-size:12px;">{next_label}</a>'
+        f'</div>'
+        f'</div>'
     )
 
 
