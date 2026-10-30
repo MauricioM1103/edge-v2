@@ -1,16 +1,20 @@
 """Automated edge scanner.
 
 Approach (per user spec, oct-2026):
-  * Fair probability = Kalshi's YES-mid (prediction market, no vig).
-  * Fallback when Kalshi has no quote on a game = the no-vig consensus of
-    DraftKings (public book) for that game's market.
-  * Secondary fallback = multi-book no-vig consensus.
-  * An "edge" exists when a sportsbook's offered price implies a probability
-    LOWER than the fair prob. Edge = fair_prob - book_implied_prob.
+  * Fair probability = Pinnacle's no-vig two-way probability.
+    Pinnacle is the sharpest sportsbook in the industry - its line is the
+    tightest proxy we have for the market's "true" probability. Stripping
+    the small vig off Pinnacle gives a clean fair reference.
+  * Fallbacks (in order) when Pinnacle isn't in the Odds API response for
+    this game or market:
+       1. Kalshi YES-mid (exchange, no vig)   -- h2h only
+       2. Fallback book (default DraftKings)  no-vig
+       3. Multi-book consensus                no-vig
+  * Scan every bookmaker, INCLUDING Kalshi (synthesized from kalshi_prob_home).
+    An "edge" exists when a book's offered price implies a probability LOWER
+    than the fair prob. Edge = fair_prob - book_implied_prob.
   * Stake = kelly_fraction(fair_prob, book_price) * bankroll_cash * kelly_mult,
     capped at max_bet_pct of bankroll.
-
-Return shape is unchanged (list of dicts), so the UI table keeps working.
 """
 from __future__ import annotations
 
@@ -77,19 +81,31 @@ def _fair_prob_for(
 ) -> Tuple[Optional[float], Optional[float], str]:
     """Return (fair_home, fair_away, source_label).
 
-    Preference: Kalshi (for h2h only; Kalshi has no spreads/totals) →
-    no-vig fallback_book → multi-book consensus.
+    Preference order:
+      1. Pinnacle no-vig  (sharpest book - our best fair reference)
+      2. Kalshi YES-mid   (h2h only; exchange, no vig)
+      3. fallback_book no-vig (default DraftKings)
+      4. multi-book consensus no-vig
     """
-    # 1. Kalshi only works for moneyline markets.
+    # 1. Pinnacle no-vig fair (works for every market).
+    pin = _book_prices(game, "Pinnacle", market_key)
+    if pin and pin.get("home") is not None and pin.get("away") is not None:
+        ph, pa = no_vig_two_way(pin["home"], pin["away"])
+        if ph is not None:
+            return (ph, pa, "Pinnacle no-vig")
+
+    # 2. Kalshi (moneyline only - Kalshi has no spreads/totals markets).
     if market_key == "h2h" and kalshi_prob_home is not None:
         return (kalshi_prob_home, 1.0 - kalshi_prob_home, "Kalshi")
-    # 2. Fallback book's no-vig fair
+
+    # 3. Fallback book's no-vig fair
     fb = _book_prices(game, fallback_book, market_key)
     if fb and fb.get("home") is not None and fb.get("away") is not None:
         ph, pa = no_vig_two_way(fb["home"], fb["away"])
         if ph is not None:
-            return (ph, pa, f"{fallback_book.title()} no-vig")
-    # 3. Multi-book consensus
+            return (ph, pa, f"{fallback_book} no-vig")
+
+    # 4. Multi-book consensus
     books = game.get("bookmakers") or []
     pairs = []
     for b in books:
@@ -166,6 +182,21 @@ def scan_game(
                     ap, apt = price, point
             if hp is not None and ap is not None:
                 per_book[bname] = {"home": hp, "away": ap, "home_pt": hpt, "away_pt": apt}
+
+    # Synthesize Kalshi as a scannable "book" when we have a Kalshi probability.
+    # Kalshi only has moneyline (no spreads/totals), so skip it for those markets.
+    if market_key == "h2h" and kalshi_prob_home is not None and 0 < kalshi_prob_home < 1:
+        try:
+            from calc.odds import decimal_to_american
+            k_home = decimal_to_american(1.0 / kalshi_prob_home)
+            k_away = decimal_to_american(1.0 / (1.0 - kalshi_prob_home))
+            if k_home is not None and k_away is not None:
+                per_book["Kalshi"] = {
+                    "home": float(k_home), "away": float(k_away),
+                    "home_pt": None, "away_pt": None,
+                }
+        except Exception:
+            pass
 
     if len(per_book) < max(1, min_books):
         return []

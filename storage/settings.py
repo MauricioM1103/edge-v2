@@ -19,16 +19,18 @@ _DEFAULTS: Dict[str, Any] = {
     "manual_kalshi_cash": 500.0,
     # Lines display
     "primary_book": "kalshi",
-    "fallback_book": "draftkings",
+    "fallback_book": "DraftKings",
     "extra_sources": [],  # extra rows in the prob strip
     # Agent
     "agent_kelly": 0.25,
     "agent_min_edge": 0.02,
     "agent_min_books": 3,
     "agent_max_bet_pct": 0.05,
-    # Agent now uses Kalshi (fair prob = Kalshi yes mid) as the reference,
-    # falling back to the configured fallback_book when Kalshi has no quote.
-    "agent_fair_source": "kalshi",
+    # Fair prob source order (configurable, default = Pinnacle sharp).
+    "agent_fair_source": "pinnacle",
+    # Odds API regions. "us,eu" includes Pinnacle (sharpest book) at 2× credit cost.
+    # Set to "us" to halve the credit cost (and lose Pinnacle fair).
+    "odds_regions": "us,eu",
 }
 
 

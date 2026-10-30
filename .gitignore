@@ -4,6 +4,11 @@
 # Pick ledger has personal data
 picks.json
 
+# Persistent settings and local caches
+settings.json
+.odds_cache/
+.odds_credits.json
+
 # Python
 __pycache__/
 *.pyc

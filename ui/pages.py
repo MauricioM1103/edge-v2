@@ -40,12 +40,12 @@ def load_espn_scoreboard(sport_key: str, date_str: Optional[str] = None):
 
 
 @st.cache_data(ttl=180, show_spinner=False)
-def load_odds(sport_key: str):
+def load_odds(sport_key: str, regions: str = "us,eu"):
     odds_sport = espn.ODDS_API_SPORT_KEYS.get(sport_key)
     if not odds_sport:
         return []
     try:
-        return odds_api.get_odds(odds_sport)
+        return odds_api.get_odds(odds_sport, regions=regions)
     except Exception:
         return []
 
@@ -188,8 +188,10 @@ def render_dashboard(settings: dict):
     kalshi_cash = settings.get("kalshi_cash") or 0.0
 
     # fetch
+    saved_cfg = settings_store.load()
+    regions = saved_cfg.get("odds_regions") or "us,eu"
     events = load_espn_scoreboard(sport)
-    odds_games = load_odds(sport)
+    odds_games = load_odds(sport, regions=regions)
     kalshi_markets = load_kalshi_markets(sport)
     polymarket_markets = load_polymarket_markets()
     merged = _merge_events_with_odds(
@@ -366,10 +368,10 @@ def _render_agent_panel(odds_games, kalshi_cash, settings, kalshi_probs_by_game=
         '<div class="hint" style="margin-top:10px;">'
         f'Stakes = <strong>{kelly_mult*100:.0f}%-Kelly</strong> × Kalshi cash '
         f'(<strong>${kalshi_cash:,.2f}</strong>), capped at <strong>{max_bet*100:.1f}%</strong>/bet. '
-        '<strong>Fair IP</strong> is the probability the agent considers true: Kalshi\'s YES-mid '
-        'when available (no vig), else your fallback book stripped of vig, else all-book consensus. '
+        '<strong>Fair IP</strong> = Pinnacle no-vig (sharpest book) → Kalshi YES → fallback book → '
+        'consensus. The agent compares <em>every</em> book (including Kalshi) to that fair prob. '
         '<strong>Edge (pts)</strong> = Fair − Book IP. '
-        '<em>What is Fair IP?</em> → see the Settings tab for the full breakdown.'
+        '<em>Details on the Settings tab.</em>'
         '</div>'
     )
 
@@ -867,27 +869,45 @@ def render_settings(settings: dict):
     fallback = saved.get("fallback_book") or "DraftKings"
     html(
         f'<div class="hint">'
-        f'<strong>Fair-probability source:</strong> Kalshi YES-mid (prediction market, no vig). '
-        f'When Kalshi has no quote on a game, agent falls back to <strong>{fallback}</strong> '
-        f'with vig removed, then to the multi-book consensus. '
-        f'A pick appears when any sportsbook offers implied probability lower than the fair source '
-        f'by at least the <em>minimum edge</em> threshold.'
+        f'<strong>Fair-probability source (in order):</strong> '
+        f'1) Pinnacle no-vig (the sharpest book — best proxy for "true" probability), '
+        f'2) Kalshi YES-mid (exchange, no vig, moneyline only), '
+        f'3) <strong>{fallback}</strong> no-vig, '
+        f'4) multi-book consensus no-vig. '
+        f'The agent then scans every bookmaker <em>and Kalshi</em> for prices that imply '
+        f'a probability lower than that fair prob. '
+        f'An edge of +2 pts means the fair prob is 2 percentage points above what that book is pricing.'
         f'</div>'
     )
 
     # Allow configuration here too (duplicates sidebar for permanence).
-    c1, c2 = st.columns(2)
+    c1, c2, c3 = st.columns(3)
     with c1:
         new_fallback = st.selectbox(
-            "Fallback book (when Kalshi has no quote)",
-            options=["DraftKings", "FanDuel", "BetMGM", "Caesars", "Pinnacle"],
-            index=["DraftKings","FanDuel","BetMGM","Caesars","Pinnacle"].index(fallback) if fallback in ["DraftKings","FanDuel","BetMGM","Caesars","Pinnacle"] else 0,
+            "Fallback book (when Pinnacle & Kalshi both miss)",
+            options=["DraftKings", "FanDuel", "BetMGM", "Caesars"],
+            index=["DraftKings","FanDuel","BetMGM","Caesars"].index(fallback) if fallback in ["DraftKings","FanDuel","BetMGM","Caesars"] else 0,
             key="set_fallback_book",
         )
         if new_fallback != fallback:
             settings_store.save({"fallback_book": new_fallback})
             st.success(f"Fallback book saved: {new_fallback}")
     with c2:
+        current_regions = saved.get("odds_regions") or "us,eu"
+        region_options = ["us", "us,eu", "us,us2,eu", "us,eu,uk,au"]
+        new_regions = st.selectbox(
+            "Odds API regions",
+            options=region_options,
+            index=region_options.index(current_regions) if current_regions in region_options else 1,
+            key="set_regions",
+            help="Pinnacle (the sharpest book) lives in the 'eu' region. "
+                 "us,eu costs 2× credits per fetch but unlocks Pinnacle fair.",
+        )
+        if new_regions != current_regions:
+            settings_store.save({"odds_regions": new_regions})
+            st.cache_data.clear()
+            st.success(f"Regions saved: {new_regions}. Credit cost per fetch is {len(new_regions.split(','))}×3 = {len(new_regions.split(','))*3}.")
+    with c3:
         if st.button("Clear Odds API disk cache"):
             import shutil, os
             here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -904,14 +924,15 @@ def render_settings(settings: dict):
     html(
         '<div class="hint">'
         '<strong>Fair IP</strong> (fair implied probability) = the probability the agent considers '
-        '"true" for a given side. Right now it comes from Kalshi\'s YES-mid when a Kalshi market '
-        'exists for the game, otherwise from the no-vig fair price of your fallback book, '
-        'otherwise from the no-vig consensus of all sportsbooks. '
-        '<br><br><strong>Book IP</strong> = the implied probability a specific sportsbook is '
-        'offering (vig-inclusive). '
+        '"true" for a given side. It comes from <strong>Pinnacle no-vig</strong> first — Pinnacle is '
+        'the sharpest book in the industry; stripping its small vig gives the tightest proxy for the '
+        'market\'s true probability. If Pinnacle isn\'t in the feed for a game, it falls to '
+        'Kalshi (exchange, moneyline only), then your fallback book, then consensus. '
+        '<br><br><strong>Book IP</strong> = the implied probability a specific sportsbook — '
+        'including Kalshi — is offering (vig-inclusive for sportsbooks; raw price for Kalshi). '
         '<br><strong>Edge (pts)</strong> = Fair IP − Book IP, in percentage points. '
-        'A +4 pts edge means the market considers the outcome 4 points more likely than this book '
-        'is pricing it, so you expect long-run profit at that price.'
+        'A +4 pts edge means the sharp consensus considers the outcome 4 points more likely than '
+        'this book is pricing it, so you expect long-run profit at that price.'
         '</div>'
     )
 

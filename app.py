@@ -256,7 +256,7 @@ def main():
         page_title="Edge v2.0 — sports betting dashboard",
         page_icon="🎯",
         layout="wide",
-        initial_sidebar_state="expanded",
+        initial_sidebar_state="collapsed",
     )
     inject_style()
     settings = _sidebar_settings()

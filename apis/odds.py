@@ -185,7 +185,7 @@ def list_sports() -> List[dict]:
 
 def get_odds(
     sport: str,
-    regions: str = "us",
+    regions: str = "us,eu",
     markets: str = "h2h,spreads,totals",
     odds_format: str = "american",
     cache_ttl: int = 300,
