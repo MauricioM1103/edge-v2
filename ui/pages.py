@@ -515,11 +515,19 @@ def _render_agent_panel(odds_games, kalshi_cash, settings,
     summary = agent_calc.summarize_edges(edges)
     unit_pct = settings.get("unit_pct") or 0.01
     unit_dollars = kalshi_cash * unit_pct
-    # Convert stakes to units for display.
-    def _to_units(dollars):
+    # Convert stakes to units, rounded to nearest 0.5u for display.
+    def _to_units_raw(dollars):
         return (dollars / unit_dollars) if unit_dollars > 0 else 0.0
+    def _to_units(dollars):
+        return round(_to_units_raw(dollars) * 2) / 2
     total_stake_units = _to_units(summary['total_stake'])
     cap_units = _to_units(kalshi_cash * daily_cap_pct)
+    # Hide picks whose Kelly recommendation rounds to 0u (too small to be actionable).
+    funded_pre = [e for e in edges if (e.get("stake_dollars") or 0) > 0]
+    for e in funded_pre:
+        if _to_units(e.get("stake_dollars") or 0) <= 0:
+            e["stake_dollars"] = 0.0
+            e["rounded_to_zero"] = True
     exposure_pct = (summary['total_stake'] / kalshi_cash) * 100 if kalshi_cash else 0
     exposure_tone = "warn" if exposure_pct > daily_cap_pct * 100 * 0.9 else ("good" if exposure_pct > 0 else "")
     metric_row([
