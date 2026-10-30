@@ -8,8 +8,11 @@ Kelly sizing, unit management, line-movement tracking, and CLV.
 Three tabs:
 
 1. **Dashboard · Daily Slate** — multi-column grid of today's matchups with
-   live consensus lines, line-move indicators, implied probabilities, a quick
-   EV scanner, and a one-click pick-logger per game.
+   live consensus lines, line-move indicators, side-by-side **Kalshi vs
+   DraftKings vs consensus implied probability** on every game card, a quick
+   EV scanner, a one-click pick-logger, and an **Agent · Edge scanner** at
+   the top that finds +EV plays vs. the no-vig consensus and sizes each
+   bet in actual dollars from your live Kalshi cash.
 2. **Pro Handicapping Tools** — side-by-side American / Decimal / Fractional
    odds converter, True Value EV calculator (soft-green when +EV), Kelly
    bet-sizer (Full / Half / Quarter / Eighth), no-vig fair-line stripper.
@@ -17,8 +20,18 @@ Three tabs:
    finals; W/L/P record, net units, ROI, average CLV; filter by sport/status;
    edit closing prices to update CLV; delete or void picks.
 
-Supported sports (both APIs cover these): NFL, NBA, MLB, NHL, NCAAF, NCAAB,
-WNBA, MLS.
+**Supported sports** (ESPN + The Odds API coverage):
+- **US Majors:** NFL, NBA, MLB, NHL, WNBA
+- **College:** NCAA Football, NCAA Basketball (M/W)
+- **Soccer:** MLS, Premier League, La Liga, Bundesliga, Serie A, Ligue 1,
+  Champions League, Europa League, NWSL, Liga MX
+- **Combat / Individual:** UFC/MMA, Boxing, PGA Tour, Tennis ATP/WTA
+- **Motorsport:** Formula 1, NASCAR
+- **Other:** CFL, UFL
+
+The Agent currently sources no-vig edges from The Odds API's book coverage
+and sizes bets with your live Kalshi balance. Supports Kalshi game-winner
+markets natively for NFL/NBA/MLB/NHL/NCAAF/NCAAB/WNBA.
 
 ## Quick start
 
@@ -39,14 +52,31 @@ Then open http://localhost:8501.
 - Sign up at https://the-odds-api.com
 - Either export an env var:
   ```bash
-  export THE_ODDS_API_KEY=xxxxxxxxxxxx     # Linux/macOS
   setx THE_ODDS_API_KEY "xxxxxxxxxxxx"     # Windows (new shells)
   ```
 - Or copy `.streamlit/secrets.toml.example` to `.streamlit/secrets.toml`
   and paste your key there.
 
+**Kalshi** — three modes:
+
+1. *Live auth* (recommended for the agent): add
+   ```toml
+   kalshi_access_key_id    = "..."
+   kalshi_private_key_pem  = """-----BEGIN PRIVATE KEY-----
+   ...
+   -----END PRIVATE KEY-----"""
+   ```
+   to `.streamlit/secrets.toml`. The sidebar's balance field will
+   auto-fill with your real cash and the agent will size bets live.
+   Keys come from https://kalshi.com -> Account -> API Keys.
+2. *Manual balance only*: just type the dollar amount into the sidebar.
+3. *Env override*: `KALSHI_BALANCE_USD=1234.56` for a persistent manual value.
+
+Kalshi's **public markets** (used for the Kalshi implied-probability column on
+each game card) are keyless and always on.
+
 Without the Odds API key, the dashboard still renders the ESPN schedule (with
-scores, live states, broadcasts) — EV / Kelly / line move panels show a soft
+scores, live states, broadcasts) — EV / Kelly / line-move panels show a soft
 "add your key" hint instead of failing.
 
 ## Design
