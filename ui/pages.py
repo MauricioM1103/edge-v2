@@ -456,7 +456,7 @@ def _render_agent_panel(odds_games, kalshi_cash, settings,
     st.markdown("### Agent · Kalshi vs Pinnacle edge scanner")
     kelly_mult = settings.get("agent_kelly") or 0.25
     min_edge = settings.get("agent_min_edge") or 0.02
-    max_bet = settings.get("agent_max_bet_pct") or 0.05
+    max_bet = settings.get("agent_max_bet_pct") or 0.025
     daily_cap_pct = saved_cfg.get("daily_exposure_cap_pct", 0.25)
 
     if not kalshi_cash or kalshi_cash <= 0:
@@ -843,7 +843,7 @@ def _render_agent_panel(odds_games, kalshi_cash, settings,
                     "price_american": e.get("price"),
                     "projected_prob": e.get("fair_prob"),
                     "implied_prob": e.get("book_implied"),
-                    "risk_units": round(e.get("stake_dollars", 0) / max(1e-6, kalshi_cash * (settings.get("unit_pct") or 0.1)), 2),
+                    "risk_units": round(e.get("stake_dollars", 0) / max(1e-6, kalshi_cash * (settings.get("unit_pct") or 0.01)), 2),
                     "win_units": None,
                     "methodology": "Model Edge",
                     "notes": f"{best_book} @ {best_price} vs Pinnacle · edge {edge_pct:+.2f}pts · Kalshi {int(e.get('kalshi_price_cents') or 0)}¢",
@@ -917,7 +917,7 @@ def _render_analysis_boards(top_picks, settings, kalshi_cash):
     unit_pct = settings.get("unit_pct") or 0.01
     unit_dollars = kalshi_cash * unit_pct
     kelly_mult = settings.get("agent_kelly") or 0.25
-    max_bet = settings.get("agent_max_bet_pct") or 0.05
+    max_bet = settings.get("agent_max_bet_pct") or 0.025
     daily_cap_pct = saved_cfg.get("daily_exposure_cap_pct", 0.25)
 
     def _units_rounded(dollars):
@@ -935,10 +935,11 @@ def _render_analysis_boards(top_picks, settings, kalshi_cash):
 
     for i, e in enumerate(top_picks):
         _render_single_pick_analysis(e, i + 1, len(top_picks), unit_dollars,
-                                     _units_rounded, kelly_mult, max_bet, daily_cap_pct)
+                                     _units_rounded, kelly_mult, max_bet, daily_cap_pct,
+                                     unit_pct)
 
 
-def _render_single_pick_analysis(e, idx, total, unit_dollars, _units_fn, kelly_mult, max_bet, daily_cap_pct):
+def _render_single_pick_analysis(e, idx, total, unit_dollars, _units_fn, kelly_mult, max_bet, daily_cap_pct, unit_pct=0.01):
     """Render one pick's detailed analysis card with its own anchor + navigation."""
     from calc.odds import american_to_decimal, implied_prob_american
     anchor = e.get("_anchor") or f"pick-{idx}"
@@ -1062,7 +1063,7 @@ def _render_single_pick_analysis(e, idx, total, unit_dollars, _units_fn, kelly_m
         f'<div class="metric-card"><div class="label">Market IP</div><div class="value">{best_imp*100:.2f}%</div><div class="foot">at that price</div></div>'
         f'<div class="metric-card"><div class="label">Pinnacle fair</div><div class="value accent">{fair_prob*100:.2f}%</div><div class="foot">no-vig consensus</div></div>'
         f'<div class="metric-card"><div class="label">Kelly</div><div class="value">{kelly_frac*100:.2f}%</div><div class="foot">{kelly_mult*100:.0f}% × full Kelly</div></div>'
-        f'<div class="metric-card"><div class="label">Stake</div><div class="value accent">{stake_u:.1f}u</div><div class="foot">of {max_bet/0.01:.0f}u max</div></div>'
+        f'<div class="metric-card"><div class="label">Stake</div><div class="value accent">{stake_u:.1f}u</div><div class="foot">of {max_bet/unit_pct:.1f}u max</div></div>'
         f'<div class="metric-card"><div class="label">EV / 100u</div><div class="value {"good" if ev_pct > 0 else ""}">{ev_pct:+.2f}%</div><div class="foot">expected per 100u risked</div></div>'
         f'</div>'
         # Reasoning
@@ -1073,7 +1074,7 @@ def _render_single_pick_analysis(e, idx, total, unit_dollars, _units_fn, kelly_m
         f'<strong>{best_price}</strong> ({best_imp*100:.2f}% implied), underestimating the true prob by '
         f'<strong>{edge_pct:+.2f} pts</strong>. Quarter-Kelly says stake '
         f'<strong>{kelly_frac*100:.2f}%</strong> of bankroll (<strong>{stake_u:.1f}u</strong>), capped by '
-        f'the <strong>{max_bet/0.01:.0f}u</strong> per-bet rule and <strong>{daily_cap_pct/0.01:.0f}u</strong> daily cap.'
+        f'the <strong>{max_bet/unit_pct:.1f}u</strong> per-bet rule and <strong>{daily_cap_pct/unit_pct:.1f}u</strong> daily cap.'
         f'</div>'
         f'{alt_table}'
         # Nav footer
