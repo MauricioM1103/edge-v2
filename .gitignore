@@ -1,0 +1,22 @@
+# Local secrets - never commit
+.streamlit/secrets.toml
+
+# Pick ledger has personal data
+picks.json
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.venv/
+venv/
+.pytest_cache/
+
+# OS
+Thumbs.db
+.DS_Store
+
+# IDE
+.vscode/
+.idea/
