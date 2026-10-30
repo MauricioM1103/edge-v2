@@ -368,7 +368,12 @@ button[aria-label="Expand sidebar"]::after {
 header[data-testid="stHeader"] { background: transparent; }
 /* Hide Streamlit's own deploy promo + decoration bars. */
 [data-testid="stDecoration"] { display: none; }
-[data-testid="stToolbar"] { display: none; }
+/* `display: contents` makes the toolbar's own box disappear while keeping its
+   children in flow - this is critical because the Expand-sidebar pill lives
+   inside the toolbar, and `display: none` on the parent would kill the pill
+   even though it's position:fixed. Individual toolbar items we don't want
+   (Deploy button, decoration bar) are hidden by name below. */
+[data-testid="stToolbar"] { display: contents !important; }
 button[kind="headerDeploy"] { display: none !important; }
 [data-testid="stAppDeployButton"] { display: none !important; }
 /* Metric grid: let it fit more cards per row before wrapping. */
