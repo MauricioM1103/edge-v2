@@ -316,6 +316,7 @@ def scan_all(
                 e["commence_time"] = g.get("commence_time")
                 e["home_team"] = g.get("home_team")
                 e["away_team"] = g.get("away_team")
+                e["_sport"] = g.get("_sport")
                 e["matchup"] = f"{g.get('away_team','?')} @ {g.get('home_team','?')}"
                 out.append(e)
     if dedupe_best_price:

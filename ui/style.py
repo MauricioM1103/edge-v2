@@ -56,20 +56,18 @@ section.main > div.block-container { padding-top: 1.2rem; padding-bottom: 3rem; 
   font-family: "Public Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   color: var(--ink);
 }
-/* Only non-icon spans get the body font. */
-span:not([class*="material"]):not([class*="icon"]):not([data-testid*="icon"]) {
-  font-family: inherit;
-}
-/* Hands back Material Symbols to Streamlit's icon spans. */
+/* Hand Streamlit's icon spans back to the Material Symbols font. */
 [class*="material-symbols"],
 [class*="material-icon"],
 [data-testid*="Icon"] span,
-.stExpander [aria-expanded] svg + span,
+[data-testid*="Collapsed"] span,
+[data-testid*="Expanded"] span,
 .stExpander summary > span:first-child,
-[data-testid="stExpander"] summary > span:first-child {
+[data-testid="stExpander"] summary > span:first-child,
+button[kind="header"] span {
   font-family: "Material Symbols Rounded", "Material Symbols Outlined",
                "Material Icons", sans-serif !important;
-  font-feature-settings: "liga" 1;
+  font-feature-settings: "liga" 1 !important;
 }
 h1, h2, h3, h4 {
   font-family: "Fraunces", "Playfair Display", Georgia, serif !important;
@@ -289,8 +287,15 @@ table.ledger tr:hover { background: color-mix(in oklab, var(--rule) 30%, transpa
 [data-testid="collapsedControl"] { padding: 6px; }
 [data-testid="collapsedControl"] svg { height: 20px; width: 20px; }
 header[data-testid="stHeader"] { background: transparent; }
-/* Hide the deploy / status button we don't need in production. */
+/* Hide Streamlit's own deploy promo + decoration bars. */
 [data-testid="stDecoration"] { display: none; }
+[data-testid="stToolbar"] { display: none; }
+button[kind="headerDeploy"] { display: none !important; }
+[data-testid="stAppDeployButton"] { display: none !important; }
+/* Metric grid: let it fit more cards per row before wrapping. */
+.metric-grid { grid-template-columns: repeat(auto-fit, minmax(145px, 1fr)); }
+/* Tighten the Streamlit date picker so it doesn't truncate at narrow widths. */
+[data-testid="stDateInput"] input { font-size: 13px; }
 
 /* fonts */
 @import url('https://fonts.googleapis.com/css2?family=Fraunces:ital,wght@0,400;0,500;1,400&family=Public+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');

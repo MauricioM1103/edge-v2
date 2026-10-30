@@ -188,7 +188,10 @@ def _merge_events_with_odds(
 def render_dashboard(settings: dict):
     brand_bar("Live Daily Slate")
 
-    sport = settings.get("sport") or "nfl"
+    sport_setting = settings.get("sport") or "nfl"
+    # Normalize to a list so single-sport and all-sports modes share code.
+    sports_list = sport_setting if isinstance(sport_setting, list) else [sport_setting]
+    multi_sport_mode = len(sports_list) > 1
     unit_pct = settings.get("unit_pct") or 0.01
     bankroll_units = settings.get("bankroll_units") or 100.0
     kalshi_cash = settings.get("kalshi_cash") or 0.0
@@ -197,7 +200,7 @@ def render_dashboard(settings: dict):
     from datetime import date, timedelta
     from zoneinfo import ZoneInfo
     central_today = datetime.now(ZoneInfo("America/Chicago")).date()
-    dc1, dc2, dc3, dc4 = st.columns([1, 1, 1, 6])
+    dc1, dc2, dc3, dc4, dc5 = st.columns([1, 2, 1, 1, 5])
     with dc1:
         if st.button("← Prev"):
             cur = st.session_state.get("dash_date") or central_today
@@ -225,20 +228,40 @@ def render_dashboard(settings: dict):
     date_str_api = picked_date.strftime("%Y%m%d")
     date_str_pretty = picked_date.strftime("%A, %b %d, %Y")
 
-    # fetch
+    # fetch (one or many sports)
     saved_cfg = settings_store.load()
     regions = saved_cfg.get("odds_regions") or "us,eu"
-    events = load_espn_scoreboard(sport, date_str=date_str_api)
-    # Only fetch live odds for today — past dates would need historical (expensive).
-    odds_games = load_odds(sport, regions=regions) if is_today else []
-    kalshi_markets = load_kalshi_markets(sport) if is_today else []
-    polymarket_markets = load_polymarket_markets()
-    merged = _merge_events_with_odds(
-        events, odds_games,
-        kalshi_markets=kalshi_markets,
-        polymarket_markets=polymarket_markets,
-        sport_key=sport,
-    )
+
+    # Per-sport fetches, aggregated. CREDIT GUARD: only hit the Odds API
+    # for sports that actually have ESPN games on the selected date.
+    all_events_tagged: List[tuple] = []     # list of (sport_key, event)
+    all_odds_games_tagged: List[tuple] = [] # list of (sport_key, odds_game)
+    all_merged = []                          # list of (ev, odds_meta, exch_probs)
+    for sp in sports_list:
+        events_sp = load_espn_scoreboard(sp, date_str=date_str_api)
+        for ev in events_sp or []:
+            all_events_tagged.append((sp, ev))
+        # Skip Odds API fetch entirely when ESPN shows no games on this date for this sport.
+        has_games = bool(events_sp)
+        odds_games_sp = load_odds(sp, regions=regions) if (is_today and has_games) else []
+        for og in odds_games_sp or []:
+            og["_sport"] = sp
+            all_odds_games_tagged.append((sp, og))
+        kalshi_markets_sp = load_kalshi_markets(sp) if (is_today and has_games) else []
+        poly_sp = load_polymarket_markets() if sp == sports_list[0] else []  # Polymarket fetched once
+        merged_sp = _merge_events_with_odds(
+            events_sp, odds_games_sp,
+            kalshi_markets=kalshi_markets_sp,
+            polymarket_markets=poly_sp,
+            sport_key=sp,
+        )
+        for ev, om, ex in merged_sp:
+            ev["sport"] = ev.get("sport") or sp
+            all_merged.append((ev, om, ex))
+
+    events = [ev for _sp, ev in all_events_tagged]
+    odds_games = [og for _sp, og in all_odds_games_tagged]
+    merged = all_merged
 
     # summary metrics
     picks = picks_store.list_picks()
@@ -253,6 +276,7 @@ def render_dashboard(settings: dict):
     kalshi_source = settings.get("kalshi_source")
     kalshi_display = f"${kalshi_cash:,.2f}" if kalshi_cash else "—"
 
+    slate_label = f"{len(sports_list)} sports" if multi_sport_mode else sport_setting.upper()
     metric_row([
         {"label": "Kalshi cash", "value": kalshi_display, "foot": (kalshi_source or "not configured"), "tone": "accent" if kalshi_source == "live" else ""},
         {"label": "Bankroll", "value": f"{bankroll_units:.1f}u", "foot": f"1u = {unit_pct*100:.1f}% of roll"},
@@ -260,7 +284,7 @@ def render_dashboard(settings: dict):
         {"label": "Record", "value": f"{s['wins']}-{s['losses']}-{s['pushes']}", "foot": f"settled: {s['total_settled']}"},
         {"label": "Net units", "value": f"{s['net_units']:+.2f}u", "foot": roi_display + " ROI", "tone": net_tone},
         {"label": "Avg CLV", "value": f"{(s['avg_clv_pct'] or 0)*100:+.2f}%" if s["avg_clv_pct"] is not None else "—", "foot": "closing line value"},
-        {"label": f"{sport.upper()} today", "value": f"{live_count + upcoming + final_count}", "foot": f"{live_count} live · {final_count} final"},
+        {"label": f"Slate · {slate_label}", "value": f"{live_count + upcoming + final_count}", "foot": f"{live_count} live · {final_count} final"},
     ])
 
     if not api_key_ok:
@@ -375,14 +399,12 @@ def _render_agent_panel(odds_games, kalshi_cash, settings, kalshi_probs_by_game=
         html('<div class="hint">No edges meet the threshold right now. Lower the edge requirement in the sidebar to see thinner opportunities.</div>')
         return
 
-    # Compact table of top edges, with the exact $ amount to bet.
-    rows = []
-    for e in edges[:20]:
+    # Table of top edges with the exact $ amount to bet.
+    def _row(e, highlight: bool = False):
         edge_pct = e["edge"] * 100.0
         tone = "ev-plus" if edge_pct > 0 else "ev-minus"
         pt = e.get("point")
         market = (e.get("market") or "").lower()
-        # Format the full pick in a human / Kalshi-like way.
         if market == "spreads" and pt is not None:
             try:
                 pt_f = float(pt)
@@ -391,7 +413,6 @@ def _render_agent_panel(odds_games, kalshi_cash, settings, kalshi_probs_by_game=
                 pt_str = ""
             full_pick = f"{e['side_label']}{pt_str}"
         elif market == "totals" and pt is not None:
-            # side_label is already "Over" / "Under"
             try:
                 pt_f = float(pt)
             except (TypeError, ValueError):
@@ -401,11 +422,19 @@ def _render_agent_panel(odds_games, kalshi_cash, settings, kalshi_probs_by_game=
             full_pick = e["side_label"]
         fair_src = e.get("fair_source") or "—"
         fair_badge_cls = "accent" if "kalshi" in fair_src.lower() else ("good" if "pinnacle" in fair_src.lower() else "")
-        rows.append(
-            f'<tr>'
-            f'<td><strong>{e["matchup"]}</strong></td>'
+        row_style = (
+            ' style="background: color-mix(in oklab, var(--good) 10%, transparent);"'
+            if highlight else ""
+        )
+        strong_open = "<strong>" if highlight else ""
+        strong_close = "</strong>" if highlight else ""
+        sport_label = (e.get("_sport") or "").upper() or "—"
+        return (
+            f'<tr{row_style}>'
+            f'<td><span class="chip" style="padding:1px 6px; font-size:9.5px;">{sport_label}</span></td>'
+            f'<td>{strong_open}{e["matchup"]}{strong_close}</td>'
             f'<td class="mono" style="color:var(--muted);">{market.upper()}</td>'
-            f'<td><strong>{full_pick}</strong></td>'
+            f'<td>{strong_open}{full_pick}{strong_close}</td>'
             f'<td class="num mono">{format_american(e["price"])}</td>'
             f'<td class="mono">{e["book"]}</td>'
             f'<td class="num mono">{e["book_implied"]*100:.1f}%</td>'
@@ -415,9 +444,10 @@ def _render_agent_panel(odds_games, kalshi_cash, settings, kalshi_probs_by_game=
             f'<td class="num mono"><strong>${e["stake_dollars"]:,.2f}</strong></td>'
             f'</tr>'
         )
-    html(
-        '<table class="ledger" style="margin-top:4px;">'
+
+    header = (
         '<thead><tr>'
+        '<th>Sport</th>'
         '<th>Matchup</th><th>Market</th><th>Side</th>'
         '<th class="num">Price</th><th>Book</th>'
         '<th class="num" title="Vig-inclusive implied probability from that book">Book IP</th>'
@@ -425,9 +455,24 @@ def _render_agent_panel(odds_games, kalshi_cash, settings, kalshi_probs_by_game=
         '<th>Fair src</th>'
         '<th class="num">Edge (pts)</th><th class="num">Stake</th>'
         '</tr></thead>'
-        f'<tbody>{"".join(rows)}</tbody>'
-        '</table>'
     )
+
+    top = edges[:15]
+    overflow = edges[15:]
+    html(
+        '<table class="ledger" style="margin-top:4px;">'
+        + header
+        + f'<tbody>{"".join(_row(e) for e in top)}</tbody>'
+        + '</table>'
+    )
+    if overflow:
+        with st.expander(f"➕ {len(overflow)} more picks (bold = still above threshold)", expanded=False):
+            html(
+                '<table class="ledger" style="margin-top:4px;">'
+                + header
+                + f'<tbody>{"".join(_row(e, highlight=True) for e in overflow)}</tbody>'
+                + '</table>'
+            )
     html(
         '<div class="hint" style="margin-top:10px;">'
         f'Stakes = <strong>{kelly_mult*100:.0f}%-Kelly</strong> × Kalshi cash '

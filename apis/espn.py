@@ -128,7 +128,25 @@ DISPLAY_NAMES: Dict[str, str] = {
 
 
 # Logical groupings so the UI can offer a nicer picker.
+# "All sports" scans every sport we support. The Dashboard pre-checks ESPN
+# per sport and only hits Odds API when there are games on the selected date,
+# so empty days don't burn credits.
 SPORT_GROUPS = [
+    ("All sports", [
+        # US Majors
+        "nfl", "nba", "mlb", "nhl", "wnba",
+        # College
+        "ncaaf", "ncaab", "ncaaw",
+        # Soccer (Europe + Americas)
+        "epl", "la_liga", "bundesliga", "serie_a", "ligue_1",
+        "ucl", "uel", "mls", "nwsl", "liga_mx",
+        # Tennis
+        "atp", "wta",
+        # Combat / Individual
+        "ufc", "boxing", "pga",
+        # Motorsport
+        "f1", "nascar",
+    ]),
     ("US Majors", ["nfl", "nba", "mlb", "nhl", "wnba"]),
     ("College", ["ncaaf", "ncaab", "ncaaw"]),
     ("Soccer", ["mls", "epl", "la_liga", "bundesliga", "serie_a", "ligue_1", "ucl", "uel", "nwsl", "liga_mx"]),

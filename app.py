@@ -47,15 +47,28 @@ def _sidebar_settings() -> dict:
         group_labels = [g[0] for g in espn.SPORT_GROUPS]
         group_name = st.selectbox(
             "Sport group", options=group_labels, index=0, key="sb_group",
+            help="'All sports' scans NFL/NBA/MLB/NHL/WNBA + top college in one view.",
         )
         group_sports = next((g[1] for g in espn.SPORT_GROUPS if g[0] == group_name), ["nfl"])
-        sport = st.selectbox(
-            "Sport / league",
-            options=group_sports,
-            format_func=lambda k: espn.DISPLAY_NAMES.get(k, k.upper()),
-            index=0,
-            key="sb_sport",
-        )
+        # When "All sports" the sport-picker becomes a multi-select so the user can
+        # trim the scan (saves Odds-API credits).
+        if group_name == "All sports":
+            picked = st.multiselect(
+                "Sports to scan",
+                options=group_sports,
+                default=group_sports,
+                format_func=lambda k: espn.DISPLAY_NAMES.get(k, k.upper()),
+                key="sb_sports_multi",
+            )
+            sport = picked or group_sports
+        else:
+            sport = st.selectbox(
+                "Sport / league",
+                options=group_sports,
+                format_func=lambda k: espn.DISPLAY_NAMES.get(k, k.upper()),
+                index=0,
+                key="sb_sport",
+            )
         st.markdown("---")
 
         # ----- KALSHI LIVE CONNECTION -----
