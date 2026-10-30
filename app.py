@@ -205,10 +205,15 @@ def _sidebar_settings() -> dict:
         )
         agent_min_edge = st.slider(
             "Minimum edge (%)",
-            min_value=0.5, max_value=10.0, value=2.0, step=0.5,
+            min_value=0.1, max_value=10.0,
+            value=float(saved.get("agent_min_edge", 0.01)) * 100,
+            step=0.1,
             key="sb_agent_min_edge",
-            help="Skip opportunities where consensus-fair prob beats book by less than this.",
+            help="Kalshi vs Pinnacle produces smaller edges (~0.5–2%) than scanning retail books. "
+                 "1% is a good starting threshold.",
         ) / 100.0
+        if abs(agent_min_edge - saved.get("agent_min_edge", 0.01)) > 1e-6:
+            settings_store.save({"agent_min_edge": agent_min_edge})
         agent_min_books = st.slider(
             "Min books for consensus",
             min_value=2, max_value=15, value=3, step=1,

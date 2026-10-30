@@ -430,6 +430,15 @@ def _render_agent_panel(odds_games, kalshi_cash, settings, kalshi_markets_by_gam
         )
         return
 
+    # Credit tip: if the user is paying extra for data the new flow doesn't need.
+    if (saved_cfg.get("odds_regions") or "eu") != "eu":
+        html(
+            '<div class="hint warn">You are on <code>'
+            f'{saved_cfg.get("odds_regions")}</code> regions — spending extra credits. '
+            'The new Kalshi-vs-Pinnacle agent only needs <code>eu</code> (1 credit/sport). '
+            'Switch in the Settings tab.</div>'
+        )
+
     # Scan ALL sports (we grouped Kalshi markets by game, Pinnacle by sport).
     edges = []
     scan_fn = getattr(agent_calc, "scan_kalshi_vs_pinnacle", None)
@@ -568,7 +577,40 @@ def _render_agent_panel(odds_games, kalshi_cash, settings, kalshi_markets_by_gam
     top = funded[:15]
     overflow_funded = funded[15:]
     if not top:
-        html('<div class="hint">No Kalshi edges fit the daily cap yet. Try widening the min-edge filter or raising the cap in Settings.</div>')
+        # Re-scan at progressively looser thresholds to tell the user WHY they see nothing.
+        suggestion = ""
+        for try_thr in (0.01, 0.005, 0.0):
+            try_edges = []
+            for sp in (sports_list or []):
+                try:
+                    try_edges += scan_fn(
+                        kalshi_markets_by_game=kalshi_markets_by_game,
+                        pinnacle_games=odds_games, bankroll_cash=kalshi_cash,
+                        sport_key=sp, kelly_mult=kelly_mult,
+                        min_edge_pct=try_thr, max_bet_pct=max_bet,
+                    )
+                except Exception:
+                    pass
+            # dedupe
+            seen2 = set(); de = []
+            for e in try_edges:
+                k = (e.get("event_id"), e.get("side_label"))
+                if k in seen2:
+                    continue
+                seen2.add(k); de.append(e)
+            if de:
+                suggestion = (
+                    f'<strong>{len(de)} edges exist at {try_thr*100:.1f}%+</strong> — '
+                    f'current threshold is {min_edge*100:.1f}%. Lower it in the sidebar '
+                    f'"Minimum edge (%)" slider or on the Settings tab.'
+                )
+                break
+        if not suggestion:
+            suggestion = (
+                "No Kalshi market is mispriced vs Pinnacle today — both are near-fair exchanges, "
+                "so this happens on efficient slates. Check back closer to game time."
+            )
+        html(f'<div class="hint">{suggestion}</div>')
         return
     html(
         '<table class="ledger" style="margin-top:4px;">'
@@ -1211,6 +1253,36 @@ def render_settings(settings: dict):
                 st.success("Disk cache cleared. Next refresh will re-fetch.")
             except Exception as e:
                 st.error(str(e))
+
+    # ----- Reset -----
+    st.markdown("### Reset")
+    rc1, rc2 = st.columns([1, 3])
+    with rc1:
+        if st.button("Reset to recommended defaults", use_container_width=True, type="primary"):
+            import os
+            try:
+                path = os.path.join(
+                    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                    "settings.json",
+                )
+                if os.path.exists(path):
+                    os.remove(path)
+            except Exception:
+                pass
+            # Clear sidebar session_state so sliders snap back to defaults.
+            for k in list(st.session_state.keys()):
+                if k.startswith("sb_") or k.startswith("set_") or k.startswith("agent_f_"):
+                    del st.session_state[k]
+            st.cache_data.clear()
+            st.success("Settings reset. Reloading…")
+            st.rerun()
+    with rc2:
+        st.caption(
+            "This clears your saved settings.json and resets to the credit-efficient defaults: "
+            "regions=eu, markets=h2h, cache=60min, min-edge=1%, unit=10% of Kalshi cash, "
+            "daily cap=25%, theme=dark. "
+            "Does **not** clear your API keys or Kalshi connection."
+        )
 
     # ----- Theme + exposure cap -----
     st.markdown("### Appearance & risk")
