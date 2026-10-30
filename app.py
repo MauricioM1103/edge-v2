@@ -30,12 +30,16 @@ for _m in [
             pass
 
 from apis import espn, odds as odds_api, kalshi
-from storage import picks as picks_store
+from storage import picks as picks_store, settings as settings_store
 from ui.style import inject as inject_style
-from ui.pages import render_dashboard, render_pro_tools, render_picks, load_kalshi_balance
+from ui.pages import (
+    render_dashboard, render_pro_tools, render_picks,
+    render_settings, render_backtest, load_kalshi_balance,
+)
 
 
 def _sidebar_settings() -> dict:
+    saved = settings_store.load()
     with st.sidebar:
         st.markdown("### Settings")
 
@@ -78,8 +82,10 @@ def _sidebar_settings() -> dict:
                     kalshi.set_runtime_credentials(kid_in.strip(), pem_in.strip())
                     result = kalshi.test_credentials()
                     if result.get("ok"):
+                        # Persist to secrets.toml so the connection survives restarts.
+                        settings_store.save_kalshi_keys(kid_in.strip(), pem_in.strip())
                         st.cache_data.clear()
-                        st.success(f"✓ Connected. Live balance: ${result['balance_usd']:,.2f}")
+                        st.success(f"✓ Connected · Balance: ${result['balance_usd']:,.2f} · Keys saved")
                         st.rerun()
                     else:
                         # Keep creds in session so user can tweak; show detailed error.
@@ -91,8 +97,9 @@ def _sidebar_settings() -> dict:
                     st.warning("Both the access key ID and PEM are required.")
             if c_b.button("Disconnect", use_container_width=True):
                 kalshi.clear_runtime_credentials()
+                settings_store.clear_kalshi_keys()
                 st.cache_data.clear()
-                st.success("Session credentials cleared.")
+                st.success("Credentials cleared from session and local secrets.")
                 st.rerun()
 
         # Resolve current balance (session creds take priority, then env/secrets).
@@ -106,16 +113,39 @@ def _sidebar_settings() -> dict:
         else:
             st.caption("Not connected — enter cash manually below.")
 
-        kalshi_cash = st.number_input(
-            "Available Kalshi cash ($)",
-            min_value=0.0, max_value=10_000_000.0,
-            value=float(live_usd) if live_usd is not None else 500.0,
-            step=25.0,
-            key="sb_kalshi_cash",
-            help="The agent sizes recommendations against this balance. Live when "
-                 "connected above; otherwise this manual value.",
-        )
+        # Live > manual (persisted) > hard default.
+        if live_usd is not None:
+            kalshi_cash = float(live_usd)
+            # keep manual value in sync with the live reading so it's a sensible fallback.
+            manual_fallback = float(saved.get("manual_kalshi_cash") or live_usd)
+        else:
+            kalshi_cash = st.number_input(
+                "Available Kalshi cash ($)",
+                min_value=0.0, max_value=10_000_000.0,
+                value=float(saved.get("manual_kalshi_cash") or 500.0),
+                step=25.0,
+                key="sb_kalshi_cash_manual",
+                help="Connect Kalshi above for live. This manual value is used until then.",
+            )
+            manual_fallback = kalshi_cash
+            # Persist manual tweak immediately
+            if manual_fallback != saved.get("manual_kalshi_cash"):
+                settings_store.save({"manual_kalshi_cash": manual_fallback})
         kalshi_source = live_src or ("manual" if kalshi_cash else None)
+
+        # Unit = X% of (live) Kalshi cash, user-configurable, defaults to 10%.
+        unit_pct_of_kalshi = st.slider(
+            "1 unit = % of Kalshi cash",
+            min_value=1.0, max_value=25.0,
+            value=float(saved.get("unit_pct_of_kalshi", 0.10)) * 100,
+            step=0.5,
+            key="sb_unit_pct_kalshi",
+            help="Live. If your balance changes, 1 unit auto-recomputes.",
+        ) / 100.0
+        if abs(unit_pct_of_kalshi - saved.get("unit_pct_of_kalshi", 0.10)) > 1e-6:
+            settings_store.save({"unit_pct_of_kalshi": unit_pct_of_kalshi})
+        unit_dollars = kalshi_cash * unit_pct_of_kalshi
+        st.caption(f"1 unit = **${unit_dollars:,.2f}** ({unit_pct_of_kalshi*100:.1f}% of ${kalshi_cash:,.2f})")
 
         # ----- PRIMARY BOOK (sets which book shows in each game card's lines block) -----
         st.markdown("#### Lines display")
@@ -147,18 +177,9 @@ def _sidebar_settings() -> dict:
             help="Kalshi always shows. Pick any additional sources to compare side-by-side.",
         )
 
-        # ----- CLASSIC UNITS -----
-        st.markdown("#### Unit sizing")
-        bankroll_units = st.number_input(
-            "Bankroll (units)",
-            min_value=1.0, max_value=10000.0, value=100.0, step=1.0,
-            key="sb_bank",
-        )
-        unit_pct = st.slider(
-            "Unit size (% of bankroll)",
-            min_value=0.25, max_value=5.0, value=1.0, step=0.25,
-            key="sb_unit",
-        ) / 100.0
+        # Legacy sizing kept for ledger history compatibility.
+        bankroll_units = kalshi_cash / unit_dollars if unit_dollars > 0 else 0
+        unit_pct = unit_pct_of_kalshi
 
         # ----- AGENT TUNING -----
         st.markdown("---")
@@ -216,11 +237,13 @@ def _sidebar_settings() -> dict:
     return {
         "sport": sport,
         "unit_pct": unit_pct,
+        "unit_dollars": unit_dollars,
         "bankroll_units": bankroll_units,
         "kalshi_cash": kalshi_cash,
         "kalshi_source": kalshi_source,
         "primary_book": primary_book,
         "extra_sources": extra_sources,
+        "fallback_book": saved.get("fallback_book", "DraftKings"),
         "agent_kelly": agent_kelly,
         "agent_min_edge": agent_min_edge,
         "agent_min_books": agent_min_books,
@@ -238,10 +261,12 @@ def main():
     inject_style()
     settings = _sidebar_settings()
 
-    tab_dash, tab_pro, tab_picks = st.tabs([
+    tab_dash, tab_pro, tab_picks, tab_backtest, tab_settings = st.tabs([
         "Dashboard · Daily Slate",
         "Pro Handicapping Tools",
         "Verified Picks Ledger",
+        "Backtest · 30-day",
+        "Settings",
     ])
     with tab_dash:
         render_dashboard(settings)
@@ -249,6 +274,10 @@ def main():
         render_pro_tools(settings)
     with tab_picks:
         render_picks(settings)
+    with tab_backtest:
+        render_backtest(settings)
+    with tab_settings:
+        render_settings(settings)
 
 
 if __name__ == "__main__":

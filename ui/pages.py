@@ -19,10 +19,12 @@ from calc.kelly import kelly_fraction, kelly_stake
 from calc.units import recommend_units, units_from_kelly, format_units
 from calc.clv import line_move_prob_delta, classify_move, clv_percent
 from calc import agent as agent_calc
-from storage import picks as picks_store
+from storage import picks as picks_store, settings as settings_store
 from ui.components import (
     html, brand_bar, metric_row, game_card, ev_tone, odds_table_row,
 )
+from apis import odds_history
+from backtest import engine as backtest_engine
 
 
 # ============================================================================
@@ -223,8 +225,19 @@ def render_dashboard(settings: dict):
     if not api_key_ok:
         html('<div class="hint warn">The Odds API key not set — showing ESPN schedule only. Add <code>THE_ODDS_API_KEY</code> to your environment or <code>.streamlit/secrets.toml</code> to enable live lines, EV, and Kelly suggestions.</div>')
 
-    # Agent recommendations panel
-    _render_agent_panel(odds_games, kalshi_cash, settings)
+    # Agent recommendations panel - pass per-game Kalshi probs so agent uses them as fair.
+    kalshi_probs_by_game = {}
+    for og in odds_games or []:
+        home_name = og.get("home_team")
+        away_name = og.get("away_team")
+        # Find the ESPN event that matches this odds game for the Kalshi lookup.
+        for ev, _om, exch in merged:
+            if same_team(ev.get("home", {}).get("name"), home_name) and \
+               same_team(ev.get("away", {}).get("name"), away_name):
+                if exch.get("kalshi") is not None:
+                    kalshi_probs_by_game[og.get("id")] = exch["kalshi"]
+                break
+    _render_agent_panel(odds_games, kalshi_cash, settings, kalshi_probs_by_game=kalshi_probs_by_game)
 
     if not merged:
         html('<div class="hint">No games on the slate for this sport right now. Try another sport in the sidebar, or check back later.</div>')
@@ -273,13 +286,14 @@ def render_dashboard(settings: dict):
             _add_pick_control(ev, odds_meta, unit_pct, bankroll_units)
 
 
-def _render_agent_panel(odds_games, kalshi_cash, settings):
-    """Agent edge-scanner. Finds +EV bets vs no-vig consensus, sizes with Kalshi cash."""
+def _render_agent_panel(odds_games, kalshi_cash, settings, kalshi_probs_by_game=None):
+    """Agent edge-scanner. Uses Kalshi as fair (DK fallback), sizes with Kalshi cash."""
     st.markdown("### Agent · Edge scanner")
     kelly_mult = settings.get("agent_kelly") or 0.25
     min_edge = settings.get("agent_min_edge") or 0.02
-    min_books = settings.get("agent_min_books") or 3
+    min_books = settings.get("agent_min_books") or 1
     max_bet = settings.get("agent_max_bet_pct") or 0.05
+    fallback_book = settings.get("fallback_book") or "DraftKings"
 
     if not kalshi_cash or kalshi_cash <= 0:
         html(
@@ -294,6 +308,8 @@ def _render_agent_panel(odds_games, kalshi_cash, settings):
 
     edges = agent_calc.scan_all(
         odds_games, bankroll_cash=kalshi_cash,
+        kalshi_probs_by_game=kalshi_probs_by_game or {},
+        fallback_book=fallback_book,
         kelly_mult=kelly_mult, min_edge_pct=min_edge,
         min_books=min_books, max_bet_pct=max_bet,
         markets=("h2h", "spreads", "totals"),
@@ -317,6 +333,8 @@ def _render_agent_panel(odds_games, kalshi_cash, settings):
         tone = "ev-plus" if edge_pct > 0 else "ev-minus"
         pt = e.get("point")
         pt_s = f" {pt:+g}" if pt is not None else ""
+        fair_src = e.get("fair_source") or "—"
+        fair_badge_cls = "accent" if "kalshi" in fair_src.lower() else ("good" if "pinnacle" in fair_src.lower() else "")
         rows.append(
             f'<tr>'
             f'<td><strong>{e["matchup"]}</strong></td>'
@@ -326,6 +344,7 @@ def _render_agent_panel(odds_games, kalshi_cash, settings):
             f'<td class="mono">{e["book"]}</td>'
             f'<td class="num mono">{e["book_implied"]*100:.1f}%</td>'
             f'<td class="num mono" style="color:var(--accent);">{e["fair_prob"]*100:.1f}%</td>'
+            f'<td><span class="chip {fair_badge_cls}" style="padding:1px 6px; font-size:9px;">{fair_src}</span></td>'
             f'<td class="num mono {tone}"><strong>{edge_pct:+.2f}</strong></td>'
             f'<td class="num mono"><strong>${e["stake_dollars"]:,.2f}</strong></td>'
             f'</tr>'
@@ -335,7 +354,9 @@ def _render_agent_panel(odds_games, kalshi_cash, settings):
         '<thead><tr>'
         '<th>Matchup</th><th>Market</th><th>Side</th>'
         '<th class="num">Price</th><th>Book</th>'
-        '<th class="num">Book IP</th><th class="num">Fair IP</th>'
+        '<th class="num" title="Vig-inclusive implied probability from that book">Book IP</th>'
+        '<th class="num" title="Fair implied probability – from Kalshi, fallback book, or consensus">Fair IP</th>'
+        '<th>Fair src</th>'
         '<th class="num">Edge (pts)</th><th class="num">Stake</th>'
         '</tr></thead>'
         f'<tbody>{"".join(rows)}</tbody>'
@@ -343,11 +364,12 @@ def _render_agent_panel(odds_games, kalshi_cash, settings):
     )
     html(
         '<div class="hint" style="margin-top:10px;">'
-        f'Stakes computed at <strong>{kelly_mult*100:.0f}%-Kelly</strong> on your '
-        f'live Kalshi cash (<strong>${kalshi_cash:,.2f}</strong>), capped at '
-        f'<strong>{max_bet*100:.1f}%</strong> per bet. '
-        'The "Fair IP" column is the vig-stripped consensus across all books; '
-        'the agent treats it as the market\'s true probability for a given side.'
+        f'Stakes = <strong>{kelly_mult*100:.0f}%-Kelly</strong> × Kalshi cash '
+        f'(<strong>${kalshi_cash:,.2f}</strong>), capped at <strong>{max_bet*100:.1f}%</strong>/bet. '
+        '<strong>Fair IP</strong> is the probability the agent considers true: Kalshi\'s YES-mid '
+        'when available (no vig), else your fallback book stripped of vig, else all-book consensus. '
+        '<strong>Edge (pts)</strong> = Fair − Book IP. '
+        '<em>What is Fair IP?</em> → see the Settings tab for the full breakdown.'
         '</div>'
     )
 
@@ -775,3 +797,269 @@ def render_picks(settings: dict):
                 st.cache_data.clear()
                 st.success("Deleted.")
             st.divider()
+
+
+# ============================================================================
+# TAB 4 - Settings
+# ============================================================================
+
+def render_settings(settings: dict):
+    brand_bar("Settings · configuration & API usage")
+    saved = settings_store.load()
+
+    # ----- Credit meter -----
+    st.markdown("### Odds API usage")
+    credits = odds_api.get_credit_status()
+    remaining = credits.get("remaining")
+    used = credits.get("used_total")
+    last = credits.get("last_used")
+
+    budget = 20_000
+    pct_used = None
+    if remaining is not None:
+        try:
+            pct_used = max(0.0, min(1.0, 1.0 - (int(remaining) / budget)))
+        except (TypeError, ValueError):
+            pct_used = None
+
+    cards = [
+        {"label": "Remaining credits", "value": str(remaining) if remaining is not None else "—",
+         "foot": "20k monthly budget", "tone": "good" if (remaining or 0) > 2000 else ("warn" if (remaining or 0) > 500 else "bad")},
+        {"label": "Last request", "value": str(last) if last is not None else "—",
+         "foot": "cost of last call"},
+        {"label": "Total used", "value": str(used) if used is not None else "—",
+         "foot": "this billing cycle"},
+    ]
+    if pct_used is not None:
+        cards.append({"label": "% used", "value": f"{pct_used*100:.1f}%", "tone": "warn" if pct_used > 0.75 else ""})
+    metric_row(cards)
+
+    st.caption("Credits are read from The Odds API's response headers after each call. "
+               "On-disk cache is at `.odds_cache/` — historical snapshots are cached permanently, "
+               "live odds cache for 5 min by default.")
+
+    # ----- Live Kalshi balance -----
+    st.markdown("### Kalshi")
+    balance = load_kalshi_balance() or {"usd": None, "source": None}
+    live_usd = balance.get("usd")
+    live_src = balance.get("source")
+    if live_src == "live":
+        html(f'<div class="hint" style="background:color-mix(in oklab, var(--good) 10%, var(--card));">'
+             f'<strong>Live balance:</strong> ${live_usd:,.2f} · source: Kalshi API</div>')
+    elif live_src == "manual":
+        html(f'<div class="hint warn"><strong>Manual balance:</strong> ${live_usd:,.2f} · '
+             f'connect the API in the sidebar for live.</div>')
+    else:
+        html('<div class="hint warn">Not connected. Enter credentials in the sidebar.</div>')
+
+    unit_dollars = settings.get("unit_dollars") or 0.0
+    unit_pct = settings.get("unit_pct") or 0.10
+    cash = settings.get("kalshi_cash") or 0.0
+    metric_row([
+        {"label": "Kalshi cash", "value": f"${cash:,.2f}", "foot": settings.get("kalshi_source") or "unknown"},
+        {"label": "1 unit", "value": f"${unit_dollars:,.2f}", "foot": f"{unit_pct*100:.1f}% of cash", "tone": "accent"},
+        {"label": "Bankroll (units)", "value": f"{settings.get('bankroll_units') or 0:.1f}u"},
+    ])
+
+    # ----- Agent reference -----
+    st.markdown("### Agent configuration")
+    primary = settings.get("primary_book") or "kalshi"
+    fallback = saved.get("fallback_book") or "DraftKings"
+    html(
+        f'<div class="hint">'
+        f'<strong>Fair-probability source:</strong> Kalshi YES-mid (prediction market, no vig). '
+        f'When Kalshi has no quote on a game, agent falls back to <strong>{fallback}</strong> '
+        f'with vig removed, then to the multi-book consensus. '
+        f'A pick appears when any sportsbook offers implied probability lower than the fair source '
+        f'by at least the <em>minimum edge</em> threshold.'
+        f'</div>'
+    )
+
+    # Allow configuration here too (duplicates sidebar for permanence).
+    c1, c2 = st.columns(2)
+    with c1:
+        new_fallback = st.selectbox(
+            "Fallback book (when Kalshi has no quote)",
+            options=["DraftKings", "FanDuel", "BetMGM", "Caesars", "Pinnacle"],
+            index=["DraftKings","FanDuel","BetMGM","Caesars","Pinnacle"].index(fallback) if fallback in ["DraftKings","FanDuel","BetMGM","Caesars","Pinnacle"] else 0,
+            key="set_fallback_book",
+        )
+        if new_fallback != fallback:
+            settings_store.save({"fallback_book": new_fallback})
+            st.success(f"Fallback book saved: {new_fallback}")
+    with c2:
+        if st.button("Clear Odds API disk cache"):
+            import shutil, os
+            here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            cache = os.path.join(here, ".odds_cache")
+            try:
+                shutil.rmtree(cache, ignore_errors=True)
+                st.cache_data.clear()
+                st.success("Disk cache cleared. Next refresh will re-fetch.")
+            except Exception as e:
+                st.error(str(e))
+
+    # ----- Explanations -----
+    st.markdown("### What the columns mean")
+    html(
+        '<div class="hint">'
+        '<strong>Fair IP</strong> (fair implied probability) = the probability the agent considers '
+        '"true" for a given side. Right now it comes from Kalshi\'s YES-mid when a Kalshi market '
+        'exists for the game, otherwise from the no-vig fair price of your fallback book, '
+        'otherwise from the no-vig consensus of all sportsbooks. '
+        '<br><br><strong>Book IP</strong> = the implied probability a specific sportsbook is '
+        'offering (vig-inclusive). '
+        '<br><strong>Edge (pts)</strong> = Fair IP − Book IP, in percentage points. '
+        'A +4 pts edge means the market considers the outcome 4 points more likely than this book '
+        'is pricing it, so you expect long-run profit at that price.'
+        '</div>'
+    )
+
+    # ----- Saved settings dump -----
+    with st.expander("Current saved settings (JSON on disk)"):
+        st.json(saved)
+
+
+# ============================================================================
+# TAB 5 - Backtest
+# ============================================================================
+
+def render_backtest(settings: dict):
+    brand_bar("Backtest · 30-day simulated performance")
+
+    all_sports = ["nfl","nba","mlb","nhl","ncaaf","ncaab","wnba","mls"]
+    c1, c2, c3, c4 = st.columns([2, 1, 1, 1])
+    with c1:
+        picked_sports = st.multiselect(
+            "Sports to include",
+            options=all_sports,
+            default=["nfl", "nba", "mlb", "nhl"],
+            format_func=lambda k: espn.DISPLAY_NAMES.get(k, k.upper()),
+            key="bt_sports",
+        )
+    with c2:
+        start_bankroll = st.number_input("Starting bankroll ($)", 10.0, 100000.0, 100.0, 10.0, key="bt_bank")
+    with c3:
+        days = st.number_input("Days back", 1, 90, 30, 1, key="bt_days")
+    with c4:
+        top_n = st.number_input("Top-N picks/day", 1, 30, 5, 1, key="bt_topn")
+
+    # ----- credit preflight -----
+    cost_per_snapshot = odds_history.estimated_credit_cost_per_snapshot("us", "h2h,spreads,totals")
+    est_requests = len(picked_sports) * int(days)
+    est_credits = est_requests * cost_per_snapshot
+    credit_status = odds_api.get_credit_status()
+    remaining = credit_status.get("remaining")
+
+    # Cached snapshots don't re-charge; estimate assumes everything is new.
+    tone = "warn" if (remaining is not None and est_credits > remaining * 0.5) else ""
+    if remaining is not None and est_credits > remaining:
+        tone = "bad"
+
+    metric_row([
+        {"label": "Est. credits", "value": str(est_credits),
+         "foot": f"{est_requests} snapshots × {cost_per_snapshot} ea", "tone": tone},
+        {"label": "Remaining budget", "value": str(remaining) if remaining is not None else "—"},
+        {"label": "Cached snapshots", "value": _count_cached_snapshots(),
+         "foot": "cost 0 on reruns"},
+    ])
+    html(
+        '<div class="hint warn">Historical odds cost <strong>10× live odds</strong> per snapshot '
+        '(us × h2h,spreads,totals = <strong>30 credits</strong> each). '
+        'We cache every snapshot to disk permanently, so re-running this backtest later costs 0 credits. '
+        'Still, keep <strong>sports × days × 30</strong> comfortably under your remaining budget before running.</div>'
+    )
+
+    if st.button("▶ Run backtest", type="primary", disabled=not picked_sports):
+        progress = st.progress(0, text="starting…")
+        def _cb(frac, msg):
+            progress.progress(min(1.0, max(0.0, frac)), text=msg)
+        result = backtest_engine.run(
+            sports=picked_sports,
+            start_bankroll=float(start_bankroll),
+            days=int(days),
+            top_n_per_day=int(top_n),
+            kelly_mult=settings.get("agent_kelly") or 0.25,
+            min_edge_pct=settings.get("agent_min_edge") or 0.02,
+            max_bet_pct=settings.get("agent_max_bet_pct") or 0.10,
+            fallback_book=settings.get("fallback_book") or "DraftKings",
+            progress_cb=_cb,
+        )
+        progress.empty()
+        st.session_state["bt_last_result"] = result
+
+    result = st.session_state.get("bt_last_result")
+    if not result:
+        return
+
+    # Render summary
+    for w in (result.warnings or []):
+        html(f'<div class="hint err">{w}</div>')
+
+    net = result.end_bankroll - result.start_bankroll
+    wins = sum(1 for p in result.picks if p.outcome == "win")
+    losses = sum(1 for p in result.picks if p.outcome == "loss")
+    pushes = sum(1 for p in result.picks if p.outcome == "push")
+    ungraded = sum(1 for p in result.picks if p.outcome in ("nograde", "pending"))
+    roi = (net / result.start_bankroll) if result.start_bankroll else None
+    tone = "good" if net > 0 else ("bad" if net < 0 else "")
+
+    metric_row([
+        {"label": "Starting", "value": f"${result.start_bankroll:,.2f}"},
+        {"label": "Ending", "value": f"${result.end_bankroll:,.2f}", "tone": tone},
+        {"label": "Net", "value": f"${net:+,.2f}", "tone": tone},
+        {"label": "ROI", "value": f"{(roi or 0)*100:+.1f}%" if roi is not None else "—", "tone": tone},
+        {"label": "Record", "value": f"{wins}-{losses}-{pushes}", "foot": f"{ungraded} ungraded"},
+        {"label": "Picks placed", "value": str(len(result.picks))},
+    ])
+
+    # Daily bankroll chart
+    if result.daily:
+        try:
+            import pandas as pd
+            df = pd.DataFrame(result.daily).set_index("date")
+            st.line_chart(df["bankroll_eod"], height=240)
+        except ImportError:
+            # Fallback: render dates/bankroll as a table.
+            lines = "<br>".join(f"{d['date']}  ${d['bankroll_eod']:,.2f}" for d in result.daily)
+            html(f'<div class="hint">{lines}</div>')
+
+    # Picks table
+    st.markdown("### Simulated picks")
+    rows = []
+    for p in sorted(result.picks, key=lambda x: x.date, reverse=True)[:200]:
+        outcome_tone = {"win": "ev-plus", "loss": "ev-minus", "push": "", "nograde": "", "pending": ""}.get(p.outcome, "")
+        rows.append(
+            f'<tr>'
+            f'<td class="mono" style="font-size:11px;">{p.date}</td>'
+            f'<td class="mono" style="color:var(--muted);">{p.sport.upper()}</td>'
+            f'<td>{p.matchup}</td>'
+            f'<td class="mono" style="color:var(--muted);">{p.market.upper()}</td>'
+            f'<td><strong>{p.side_label}</strong>{(" "+str(p.point)) if p.point is not None else ""}</td>'
+            f'<td class="num mono">{format_american(p.price)}</td>'
+            f'<td class="mono" style="color:var(--muted);">{p.book}</td>'
+            f'<td class="num mono">{p.edge_pct:+.2f}</td>'
+            f'<td class="num mono">${p.stake:,.2f}</td>'
+            f'<td class="mono {outcome_tone}"><strong>{p.outcome.upper()}</strong></td>'
+            f'<td class="num mono {outcome_tone}">${p.profit:+,.2f}</td>'
+            f'</tr>'
+        )
+    html(
+        '<table class="ledger"><thead><tr>'
+        '<th>Date</th><th>Sport</th><th>Matchup</th><th>Mkt</th><th>Side</th>'
+        '<th class="num">Price</th><th>Book</th>'
+        '<th class="num">Edge pts</th><th class="num">Stake</th>'
+        '<th>Result</th><th class="num">P&amp;L</th>'
+        '</tr></thead>'
+        f'<tbody>{"".join(rows)}</tbody></table>'
+    )
+
+
+def _count_cached_snapshots() -> str:
+    import os
+    here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    cache_dir = os.path.join(here, ".odds_cache")
+    try:
+        return str(len([f for f in os.listdir(cache_dir) if f.endswith(".json")]))
+    except (OSError, FileNotFoundError):
+        return "0"

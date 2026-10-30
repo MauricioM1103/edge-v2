@@ -1,23 +1,114 @@
 """The Odds API v4 client.
 
 Docs: https://the-odds-api.com/liveapi/guides/v4/
-Endpoint for odds:
-  https://api.the-odds-api.com/v4/sports/{sport}/odds
-      ?apiKey={key}&regions=us&markets=h2h,spreads,totals&oddsFormat=american
 
-Every call tolerates missing key / timeout / rate limit by returning [].
-The free tier allows ~500 requests/mo; the Streamlit layer caches aggressively.
+Credit cost model:
+  * Each /odds request costs `regions × markets` credits.
+    us × "h2h,spreads,totals" = 3 credits per sport per fetch.
+  * Historical /odds requests cost 10× the live rate (so 30 credits per snapshot).
+  * The server returns `x-requests-remaining` and `x-requests-last` headers;
+    we read those and persist them so the UI can show the running budget.
 """
 from __future__ import annotations
 
 import json
 import os
+import time
 from typing import List, Optional
 from urllib.error import URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 ODDS_BASE = "https://api.the-odds-api.com/v4"
+
+# Where we keep the latest credit-usage snapshot across restarts.
+_HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_CREDIT_FILE = os.path.join(_HERE, ".odds_credits.json")
+# On-disk response cache; keyed by URL (minus the API key).
+_CACHE_DIR = os.path.join(_HERE, ".odds_cache")
+
+
+def _load_credits() -> dict:
+    try:
+        with open(_CREDIT_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, json.JSONDecodeError, ValueError):
+        return {}
+
+
+def _save_credits(d: dict) -> None:
+    try:
+        with open(_CREDIT_FILE, "w", encoding="utf-8") as f:
+            json.dump(d, f, indent=2)
+    except OSError:
+        pass
+
+
+def get_credit_status() -> dict:
+    """Return the latest credit snapshot. Fields:
+         remaining  - int | None  (x-requests-remaining)
+         last_used  - int | None  (x-requests-last)
+         updated_at - ISO string
+    """
+    return _load_credits()
+
+
+def _update_credits_from_headers(headers) -> None:
+    """Pull x-requests-* from the HTTP response and persist them."""
+    try:
+        remaining = headers.get("x-requests-remaining") or headers.get("X-Requests-Remaining")
+        last = headers.get("x-requests-last") or headers.get("X-Requests-Last")
+        used = headers.get("x-requests-used") or headers.get("X-Requests-Used")
+        snapshot = _load_credits()
+        if remaining is not None:
+            try:
+                snapshot["remaining"] = int(remaining)
+            except (TypeError, ValueError):
+                pass
+        if last is not None:
+            try:
+                snapshot["last_used"] = int(last)
+            except (TypeError, ValueError):
+                pass
+        if used is not None:
+            try:
+                snapshot["used_total"] = int(used)
+            except (TypeError, ValueError):
+                pass
+        snapshot["updated_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        _save_credits(snapshot)
+    except Exception:
+        pass
+
+
+# ---------- on-disk cache ----------
+
+def _cache_key(url_without_key: str) -> str:
+    import hashlib
+    h = hashlib.sha256(url_without_key.encode("utf-8")).hexdigest()[:32]
+    return os.path.join(_CACHE_DIR, h + ".json")
+
+
+def _cache_read(url_key: str, ttl: int) -> Optional[dict]:
+    path = _cache_key(url_key)
+    if not os.path.exists(path):
+        return None
+    try:
+        if ttl > 0 and (time.time() - os.path.getmtime(path)) > ttl:
+            return None
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, json.JSONDecodeError, ValueError):
+        return None
+
+
+def _cache_write(url_key: str, data) -> None:
+    try:
+        os.makedirs(_CACHE_DIR, exist_ok=True)
+        with open(_cache_key(url_key), "w", encoding="utf-8") as f:
+            json.dump(data, f)
+    except (OSError, TypeError):
+        pass
 
 
 def get_api_key() -> Optional[str]:
@@ -42,24 +133,51 @@ def get_api_key() -> Optional[str]:
     return None
 
 
-def _get(path, params):
+def _get(path, params, cache_ttl: int = 0, historical: bool = False):
+    """GET from The Odds API with on-disk caching + credit header capture.
+
+    cache_ttl:
+      * 0        -> never return cached (always refetch unless historical)
+      * N > 0    -> return cached response if younger than N seconds
+      * -1       -> permanent cache (historical snapshots — the past doesn't change)
+    """
     key = get_api_key()
     if not key:
         return None
     params = dict(params or {})
+    # Cache key is the URL WITHOUT the api key, so swapping keys doesn't bust it.
+    cache_url = f"{ODDS_BASE}{path}?{urlencode(params)}"
+    if historical:
+        hit = _cache_read(cache_url, ttl=-1)  # historical never expires
+        if hit is not None:
+            return hit
+    elif cache_ttl > 0:
+        hit = _cache_read(cache_url, ttl=cache_ttl)
+        if hit is not None:
+            return hit
+
     params["apiKey"] = key
     url = f"{ODDS_BASE}{path}?{urlencode(params)}"
     try:
         req = Request(url, headers={"User-Agent": "betting-dashboard-v2/1.0"})
         with urlopen(req, timeout=10) as resp:
-            return json.load(resp)
+            _update_credits_from_headers(resp.headers)
+            data = json.load(resp)
+            # Persist on success so a later restart / cache-clear still has it.
+            try:
+                _cache_write(cache_url, data)
+            except Exception:
+                pass
+            return data
     except (URLError, ValueError, TimeoutError, ConnectionError, OSError):
-        return None
+        # On error, fall back to a stale cache entry if any exists.
+        stale = _cache_read(cache_url, ttl=-1)
+        return stale
 
 
 def list_sports() -> List[dict]:
     """Available sports from The Odds API (includes `in_season` flag)."""
-    data = _get("/sports", {"all": "true"})
+    data = _get("/sports", {"all": "true"}, cache_ttl=24 * 3600)  # sports change ~weekly
     if not data:
         return []
     return data if isinstance(data, list) else []
@@ -70,11 +188,15 @@ def get_odds(
     regions: str = "us",
     markets: str = "h2h,spreads,totals",
     odds_format: str = "american",
+    cache_ttl: int = 300,
 ) -> List[dict]:
     """Fetch current odds for `sport` (The Odds API key, e.g. 'baseball_mlb').
 
     Returns a list of games, each with a 'bookmakers' list of priced markets.
     Returns [] on missing key, timeout, or bad response.
+
+    cache_ttl: cache on disk for this many seconds (default 5 min). Set to
+    larger values to conserve credits; set 0 to always refetch.
     """
     if not sport:
         return []
@@ -86,10 +208,18 @@ def get_odds(
             "oddsFormat": odds_format,
             "dateFormat": "iso",
         },
+        cache_ttl=cache_ttl,
     )
     if not data or not isinstance(data, list):
         return []
     return data
+
+
+def estimated_credit_cost(regions: str, markets: str) -> int:
+    """Credit cost for ONE /odds request. us × h2h,spreads,totals = 3."""
+    r = len([x for x in (regions or "").split(",") if x.strip()])
+    m = len([x for x in (markets or "").split(",") if x.strip()])
+    return max(1, r * m)
 
 
 def get_scores(sport: str, days_from: int = 1) -> List[dict]:
