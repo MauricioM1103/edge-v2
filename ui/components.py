@@ -39,6 +39,20 @@ def brand_bar(subtitle: str = ""):
         now_et = f"{dt.strftime('%a %b')} {day} · {hour12}:{dt.strftime('%M %p')} CT"
     except Exception:
         now_et = ""
+    # Persistent credit chip: shows remaining Odds API credits on every tab.
+    credit_chip = ""
+    try:
+        from apis import odds as odds_api
+        cs = odds_api.get_credit_status() or {}
+        rem = cs.get("remaining")
+        if rem is not None:
+            tone = "good" if rem > 2000 else ("warn" if rem > 500 else "bad")
+            credit_chip = (
+                f'<span class="chip {tone}" style="margin-right:10px; font-size:9.5px;">'
+                f'Odds API: {int(rem):,}</span>'
+            )
+    except Exception:
+        pass
     html(f"""
     <div class="brand-bar">
       <div class="brand">
@@ -46,7 +60,7 @@ def brand_bar(subtitle: str = ""):
         <span class="name">Edge</span>
         <span class="ver">v2.0</span>
       </div>
-      <div class="brand-right">{subtitle or now_et}</div>
+      <div class="brand-right" style="display:flex;align-items:center;">{credit_chip}<span>{subtitle or now_et}</span></div>
     </div>
     """)
 

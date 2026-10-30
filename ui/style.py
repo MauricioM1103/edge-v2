@@ -303,6 +303,54 @@ button[kind="headerDeploy"] { display: none !important; }
 """
 
 
-def inject():
+RESPONSIVE_CSS = r"""
+<style>
+@media (max-width: 760px) {
+  section.main > div.block-container { padding-left: 10px; padding-right: 10px; }
+  .brand-bar { flex-direction: column; align-items: flex-start; gap: 6px; }
+  .brand .name { font-size: 22px; }
+  .metric-grid { grid-template-columns: repeat(2, 1fr); gap: 8px; }
+  .metric-card { padding: 10px 12px; }
+  .metric-card .value { font-size: 18px; }
+  .gc-lines { grid-template-columns: 1fr !important; }
+  .gc-matchup { grid-template-columns: 1fr; }
+  .gc-matchup .gc-at { grid-column: 1; }
+  table.ledger th, table.ledger td { padding: 5px 6px; font-size: 11px; }
+  .stTabs [data-baseweb="tab-list"] { overflow-x: auto; scrollbar-width: none; }
+  .stTabs [data-baseweb="tab-list"]::-webkit-scrollbar { display: none; }
+}
+</style>
+"""
+
+LIGHT_THEME_CSS = r"""
+<style>
+:root { color-scheme: light; }
+:root {
+  --bg: #F6F5F0;
+  --surface: #FFFFFF;
+  --card: #FFFFFF;
+  --card-elev: #FBFAF4;
+  --rule: #E3E0D4;
+  --rule-strong: #CBC7B6;
+  --ink: #1A1F2C;
+  --ink-dim: #3F4654;
+  --muted: #6B7284;
+  --muted-dim: #9099A7;
+  --accent: #0E7C7B;
+  --accent-ink: #FFFFFF;
+  --good: #138A4B;
+  --warn: #B37100;
+  --bad: #B91C1C;
+  --live: #DC2626;
+  --chip: #F0EDE1;
+}
+</style>
+"""
+
+
+def inject(theme: str = "dark"):
     import streamlit as st
     st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
+    if (theme or "dark").lower() == "light":
+        st.markdown(LIGHT_THEME_CSS, unsafe_allow_html=True)
+    st.markdown(RESPONSIVE_CSS, unsafe_allow_html=True)

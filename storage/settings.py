@@ -31,6 +31,11 @@ _DEFAULTS: Dict[str, Any] = {
     # Odds API regions. "us,eu" includes Pinnacle (sharpest book) at 2× credit cost.
     # Set to "us" to halve the credit cost (and lose Pinnacle fair).
     "odds_regions": "us,eu",
+    # Daily total-exposure cap as a fraction of Kalshi cash. Prevents the agent
+    # from recommending more stakes than the bankroll can cover across many picks.
+    "daily_exposure_cap_pct": 0.25,
+    # Theme: "dark" (default) or "light".
+    "theme": "dark",
 }
 
 

@@ -276,6 +276,17 @@ def render_dashboard(settings: dict):
     kalshi_source = settings.get("kalshi_source")
     kalshi_display = f"${kalshi_cash:,.2f}" if kalshi_cash else "—"
 
+    # Sparkline: tiny bar of per-sport game counts.
+    if multi_sport_mode:
+        per_sport_counts = {}
+        for ev, _om, _ex in merged:
+            sp = ev.get("sport") or "?"
+            per_sport_counts[sp] = per_sport_counts.get(sp, 0) + 1
+        top3 = sorted(per_sport_counts.items(), key=lambda kv: -kv[1])[:3]
+        spark = "  ".join(f"{k.upper()}·{v}" for k, v in top3)
+        slate_foot = f"{live_count} live · {final_count} final · {spark}"
+    else:
+        slate_foot = f"{live_count} live · {final_count} final"
     slate_label = f"{len(sports_list)} sports" if multi_sport_mode else sport_setting.upper()
     metric_row([
         {"label": "Kalshi cash", "value": kalshi_display, "foot": (kalshi_source or "not configured"), "tone": "accent" if kalshi_source == "live" else ""},
@@ -284,7 +295,7 @@ def render_dashboard(settings: dict):
         {"label": "Record", "value": f"{s['wins']}-{s['losses']}-{s['pushes']}", "foot": f"settled: {s['total_settled']}"},
         {"label": "Net units", "value": f"{s['net_units']:+.2f}u", "foot": roi_display + " ROI", "tone": net_tone},
         {"label": "Avg CLV", "value": f"{(s['avg_clv_pct'] or 0)*100:+.2f}%" if s["avg_clv_pct"] is not None else "—", "foot": "closing line value"},
-        {"label": f"Slate · {slate_label}", "value": f"{live_count + upcoming + final_count}", "foot": f"{live_count} live · {final_count} final"},
+        {"label": f"Slate · {slate_label}", "value": f"{live_count + upcoming + final_count}", "foot": slate_foot},
     ])
 
     if not api_key_ok:
@@ -319,54 +330,69 @@ def render_dashboard(settings: dict):
     # quick calc feed above the grid
     _render_quick_calculator(merged, unit_pct, bankroll_units, sport)
 
-    # 3-column game grid - Streamlit columns to get real multi-column
+    # Game grid - per-sport sections in all-sports mode, flat grid otherwise.
     st.markdown('### Today\'s matchups')
     primary_book = settings.get("primary_book") or "kalshi"
     extra_sources = set(settings.get("extra_sources") or [])
-    # Kalshi always shows in the strip; the user toggles the rest.
     visible_sources = {"kalshi"} | extra_sources
+
+    def _render_one_card(ev, odds_meta, exch_probs):
+        prob_sources = _prob_sources_for(
+            odds_meta,
+            kalshi_prob_home=exch_probs.get("kalshi"),
+            polymarket_prob_home=exch_probs.get("polymarket"),
+            betfair_prob_home=exch_probs.get("betfair"),
+        )
+        prob_sources_filtered = None
+        if prob_sources:
+            key_map = {
+                "kalshi": "kalshi", "pinnacle": "pinnacle",
+                "draftkings": "dk", "polymarket": "polymarket",
+                "betfair": "betfair", "consensus": "consensus",
+            }
+            prob_sources_filtered = {
+                key_map[k]: prob_sources.get(key_map[k])
+                for k in visible_sources
+                if prob_sources.get(key_map.get(k, k))
+            } or None
+        game_card(
+            ev, odds_meta,
+            prob_sources=prob_sources_filtered,
+            primary_book=primary_book,
+            kalshi_prob_home=exch_probs.get("kalshi"),
+        )
+        _add_pick_control(ev, odds_meta, unit_pct, bankroll_units)
+
+    if multi_sport_mode:
+        by_sport_games = {}
+        for item in merged:
+            sp = (item[0].get("sport") or "other")
+            by_sport_games.setdefault(sp, []).append(item)
+        for sp in sorted(by_sport_games.keys(), key=lambda k: -len(by_sport_games[k])):
+            items = by_sport_games[sp]
+            st.markdown(f"#### {espn.DISPLAY_NAMES.get(sp, sp.upper())}  ·  {len(items)} games")
+            cols = st.columns(2)
+            for i, (ev, odds_meta, exch_probs) in enumerate(items):
+                with cols[i % 2]:
+                    _render_one_card(ev, odds_meta, exch_probs)
+        return
+
     cols = st.columns(2)
     for i, (ev, odds_meta, exch_probs) in enumerate(merged):
         with cols[i % 2]:
-            all_sources = _prob_sources_for(
-                odds_meta,
-                kalshi_prob_home=exch_probs.get("kalshi"),
-                polymarket_prob_home=exch_probs.get("polymarket"),
-                betfair_prob_home=exch_probs.get("betfair"),
-            )
-            # Filter down to what the user asked to see.
-            prob_sources = None
-            if all_sources:
-                # map UI key -> prob_sources key (dk == draftkings)
-                key_map = {
-                    "kalshi": "kalshi", "pinnacle": "pinnacle",
-                    "draftkings": "dk", "polymarket": "polymarket",
-                    "betfair": "betfair", "consensus": "consensus",
-                }
-                prob_sources = {
-                    key_map[k]: all_sources.get(key_map[k])
-                    for k in visible_sources
-                    if all_sources.get(key_map.get(k, k))
-                }
-                if not prob_sources:
-                    prob_sources = None
-            game_card(
-                ev, odds_meta,
-                prob_sources=prob_sources,
-                primary_book=primary_book,
-                kalshi_prob_home=exch_probs.get("kalshi"),
-            )
-            _add_pick_control(ev, odds_meta, unit_pct, bankroll_units)
+            _render_one_card(ev, odds_meta, exch_probs)
 
 
 def _render_agent_panel(odds_games, kalshi_cash, settings, kalshi_probs_by_game=None):
-    """Agent edge-scanner. Uses Kalshi as fair (DK fallback), sizes with Kalshi cash."""
+    """Agent edge-scanner with filters, exposure cap, per-sport grouping, 1-click log."""
+    saved_cfg = settings_store.load()
     st.markdown("### Agent · Edge scanner")
     kelly_mult = settings.get("agent_kelly") or 0.25
     min_edge = settings.get("agent_min_edge") or 0.02
     min_books = settings.get("agent_min_books") or 1
     max_bet = settings.get("agent_max_bet_pct") or 0.05
     fallback_book = settings.get("fallback_book") or "DraftKings"
+    daily_cap_pct = saved_cfg.get("daily_exposure_cap_pct", 0.25)
 
     if not kalshi_cash or kalshi_cash <= 0:
         html(
@@ -387,16 +413,66 @@ def _render_agent_panel(odds_games, kalshi_cash, settings, kalshi_probs_by_game=
         min_books=min_books, max_bet_pct=max_bet,
         markets=("h2h", "spreads", "totals"),
     )
+    # Apply total-exposure cap so cumulative stake stays within daily_cap_pct of bankroll.
+    edges = agent_calc.apply_daily_cap(edges, kalshi_cash, daily_cap_pct)
     summary = agent_calc.summarize_edges(edges)
+    exposure_pct = (summary['total_stake'] / kalshi_cash) * 100 if kalshi_cash else 0
+    cap_dollars = kalshi_cash * daily_cap_pct
+    exposure_tone = "warn" if exposure_pct > daily_cap_pct * 100 * 0.9 else ("good" if exposure_pct > 0 else "")
     metric_row([
-        {"label": "Edges found", "value": str(summary["count"]), "foot": f"min edge {min_edge*100:.1f}%", "tone": "good" if summary["count"] else ""},
-        {"label": "Best edge", "value": f"{(summary['best_edge'] or 0)*100:+.2f} pts" if summary["best_edge"] else "—", "foot": "vs no-vig fair"},
-        {"label": "Total stake", "value": f"${summary['total_stake']:,.2f}", "foot": f"{kelly_mult*100:.0f}% Kelly · capped {max_bet*100:.1f}%/bet"},
-        {"label": "Avg edge", "value": f"{(summary['avg_edge'] or 0)*100:+.2f} pts" if summary["avg_edge"] else "—", "foot": "across found edges"},
+        {"label": "Edges", "value": str(summary["count"]), "foot": f"≥{min_edge*100:.1f}% edge", "tone": "good" if summary["count"] else ""},
+        {"label": "Best", "value": f"{(summary['best_edge'] or 0)*100:+.1f}pts" if summary["best_edge"] else "—"},
+        {"label": "Total stake", "value": f"${summary['total_stake']:,.0f}", "foot": f"of ${cap_dollars:,.0f} cap", "tone": exposure_tone},
+        {"label": "Exposure", "value": f"{exposure_pct:.1f}%", "foot": f"{daily_cap_pct*100:.0f}% cap today", "tone": exposure_tone},
+        {"label": "Avg edge", "value": f"{(summary['avg_edge'] or 0)*100:+.1f}pts" if summary["avg_edge"] else "—"},
     ])
 
     if not edges:
-        html('<div class="hint">No edges meet the threshold right now. Lower the edge requirement in the sidebar to see thinner opportunities.</div>')
+        html('<div class="hint">No edges meet the threshold right now. Lower the edge requirement in the Settings tab to see thinner opportunities.</div>')
+        return
+
+    # ----- Filter controls -----
+    all_sports = sorted({(e.get("_sport") or "").upper() for e in edges if e.get("_sport")})
+    all_books = sorted({e.get("book") or "" for e in edges if e.get("book")})
+    fc1, fc2, fc3, fc4 = st.columns([2, 2, 2, 1])
+    with fc1:
+        f_sports = st.multiselect(
+            "Sport", options=all_sports, default=all_sports,
+            key="agent_f_sports", label_visibility="collapsed",
+            placeholder="Sport filter",
+        )
+    with fc2:
+        f_markets = st.multiselect(
+            "Market", options=["h2h", "spreads", "totals"], default=["h2h", "spreads", "totals"],
+            format_func=lambda m: {"h2h": "Moneyline", "spreads": "Spread", "totals": "Total"}[m],
+            key="agent_f_markets", label_visibility="collapsed",
+            placeholder="Market filter",
+        )
+    with fc3:
+        f_books = st.multiselect(
+            "Book", options=all_books, default=all_books,
+            key="agent_f_books", label_visibility="collapsed",
+            placeholder="Book filter",
+        )
+    with fc4:
+        f_min_edge = st.number_input(
+            "Min edge %", 0.0, 50.0, min_edge * 100, 0.5,
+            key="agent_f_min_edge", label_visibility="collapsed",
+        )
+    # Apply filters
+    def _keep(e):
+        if f_sports and (e.get("_sport") or "").upper() not in f_sports:
+            return False
+        if f_markets and e.get("market") not in f_markets:
+            return False
+        if f_books and e.get("book") not in f_books:
+            return False
+        if e.get("edge", 0) * 100 < f_min_edge:
+            return False
+        return True
+    filtered = [e for e in edges if _keep(e)]
+    if not filtered:
+        html('<div class="hint">Every edge was filtered out. Clear a filter above to see picks again.</div>')
         return
 
     # Table of top edges with the exact $ amount to bet.
@@ -457,22 +533,69 @@ def _render_agent_panel(odds_games, kalshi_cash, settings, kalshi_probs_by_game=
         '</tr></thead>'
     )
 
-    top = edges[:15]
-    overflow = edges[15:]
+    top = filtered[:15]
+    overflow = filtered[15:]
     html(
         '<table class="ledger" style="margin-top:4px;">'
         + header
         + f'<tbody>{"".join(_row(e) for e in top)}</tbody>'
         + '</table>'
     )
+    # One-click "Log pick" for each top-15 edge.
+    with st.expander("⚡ One-click log for the top 15", expanded=False):
+        for i, e in enumerate(top):
+            edge_pct = e["edge"] * 100
+            matchup = e.get("matchup", "?")
+            side_label = e.get("side_label", "")
+            pt = e.get("point")
+            pt_str = f" {pt:+g}" if pt is not None and e.get("market") in ("spreads", "totals") else ""
+            price_str = format_american(e.get("price"))
+            cols = st.columns([5, 1, 1, 1])
+            with cols[0]:
+                st.markdown(
+                    f"**{matchup}** — {side_label}{pt_str}  "
+                    f"<span style='color:var(--muted);font-size:12px;'>· {e.get('book')} · "
+                    f"<span style='color:var(--good);'>+{edge_pct:.2f}pts</span> · "
+                    f"${e.get('stake_dollars'):,.2f}</span>",
+                    unsafe_allow_html=True,
+                )
+            cols[1].markdown(f"**{price_str}**")
+            cols[2].markdown(f"{e.get('_sport', '').upper()}")
+            if cols[3].button("Log", key=f"agent_log_{i}_{e.get('event_id','?')}_{e.get('market')}_{side_label[:4]}"):
+                picks_store.add_pick({
+                    "sport": (e.get("_sport") or "").lower(),
+                    "event_id": e.get("event_id"),
+                    "event_name": matchup,
+                    "market": e.get("market"),
+                    "selection": side_label,
+                    "point": pt,
+                    "price_american": e.get("price"),
+                    "projected_prob": e.get("fair_prob"),
+                    "implied_prob": e.get("book_implied"),
+                    "risk_units": round(e.get("stake_dollars", 0) / max(1e-6, kalshi_cash * (settings.get("unit_pct") or 0.1)), 2),
+                    "win_units": None,
+                    "methodology": "Model Edge",
+                    "notes": f"Agent · Fair={e.get('fair_source')} · edge {edge_pct:+.2f}pts",
+                })
+                st.cache_data.clear()
+                st.toast(f"Logged: {side_label}{pt_str} @ {price_str}", icon="✅")
+
     if overflow:
-        with st.expander(f"➕ {len(overflow)} more picks (bold = still above threshold)", expanded=False):
-            html(
-                '<table class="ledger" style="margin-top:4px;">'
-                + header
-                + f'<tbody>{"".join(_row(e, highlight=True) for e in overflow)}</tbody>'
-                + '</table>'
-            )
+        # Group overflow by sport for scannability.
+        by_sport: Dict[str, list] = {}
+        for e in overflow:
+            key = (e.get("_sport") or "other").upper()
+            by_sport.setdefault(key, []).append(e)
+        with st.expander(f"➕ {len(overflow)} more picks  (grouped by sport)", expanded=False):
+            for sport_key in sorted(by_sport.keys(), key=lambda k: -max(ev["edge"] for ev in by_sport[k])):
+                sport_edges = by_sport[sport_key]
+                st.markdown(f"#### {sport_key}  ·  {len(sport_edges)} picks")
+                html(
+                    '<table class="ledger" style="margin-top:4px;">'
+                    + header
+                    + f'<tbody>{"".join(_row(e, highlight=True) for e in sport_edges[:50])}</tbody>'
+                    + '</table>'
+                )
     html(
         '<div class="hint" style="margin-top:10px;">'
         f'Stakes = <strong>{kelly_mult*100:.0f}%-Kelly</strong> × Kalshi cash '
@@ -1027,6 +1150,32 @@ def render_settings(settings: dict):
                 st.success("Disk cache cleared. Next refresh will re-fetch.")
             except Exception as e:
                 st.error(str(e))
+
+    # ----- Theme + exposure cap -----
+    st.markdown("### Appearance & risk")
+    tc1, tc2 = st.columns(2)
+    with tc1:
+        theme = st.selectbox(
+            "Theme", options=["dark", "light"],
+            index=0 if saved.get("theme", "dark") == "dark" else 1,
+            format_func=lambda t: t.title(),
+            key="set_theme",
+        )
+        if theme != saved.get("theme", "dark"):
+            settings_store.save({"theme": theme})
+            st.success(f"Theme set to {theme}. Reloading…")
+            st.rerun()
+    with tc2:
+        cap = st.slider(
+            "Daily total-exposure cap (% of Kalshi cash)",
+            5, 100, int(saved.get("daily_exposure_cap_pct", 0.25) * 100), 5,
+            key="set_cap",
+            help="If the agent's total recommended stakes exceed this % of your "
+                 "Kalshi cash, every stake is scaled down proportionally.",
+        ) / 100.0
+        if abs(cap - saved.get("daily_exposure_cap_pct", 0.25)) > 1e-6:
+            settings_store.save({"daily_exposure_cap_pct": cap})
+            st.success(f"Daily cap: {cap*100:.0f}% of Kalshi cash")
 
     # ----- Explanations -----
     st.markdown("### What the columns mean")

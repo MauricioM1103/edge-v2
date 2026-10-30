@@ -325,6 +325,44 @@ def scan_all(
     return out
 
 
+def apply_daily_cap(edges: List[dict], bankroll_cash: float, daily_cap_pct: float = 0.25) -> List[dict]:
+    """Top-N selection: take picks in edge-rank order until the cap is used.
+
+    daily_cap_pct = fraction of bankroll that may be in play across all picks today.
+    Picks that don't fit have `stake_dollars` set to 0 (so they still appear in
+    the UI as "overflow" without recommending real money). The last pick that
+    partially fits gets scaled down to use the remaining budget exactly.
+    """
+    if not edges:
+        return edges
+    try:
+        bk = float(bankroll_cash)
+        cap_pct = float(daily_cap_pct)
+    except (TypeError, ValueError):
+        return edges
+    if bk <= 0 or cap_pct <= 0:
+        return edges
+    cap_dollars = bk * cap_pct
+    # Sort by edge descending (defensive; scan_all already sorts).
+    ranked = sorted(edges, key=lambda e: -float(e.get("edge", 0) or 0))
+    remaining = cap_dollars
+    for e in ranked:
+        s = float(e.get("stake_dollars", 0.0) or 0.0)
+        e["stake_dollars_raw"] = s
+        if remaining <= 0:
+            e["stake_dollars"] = 0.0
+            e["dropped_by_cap"] = True
+            continue
+        if s <= remaining:
+            e["stake_dollars"] = s
+            remaining -= s
+        else:
+            e["stake_dollars"] = remaining  # partial fill of the last pick
+            e["partial_cap"] = True
+            remaining = 0.0
+    return ranked
+
+
 def summarize_edges(edges: List[dict]) -> dict:
     if not edges:
         return {"count": 0, "best_edge": None, "total_stake": 0.0, "avg_edge": None}

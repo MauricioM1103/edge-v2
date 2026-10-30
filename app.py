@@ -271,7 +271,8 @@ def main():
         layout="wide",
         initial_sidebar_state="collapsed",
     )
-    inject_style()
+    saved_theme = settings_store.load().get("theme", "dark")
+    inject_style(theme=saved_theme)
     settings = _sidebar_settings()
 
     tab_dash, tab_pro, tab_picks, tab_backtest, tab_settings = st.tabs([
