@@ -119,6 +119,12 @@ def load() -> Dict[str, Any]:
                     disk["unit_pct_of_kalshi"] = _DEFAULTS["unit_pct_of_kalshi"]
             except (TypeError, ValueError):
                 pass
+            # Migration 5: the stale "US Majors" default was persisted before
+            # sport_group was user-tunable. Snap it forward to the new default
+            # so returning users see every sport on the main board; a user who
+            # intentionally selects a narrower group will re-save that choice.
+            if disk.get("sport_group") == "US Majors":
+                disk["sport_group"] = _DEFAULTS["sport_group"]
             out.update(disk)
     except (OSError, json.JSONDecodeError, ValueError):
         pass

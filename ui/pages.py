@@ -900,13 +900,18 @@ def _render_agent_panel(odds_games, kalshi_cash, settings,
             else:
                 cols[3].markdown(f"_{best_book}_")
             if cols[4].button("Log", key=f"agent_log_{i}_{e.get('event_id','?')}_{side_label[:6]}"):
+                # auto_settle resolves finals by sport + ESPN event id, so we
+                # store the ESPN id (not the Kalshi ticker) as event_id. The
+                # Kalshi ticker rides along in `kalshi_ticker` for the deep link.
+                espn_eid = e.get("espn_event_id") or e.get("event_id")
                 picks_store.add_pick({
                     "sport": (e.get("_sport") or "").lower(),
-                    "event_id": e.get("event_id"),
+                    "event_id": espn_eid,
+                    "kalshi_ticker": e.get("kalshi_ticker"),
                     "event_name": matchup,
-                    "market": "h2h",
+                    "market": e.get("market") or "h2h",
                     "selection": side_label,
-                    "point": None,
+                    "point": e.get("point"),
                     "price_american": e.get("price"),
                     "projected_prob": e.get("fair_prob"),
                     "implied_prob": e.get("book_implied"),
@@ -915,6 +920,11 @@ def _render_agent_panel(odds_games, kalshi_cash, settings,
                     "methodology": "Model Edge",
                     "notes": f"{best_book} @ {best_price} vs Pinnacle · edge {edge_pct:+.2f}pts · Kalshi {int(e.get('kalshi_price_cents') or 0)}¢",
                 })
+                # Attempt an immediate settle in case the game is already final.
+                try:
+                    picks_store.auto_settle()
+                except Exception:
+                    pass
                 st.cache_data.clear()
                 st.toast(f"Logged: {side_label} @ {best_price} · {stake_u:.2f}u ({best_book})", icon="✅")
 
@@ -1007,8 +1017,19 @@ def _render_analysis_boards(top_picks, settings, kalshi_cash):
 
 
 def _render_single_pick_analysis(e, idx, total, unit_dollars, _units_fn, kelly_mult, max_bet, daily_cap_pct, unit_pct=0.01):
-    """Render one pick's detailed analysis card with its own anchor + navigation."""
+    """Render one pick's detailed analysis card.
+
+    V1 edgeboard surfaced a "Quant breakdown" that split the picture into three
+    columns — probability ladder, EV math, Kelly math — and layered an LLM-
+    generated rationale on top. We don't have an LLM wired here, so the
+    rationale is synthesized from the numbers the agent already computed: edge
+    magnitude vs sharp lines, kelly size vs. the per-bet cap, variance from
+    one unit of stake, and ESPN state. The reader gets the same shape of
+    answer without a round-trip to a model.
+    """
     from calc.odds import american_to_decimal, implied_prob_american
+    import math
+
     anchor = e.get("_anchor") or f"pick-{idx}"
     matchup = e.get("matchup") or "?"
     sport = (e.get("_sport") or "").upper()
@@ -1026,6 +1047,7 @@ def _render_single_pick_analysis(e, idx, total, unit_dollars, _units_fn, kelly_m
     status_state = e.get("status_state") or ""
     hs = e.get("home_score"); as_ = e.get("away_score")
     kalshi_url = e.get("kalshi_url")
+    grade = e.get("grade")
 
     # EV calculation
     dec = american_to_decimal(e.get("price"))
@@ -1069,30 +1091,191 @@ def _render_single_pick_analysis(e, idx, total, unit_dollars, _units_fn, kelly_m
             except Exception:
                 pass
 
-    # Alt-book table
-    alt_rows = ""
+    # ----- Probability ladder (every book's implied prob + fair) -----
+    ladder_rows = ""
+    # Fair row first (reference).
+    ladder_rows += (
+        f'<tr style="background: color-mix(in oklab, var(--accent) 8%, transparent);">'
+        f'<td><strong class="accent">Pinnacle fair (no-vig)</strong></td>'
+        f'<td class="num mono"><strong>{fair_prob*100:.2f}%</strong></td>'
+        f'<td class="num mono accent">—</td>'
+        f'<td class="mono" style="color:var(--muted); font-size:11px;">reference</td>'
+        f'</tr>'
+    )
     for c in candidates_sorted:
         is_best = c["implied"] == best_imp_val
-        tone_style = 'style="color:var(--good); font-weight:600;"' if is_best else 'style="color:var(--muted);"'
-        alt_rows += (
+        edge_pts = (fair_prob - c["implied"]) * 100
+        tone = "good" if edge_pts > 0 else ("bad" if edge_pts < 0 else "")
+        label = (
+            f'<span class="chip accent" style="padding:1px 7px; font-size:9px;">BEST</span>'
+            if is_best else '<span style="color:var(--muted); font-size:11px;">—</span>'
+        )
+        ladder_rows += (
             f'<tr>'
             f'<td class="mono">{c["book"]}</td>'
-            f'<td class="num mono">{format_american(c["price"])}</td>'
-            f'<td class="num mono" {tone_style}>{c["implied"]*100:.2f}%</td>'
-            f'<td class="num mono" {tone_style}>{(fair_prob - c["implied"])*100:+.2f} pts</td>'
+            f'<td class="num mono">{c["implied"]*100:.2f}%</td>'
+            f'<td class="num mono {tone}">{edge_pts:+.2f} pts</td>'
+            f'<td>{label}</td>'
             f'</tr>'
         )
-    alt_table = ""
-    if alt_rows:
-        alt_table = (
-            '<div style="margin-top:14px;">'
-            '<div class="mono" style="font-size:10px; letter-spacing:0.14em; text-transform:uppercase; '
-            'color:var(--muted); margin-bottom:6px;">Price comparison</div>'
-            '<table class="ledger" style="margin:0;">'
-            '<thead><tr><th>Venue</th><th class="num">Price</th><th class="num">Implied</th><th class="num">Edge vs Pinn</th></tr></thead>'
-            f'<tbody>{alt_rows}</tbody></table>'
-            '</div>'
-        )
+    ladder_table = (
+        '<div class="mono" style="font-size:10px; letter-spacing:0.14em; text-transform:uppercase; '
+        'color:var(--muted); margin-bottom:6px;">Probability ladder</div>'
+        '<table class="ledger" style="margin:0;">'
+        '<thead><tr><th>Source</th><th class="num">Implied</th>'
+        '<th class="num">Edge vs fair</th><th></th></tr></thead>'
+        f'<tbody>{ladder_rows}</tbody></table>'
+        if ladder_rows else ''
+    )
+
+    # ----- EV decomposition -----
+    # Pulls apart the win/loss branches so the user can see the shape of the bet.
+    stake_1u = unit_dollars  # one unit in dollars
+    profit_1u = ((dec or 1) - 1) * stake_1u if dec else 0
+    ev_1u = (fair_prob * profit_1u) - ((1 - fair_prob) * stake_1u)
+    breakeven_pct = (1.0 / (dec or 1)) * 100 if dec else 0
+    ev_table = (
+        '<div class="mono" style="font-size:10px; letter-spacing:0.14em; text-transform:uppercase; '
+        'color:var(--muted); margin-bottom:6px;">EV math (per 1u)</div>'
+        '<table class="ledger" style="margin:0;">'
+        '<thead><tr><th>Component</th><th class="num">Value</th><th class="mono">Formula</th></tr></thead>'
+        '<tbody>'
+        f'<tr><td>Risk</td><td class="num mono">${stake_1u:,.2f}</td>'
+        f'<td class="mono" style="color:var(--muted); font-size:11px;">1u = {unit_pct*100:.1f}% of roll</td></tr>'
+        f'<tr><td>Decimal odds</td><td class="num mono">{dec:.4f}</td>'
+        f'<td class="mono" style="color:var(--muted); font-size:11px;">{best_price} American</td></tr>'
+        f'<tr><td>Profit if win</td><td class="num mono good">${profit_1u:,.2f}</td>'
+        f'<td class="mono" style="color:var(--muted); font-size:11px;">(dec − 1) × risk</td></tr>'
+        f'<tr><td>Loss if miss</td><td class="num mono bad">−${stake_1u:,.2f}</td>'
+        f'<td class="mono" style="color:var(--muted); font-size:11px;">risk</td></tr>'
+        f'<tr><td>Break-even %</td><td class="num mono">{breakeven_pct:.2f}%</td>'
+        f'<td class="mono" style="color:var(--muted); font-size:11px;">1 / decimal odds</td></tr>'
+        f'<tr style="background:color-mix(in oklab, var(--good) 10%, transparent);">'
+        f'<td><strong>Expected value / 1u</strong></td>'
+        f'<td class="num mono"><strong class="{"good" if ev_1u > 0 else "bad"}">${ev_1u:+,.2f}</strong></td>'
+        f'<td class="mono" style="color:var(--muted); font-size:11px;">p·win − (1−p)·risk</td></tr>'
+        '</tbody></table>'
+    )
+
+    # ----- Kelly math -----
+    full_kelly = (kelly_frac / kelly_mult) if kelly_mult > 0 else 0.0
+    cap_cash = stake_dollars  # already min-capped
+    kelly_table = (
+        '<div class="mono" style="font-size:10px; letter-spacing:0.14em; text-transform:uppercase; '
+        'color:var(--muted); margin-bottom:6px;">Kelly math</div>'
+        '<table class="ledger" style="margin:0;">'
+        '<thead><tr><th>Component</th><th class="num">Value</th><th class="mono">Note</th></tr></thead>'
+        '<tbody>'
+        f'<tr><td>Full Kelly fraction</td><td class="num mono">{full_kelly*100:.2f}%</td>'
+        f'<td class="mono" style="color:var(--muted); font-size:11px;">p·b − q / b</td></tr>'
+        f'<tr><td>Kelly multiplier</td><td class="num mono">×{kelly_mult:.2f}</td>'
+        f'<td class="mono" style="color:var(--muted); font-size:11px;">your conservatism dial</td></tr>'
+        f'<tr><td>Scaled Kelly</td><td class="num mono accent">{kelly_frac*100:.2f}%</td>'
+        f'<td class="mono" style="color:var(--muted); font-size:11px;">of bankroll</td></tr>'
+        f'<tr><td>Per-bet cap</td><td class="num mono">{max_bet/unit_pct:.1f}u</td>'
+        f'<td class="mono" style="color:var(--muted); font-size:11px;">hard ceiling</td></tr>'
+        f'<tr style="background:color-mix(in oklab, var(--accent) 10%, transparent);">'
+        f'<td><strong>Final stake</strong></td>'
+        f'<td class="num mono"><strong>{stake_u:.2f}u (${cap_cash:,.2f})</strong></td>'
+        f'<td class="mono" style="color:var(--muted); font-size:11px;">kelly ∩ cap</td></tr>'
+        '</tbody></table>'
+    )
+
+    # ----- Data-driven rationale (V1 style, no LLM required) -----
+    # Mix objective signals into human-readable paragraphs. Each paragraph has
+    # a stable focus (market, pricing, sizing, risk, state) so the reader can
+    # skim it like a research note.
+    def _edge_tier(pts):
+        if pts >= 5: return ("outlier", "This is in outlier territory for sharp-vs-sharp spread — most Pinnacle-rated edges live below 2 pts.")
+        if pts >= 3: return ("large", "This is a large edge by sharp-market standards; such gaps rarely survive the final hour.")
+        if pts >= 1.5: return ("solid", "A solid edge for Pinnacle-anchored pricing — the typical publishable band.")
+        if pts >= 0.5: return ("thin", "Thin but legitimate — Pinnacle-vs-Kalshi often lives right around here.")
+        return ("marginal", "A marginal edge; worth a flyer only if the risk cost is small.")
+    tier_name, tier_note = _edge_tier(edge_pct)
+
+    kelly_pct_of_cap = (stake_u / (max_bet / unit_pct)) if (max_bet / unit_pct) > 0 else 0
+    # Compare the best book's implied to the median of the ladder for a
+    # quick "is this one bookmaker, or is the whole market mispriced" read.
+    if len(candidates_sorted) >= 2:
+        med = sorted([c["implied"] for c in candidates_sorted])[len(candidates_sorted)//2]
+        median_gap = (fair_prob - med) * 100
+    else:
+        median_gap = edge_pct
+
+    # State paragraph.
+    if status_state == "post":
+        if grade == "win":
+            state_sent = f"The game is final and the pick <strong class='good'>won</strong>."
+        elif grade == "loss":
+            state_sent = f"The game is final and the pick <strong class='bad'>lost</strong>."
+        elif grade == "push":
+            state_sent = f"The game is final and the pick <strong>pushed</strong>."
+        else:
+            state_sent = "The game is final; manual grading required for this market."
+    elif status_state == "in":
+        if grade == "winning":
+            state_sent = f"The game is live and the pick is currently <strong class='good'>ahead</strong>."
+        elif grade == "losing":
+            state_sent = f"The game is live and the pick is currently <strong class='bad'>behind</strong>."
+        elif grade == "tied":
+            state_sent = f"The game is tied in-play; the pick's outcome is still open."
+        else:
+            state_sent = f"The game is live ({status_detail or 'in progress'})."
+    else:
+        state_sent = "Game has not kicked off yet; prices and the edge are still mobile."
+
+    rationale_html = (
+        '<div style="margin-top:14px; display:grid; grid-template-columns:1fr; gap:10px;">'
+        '<div style="padding:14px 16px; background:var(--card-elev); border-radius:8px; '
+        'font-size:13px; color:var(--ink-dim); line-height:1.65;">'
+        f'<div style="margin-bottom:8px; font-family:JetBrains Mono,monospace; font-size:10px; '
+        f'letter-spacing:0.14em; text-transform:uppercase; color:var(--muted);">'
+        f'Agent rationale · {tier_name} edge</div>'
+        # Market paragraph
+        f'<p style="margin:0 0 8px 0;"><strong>Market read.</strong> Pinnacle\'s no-vig says '
+        f'<strong>{fair_prob*100:.2f}%</strong> true for <em>{side_label}</em>. {best_book} is '
+        f'offering <strong>{best_price}</strong> ({best_imp*100:.2f}% implied), a '
+        f'<strong>{edge_pct:+.2f}-pt</strong> gap. {tier_note}</p>'
+        # Pricing/ladder paragraph
+        f'<p style="margin:0 0 8px 0;"><strong>Pricing.</strong> Across '
+        f'{len(candidates_sorted) or 1} source(s) scanned, the median implied price for this side '
+        f'leaves a <strong>{median_gap:+.2f}-pt</strong> gap to Pinnacle. '
+        + ('A tight ladder means the mispricing is concentrated at this book — more likely to steam.'
+           if abs(median_gap - edge_pct) < 1.0 else
+           'The ladder is wide — this book is the clear outlier; expect it to pull toward the sharp line.')
+        + '</p>'
+        # Sizing paragraph
+        f'<p style="margin:0 0 8px 0;"><strong>Sizing.</strong> Full Kelly points to '
+        f'<strong>{full_kelly*100:.2f}%</strong> of bankroll; after a '
+        f'<strong>{kelly_mult:.2f}×</strong> conservatism multiplier, that lands at '
+        f'<strong>{stake_u:.2f}u (${cap_cash:,.2f})</strong>, which is '
+        f'<strong>{kelly_pct_of_cap*100:.0f}%</strong> of the per-bet cap of '
+        f'<strong>{max_bet/unit_pct:.1f}u</strong>. '
+        + ('Right at the cap — a sign the scanner wants more, and the cap is doing its job.'
+           if kelly_pct_of_cap >= 0.95 else
+           'Comfortably inside the per-bet ceiling; no cap pressure here.')
+        + '</p>'
+        # Risk paragraph
+        f'<p style="margin:0 0 8px 0;"><strong>Risk.</strong> One decision; outcome resolves at ~'
+        f'<strong>{breakeven_pct:.2f}%</strong> break-even. Expected per unit: '
+        f'<strong class="{"good" if ev_1u > 0 else "bad"}">${ev_1u:+,.2f}</strong>, '
+        f'and the maximum drawdown on this ticket alone is <strong>{stake_u:.2f}u</strong>. '
+        f'Variance σ of a single Bernoulli bet at this price ≈ '
+        f'<strong>{math.sqrt(fair_prob*(1-fair_prob))*((dec or 1)-1)*stake_u:.2f}u</strong>.'
+        '</p>'
+        # State paragraph
+        f'<p style="margin:0;"><strong>Game state.</strong> {state_sent}</p>'
+        '</div>'
+        '</div>'
+    )
+
+    ladder_ev_kelly_grid = (
+        '<div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:14px; margin-top:16px;">'
+        f'<div>{ladder_table}</div>'
+        f'<div>{ev_table}</div>'
+        f'<div>{kelly_table}</div>'
+        '</div>'
+    )
 
     # Open-bet CTA
     cta_html = ""
@@ -1128,7 +1311,7 @@ def _render_single_pick_analysis(e, idx, total, unit_dollars, _units_fn, kelly_m
         f'{cta_html}'
         f'</div>'
         f'</div>'
-        # Metric blocks
+        # Headline metric blocks
         f'<div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(140px, 1fr)); gap:10px;">'
         f'<div class="metric-card"><div class="label">Price</div><div class="value">{best_price}</div><div class="foot">{best_book}</div></div>'
         f'<div class="metric-card"><div class="label">Market IP</div><div class="value">{best_imp*100:.2f}%</div><div class="foot">at that price</div></div>'
@@ -1137,17 +1320,10 @@ def _render_single_pick_analysis(e, idx, total, unit_dollars, _units_fn, kelly_m
         f'<div class="metric-card"><div class="label">Stake</div><div class="value accent">{stake_u:.1f}u</div><div class="foot">of {max_bet/unit_pct:.1f}u max</div></div>'
         f'<div class="metric-card"><div class="label">EV / 100u</div><div class="value {"good" if ev_pct > 0 else ""}">{ev_pct:+.2f}%</div><div class="foot">expected per 100u risked</div></div>'
         f'</div>'
-        # Reasoning
-        f'<div style="margin-top:16px; padding:12px 14px; background:var(--card-elev); border-radius:8px; '
-        f'font-size:13px; color:var(--ink-dim); line-height:1.6;">'
-        f'<strong>Rationale.</strong> Pinnacle\'s no-vig fair prob says this outcome happens '
-        f'<strong>{fair_prob*100:.2f}%</strong> of the time. {best_book} is offering it at '
-        f'<strong>{best_price}</strong> ({best_imp*100:.2f}% implied), underestimating the true prob by '
-        f'<strong>{edge_pct:+.2f} pts</strong>. Quarter-Kelly says stake '
-        f'<strong>{kelly_frac*100:.2f}%</strong> of bankroll (<strong>{stake_u:.1f}u</strong>), capped by '
-        f'the <strong>{max_bet/unit_pct:.1f}u</strong> per-bet rule and <strong>{daily_cap_pct/unit_pct:.1f}u</strong> daily cap.'
-        f'</div>'
-        f'{alt_table}'
+        # Three-column quant decomposition (V1-style)
+        f'{ladder_ev_kelly_grid}'
+        # Multi-paragraph rationale
+        f'{rationale_html}'
         # Nav footer
         f'<div style="margin-top:16px; padding-top:12px; border-top:1px solid var(--rule); '
         f'display:flex; justify-content:space-between; align-items:center;">'

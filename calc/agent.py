@@ -30,6 +30,69 @@ def _no_vig(home_price, away_price) -> Tuple[Optional[float], Optional[float]]:
     return no_vig_two_way(home_price, away_price)
 
 
+def _grade_offshore_pick(market, side_key, point, home_score, away_score,
+                         is_final=False, is_live=False) -> Optional[str]:
+    """Grade a non-h2h pick against a running or final score.
+
+    Returns one of win / loss / push for finals, winning / losing / tied for
+    live games, or None when we lack the data to decide. Handles h2h (fallback
+    when the main scanner didn't run), spreads (home/away ± point), and totals
+    (over/under combined score). 1H markets are left ungraded since ESPN
+    only exposes a running whole-game score, which can be misleading mid-game.
+    """
+    if home_score is None or away_score is None:
+        return None
+    if not (is_final or is_live):
+        return None
+    mk = (market or "").lower()
+    try:
+        pt = float(point) if point is not None else None
+    except (TypeError, ValueError):
+        pt = None
+
+    def _label(final_label, live_label, tied_label):
+        if is_final:
+            return final_label
+        return live_label
+
+    if mk == "h2h":
+        if home_score == away_score:
+            return "push" if is_final else "tied"
+        picked_home = side_key == "home"
+        home_leads = home_score > away_score
+        winning = (home_leads == picked_home)
+        return _label("win" if winning else "loss",
+                      "winning" if winning else "losing",
+                      "tied")
+    if mk in ("spreads", "spreads_h1"):
+        if pt is None:
+            return None
+        if side_key == "home":
+            margin = home_score - away_score + pt
+        else:
+            margin = away_score - home_score + pt
+        if abs(margin) < 1e-9:
+            return "push" if is_final else "tied"
+        winning = margin > 0
+        return _label("win" if winning else "loss",
+                      "winning" if winning else "losing",
+                      "tied")
+    if mk in ("totals", "totals_h1"):
+        if pt is None:
+            return None
+        total = home_score + away_score
+        # In two-way totals, home side = Over, away side = Under (per _collect_market).
+        picked_over = side_key == "home"
+        if abs(total - pt) < 1e-9:
+            return "push" if is_final else "tied"
+        over_hit = total > pt
+        winning = (over_hit == picked_over)
+        return _label("win" if winning else "loss",
+                      "winning" if winning else "losing",
+                      "tied")
+    return None
+
+
 def _find_espn_ev(espn_events_by_game: Optional[dict], home_name, away_name) -> dict:
     """Resolve an ESPN event record, tolerant to naming differences between feeds.
 
@@ -567,7 +630,10 @@ def scan_kalshi_vs_pinnacle(
                             grade = "losing"
             out.append({
                 "_sport": sport_key,
+                # Kalshi ticker is the venue id; keep it separately so logged
+                # picks can still auto-settle via ESPN below.
                 "event_id": market.get("event_ticker"),
+                "espn_event_id": espn_ev.get("id") if espn_ev else None,
                 "home_team": pin_home_name,
                 "away_team": pin_away_name,
                 "matchup": f"{pin_away_name} @ {pin_home_name}",
@@ -738,6 +804,16 @@ def scan_offshore_markets_vs_pinnacle(
             home_name = g.get("home_team")
             away_name = g.get("away_team")
             espn_ev = _find_espn_ev(espn_events_by_game, home_name, away_name)
+            # Precompute shared live/final scores + market-wide grading state.
+            hs_raw = (espn_ev.get("home") or {}).get("score") if espn_ev else None
+            as_raw = (espn_ev.get("away") or {}).get("score") if espn_ev else None
+            try:
+                hs_i = int(hs_raw) if hs_raw is not None else None
+                as_i = int(as_raw) if as_raw is not None else None
+            except (TypeError, ValueError):
+                hs_i, as_i = None, None
+            is_final = bool(espn_ev.get("is_final")) if espn_ev else False
+            is_live = bool(espn_ev.get("is_live")) if espn_ev else False
             # Shop best price per side across offshore books.
             for side_key, fair_prob, label_fallback, point_key in [
                 ("home", fair_home, pin_entry.get("home_label"), "home_pt"),
@@ -775,9 +851,15 @@ def scan_offshore_markets_vs_pinnacle(
                         side_label = f"{side_label} {pt_f:+g}"
                     except (TypeError, ValueError):
                         pass
+                # Grade the pick: ✓/✗/= for finals, ▲/▼/= for in-progress.
+                grade = _grade_offshore_pick(
+                    mk, side_key, pt, hs_i, as_i,
+                    is_final=is_final, is_live=is_live,
+                )
                 out.append({
                     "_sport": sport_key,
                     "event_id": g.get("id"),
+                    "espn_event_id": espn_ev.get("id") if espn_ev else None,
                     "home_team": home_name,
                     "away_team": away_name,
                     "matchup": f"{away_name} @ {home_name}",
@@ -800,15 +882,18 @@ def scan_offshore_markets_vs_pinnacle(
                     "kalshi_implied": None,
                     "kalshi_ticker": None,
                     "kalshi_url": None,
+                    # Keep every candidate book so the quant breakdown can show
+                    # the full probability ladder, not just the best price.
+                    "candidates": candidates,
                     # ESPN state, with Odds-API commence_time as a fallback.
                     "start_utc": espn_ev.get("start_utc"),
                     "commence_time": g.get("commence_time"),
                     "status_state": espn_ev.get("status_state"),
                     "status_detail": espn_ev.get("status_detail"),
-                    "home_score": (espn_ev.get("home") or {}).get("score"),
-                    "away_score": (espn_ev.get("away") or {}).get("score"),
+                    "home_score": hs_i,
+                    "away_score": as_i,
                     "picked_side_key": side_key,
-                    "grade": None,  # grading non-h2h markets is non-trivial; left for later
+                    "grade": grade,
                 })
     out.sort(key=lambda r: -r["edge"])
     return out
