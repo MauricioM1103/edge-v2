@@ -172,11 +172,11 @@ def game_card(
     def _resolve_book_prices():
         """Return (h2h, spr, tot, book_label, book_source_note) for primary_book.
 
-        Falls back cleanly when the chosen book has no quote on this game:
-          kalshi    -> Pinnacle -> DraftKings -> Consensus
-          pinnacle  -> DraftKings -> Consensus
-          draftkings-> Pinnacle -> Consensus
-          consensus -> consensus only
+        For Kalshi primary: strict - show Kalshi moneyline only, never fall back
+          to another book (user explicitly wants Kalshi to be the main book).
+        For sportsbook primaries: fall back to a close substitute if the book
+          isn't in this feed (Pinnacle->DK; DK->Pinnacle); never silently return
+          another book's prices without labeling that it's a fallback.
         """
         h2h_c = (odds_meta or {}).get("h2h") or {}
         spr_c = (odds_meta or {}).get("spreads") or {}
@@ -214,18 +214,23 @@ def game_card(
                 return h2h_c, spr_c, tot_c, "Consensus", f"{h2h_c.get('book_count') or 0} books"
             return None
 
-        # Fallback chains
+        # Kalshi primary = Kalshi only. No silent fallback.
+        if primary_book == "kalshi":
+            k = _try_kalshi()
+            if k:
+                return k
+            return None, None, None, "Kalshi", "no market"
+
         order = {
-            "kalshi":     [_try_kalshi, lambda: _try_book("Pinnacle", "fallback · sharp"), lambda: _try_book("DraftKings", "fallback · retail"), _consensus],
             "pinnacle":   [lambda: _try_book("Pinnacle", "sharpest book"), lambda: _try_book("DraftKings", "fallback"), _consensus],
             "draftkings": [lambda: _try_book("DraftKings", "US retail"), lambda: _try_book("Pinnacle", "fallback · sharp"), _consensus],
             "consensus":  [_consensus],
         }
-        for fn in order.get(primary_book or "kalshi", [_consensus]):
+        for fn in order.get(primary_book or "consensus", [_consensus]):
             r = fn()
             if r:
                 return r
-        return None, None, None, (primary_book or "kalshi").title(), "no quote available"
+        return None, None, None, (primary_book or "consensus").title(), "no quote available"
 
     lines_html = ""
     if odds_meta or kalshi_prob_home is not None:

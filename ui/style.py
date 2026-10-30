@@ -284,6 +284,14 @@ table.ledger tr:hover { background: color-mix(in oklab, var(--rule) 30%, transpa
   border-color: color-mix(in oklab, var(--bad) 30%, var(--rule));
 }
 
+/* Clean up Streamlit's sidebar collapsed-state controls (prevents the "double arrow"
+   that appears when both the collapse control AND the brand mark land near the top-left). */
+[data-testid="collapsedControl"] { padding: 6px; }
+[data-testid="collapsedControl"] svg { height: 20px; width: 20px; }
+header[data-testid="stHeader"] { background: transparent; }
+/* Hide the deploy / status button we don't need in production. */
+[data-testid="stDecoration"] { display: none; }
+
 /* fonts */
 @import url('https://fonts.googleapis.com/css2?family=Fraunces:ital,wght@0,400;0,500;1,400&family=Public+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
 </style>

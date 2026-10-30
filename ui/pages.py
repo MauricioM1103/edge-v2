@@ -334,14 +334,31 @@ def _render_agent_panel(odds_games, kalshi_cash, settings, kalshi_probs_by_game=
         edge_pct = e["edge"] * 100.0
         tone = "ev-plus" if edge_pct > 0 else "ev-minus"
         pt = e.get("point")
-        pt_s = f" {pt:+g}" if pt is not None else ""
+        market = (e.get("market") or "").lower()
+        # Format the full pick in a human / Kalshi-like way.
+        if market == "spreads" and pt is not None:
+            try:
+                pt_f = float(pt)
+                pt_str = f" {pt_f:+g}" if abs(pt_f - round(pt_f)) > 0.49 else f" {pt_f:+.1f}"
+            except (TypeError, ValueError):
+                pt_str = ""
+            full_pick = f"{e['side_label']}{pt_str}"
+        elif market == "totals" and pt is not None:
+            # side_label is already "Over" / "Under"
+            try:
+                pt_f = float(pt)
+            except (TypeError, ValueError):
+                pt_f = 0
+            full_pick = f"{e['side_label']} {pt_f:g}"
+        else:
+            full_pick = e["side_label"]
         fair_src = e.get("fair_source") or "—"
         fair_badge_cls = "accent" if "kalshi" in fair_src.lower() else ("good" if "pinnacle" in fair_src.lower() else "")
         rows.append(
             f'<tr>'
             f'<td><strong>{e["matchup"]}</strong></td>'
-            f'<td class="mono" style="color:var(--muted);">{e["market"].upper()}</td>'
-            f'<td><strong>{e["side_label"]}{pt_s}</strong></td>'
+            f'<td class="mono" style="color:var(--muted);">{market.upper()}</td>'
+            f'<td><strong>{full_pick}</strong></td>'
             f'<td class="num mono">{format_american(e["price"])}</td>'
             f'<td class="mono">{e["book"]}</td>'
             f'<td class="num mono">{e["book_implied"]*100:.1f}%</td>'

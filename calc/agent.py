@@ -237,6 +237,36 @@ def scan_game(
     return results
 
 
+def _is_half_point(point) -> bool:
+    """True when point exists and ends in .5 (Kalshi-style; no push risk)."""
+    if point is None:
+        return False
+    try:
+        return abs(float(point) - round(float(point))) > 0.49
+    except (TypeError, ValueError):
+        return False
+
+
+def _dedupe_best(edges: List[dict]) -> List[dict]:
+    """Collapse edges that share (event, market, side, point) to the single best price.
+
+    "Best" = largest edge (longest odds, since fair prob is fixed per side-point).
+    Keeps the one row that lets you shop the top number across all books.
+    """
+    best: Dict[tuple, dict] = {}
+    for e in edges:
+        key = (
+            e.get("event_id"),
+            e.get("market"),
+            (e.get("side_label") or "").lower(),
+            e.get("point"),
+        )
+        cur = best.get(key)
+        if cur is None or e.get("edge", 0) > cur.get("edge", 0):
+            best[key] = e
+    return list(best.values())
+
+
 def scan_all(
     odds_games: list,
     bankroll_cash: float,
@@ -247,10 +277,16 @@ def scan_all(
     min_books: int = 1,
     max_bet_pct: float = 0.05,
     markets: Tuple[str, ...] = ("h2h", "spreads", "totals"),
+    half_points_only: bool = True,
+    dedupe_best_price: bool = True,
 ) -> List[dict]:
     """Scan every game, every market.
 
     kalshi_probs_by_game: {game_id: P(home_wins_per_Kalshi)}.
+    half_points_only: when True, drop spreads/totals whose point is a whole number
+      (eliminates push risk; mirrors how Kalshi lists its margin markets).
+    dedupe_best_price: when True, collapse identical (side, point) picks across
+      books down to the single best-priced row so the agent table doesn't repeat.
     """
     try:
         bankroll_cash = float(bankroll_cash) if bankroll_cash is not None else 0.0
@@ -273,12 +309,17 @@ def scan_all(
                 max_bet_pct=max_bet_pct,
             )
             for e in edges:
+                # Keep h2h always; filter spreads/totals to half-points if asked.
+                if half_points_only and mk in ("spreads", "totals") and not _is_half_point(e.get("point")):
+                    continue
                 e["event_id"] = g.get("id")
                 e["commence_time"] = g.get("commence_time")
                 e["home_team"] = g.get("home_team")
                 e["away_team"] = g.get("away_team")
                 e["matchup"] = f"{g.get('away_team','?')} @ {g.get('home_team','?')}"
                 out.append(e)
+    if dedupe_best_price:
+        out = _dedupe_best(out)
     out.sort(key=lambda r: -r["edge"])
     return out
 
