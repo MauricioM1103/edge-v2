@@ -170,46 +170,62 @@ def game_card(
         """
 
     def _resolve_book_prices():
-        """Return (h2h, spr, tot, book_label, book_source_note) for primary_book."""
-        if not odds_meta:
-            return None, None, None, (primary_book or "kalshi").title(), "no odds data"
-        h2h_c = odds_meta.get("h2h") or {}
-        spr_c = odds_meta.get("spreads") or {}
-        tot_c = odds_meta.get("totals") or {}
-        raw = odds_meta.get("raw")
-        if primary_book == "kalshi":
-            # Kalshi only has moneyline. Build a synthetic h2h from kalshi_prob_home.
-            if kalshi_prob_home is not None:
-                try:
-                    from calc.odds import decimal_to_american
-                    hp = decimal_to_american(1.0 / kalshi_prob_home) if kalshi_prob_home > 0 else None
-                    ap = decimal_to_american(1.0 / (1.0 - kalshi_prob_home)) if kalshi_prob_home < 1 else None
-                    return (
-                        {"home_price": hp, "away_price": ap, "book_count": 1},
-                        None, None,
-                        "Kalshi", "exchange — no vig",
-                    )
-                except Exception:
-                    pass
-            return None, None, None, "Kalshi", "no matching market"
-        if primary_book == "pinnacle" and raw:
+        """Return (h2h, spr, tot, book_label, book_source_note) for primary_book.
+
+        Falls back cleanly when the chosen book has no quote on this game:
+          kalshi    -> Pinnacle -> DraftKings -> Consensus
+          pinnacle  -> DraftKings -> Consensus
+          draftkings-> Pinnacle -> Consensus
+          consensus -> consensus only
+        """
+        h2h_c = (odds_meta or {}).get("h2h") or {}
+        spr_c = (odds_meta or {}).get("spreads") or {}
+        tot_c = (odds_meta or {}).get("totals") or {}
+        raw = (odds_meta or {}).get("raw")
+
+        def _try_kalshi():
+            if kalshi_prob_home is None:
+                return None
+            try:
+                from calc.odds import decimal_to_american
+                hp = decimal_to_american(1.0 / kalshi_prob_home) if kalshi_prob_home > 0 else None
+                ap = decimal_to_american(1.0 / (1.0 - kalshi_prob_home)) if kalshi_prob_home < 1 else None
+                return (
+                    {"home_price": hp, "away_price": ap, "book_count": 1},
+                    None, None,
+                    "Kalshi", "exchange · no vig",
+                )
+            except Exception:
+                return None
+
+        def _try_book(name, note):
+            if not raw:
+                return None
             from apis.book_filter import book_market
-            h2h_b = book_market(raw, "Pinnacle", "h2h") or {}
-            spr_b = book_market(raw, "Pinnacle", "spreads") or {}
-            tot_b = book_market(raw, "Pinnacle", "totals") or {}
-            if h2h_b or spr_b or tot_b:
-                return h2h_b, spr_b, tot_b, "Pinnacle", "sharpest book"
-            return None, None, None, "Pinnacle", "not quoted by this feed"
-        if primary_book == "draftkings" and raw:
-            from apis.book_filter import book_market
-            h2h_b = book_market(raw, "DraftKings", "h2h") or {}
-            spr_b = book_market(raw, "DraftKings", "spreads") or {}
-            tot_b = book_market(raw, "DraftKings", "totals") or {}
-            if h2h_b or spr_b or tot_b:
-                return h2h_b, spr_b, tot_b, "DraftKings", "US retail book"
-            return None, None, None, "DraftKings", "not quoted"
-        # default/consensus
-        return h2h_c, spr_c, tot_c, "Consensus", f"{h2h_c.get('book_count') or 0} books"
+            h2h_b = book_market(raw, name, "h2h") or {}
+            spr_b = book_market(raw, name, "spreads") or {}
+            tot_b = book_market(raw, name, "totals") or {}
+            if h2h_b.get("home_price") is not None or h2h_b.get("away_price") is not None:
+                return h2h_b, spr_b, tot_b, name, note
+            return None
+
+        def _consensus():
+            if h2h_c.get("home_price") is not None:
+                return h2h_c, spr_c, tot_c, "Consensus", f"{h2h_c.get('book_count') or 0} books"
+            return None
+
+        # Fallback chains
+        order = {
+            "kalshi":     [_try_kalshi, lambda: _try_book("Pinnacle", "fallback · sharp"), lambda: _try_book("DraftKings", "fallback · retail"), _consensus],
+            "pinnacle":   [lambda: _try_book("Pinnacle", "sharpest book"), lambda: _try_book("DraftKings", "fallback"), _consensus],
+            "draftkings": [lambda: _try_book("DraftKings", "US retail"), lambda: _try_book("Pinnacle", "fallback · sharp"), _consensus],
+            "consensus":  [_consensus],
+        }
+        for fn in order.get(primary_book or "kalshi", [_consensus]):
+            r = fn()
+            if r:
+                return r
+        return None, None, None, (primary_book or "kalshi").title(), "no quote available"
 
     lines_html = ""
     if odds_meta or kalshi_prob_home is not None:
@@ -227,25 +243,31 @@ def game_card(
                 move_html = f'<span class="chip {("good" if delta>0 else "warn")}">{label} {delta*100:+.1f}%</span>'
 
         def _na_block(label):
-            return f'<div class="gc-line"><div class="label">{label}</div><div class="row"><span class="side" style="font-size:10.5px;">not on {book_label}</span></div></div>'
+            return f'<div class="gc-line empty"><div class="label">{label}</div><div class="row"><span class="side" style="font-size:10px; opacity:0.5;">—</span></div></div>'
 
-        ml_block = _market_block("Moneyline", h2h.get("home_price"), h2h.get("away_price")) if h2h.get("home_price") is not None or h2h.get("away_price") is not None else _na_block("Moneyline")
-        sp_block = _market_block("Spread", spr.get("home_price"), spr.get("away_price"), spr.get("home_point"), spr.get("away_point")) if spr.get("home_price") is not None or spr.get("away_price") is not None else _na_block("Spread")
-        tt_block = _market_block("Total", tot.get("home_price"), tot.get("away_price")) if tot.get("home_price") is not None or tot.get("away_price") is not None else _na_block("Total")
+        has_ml = h2h.get("home_price") is not None or h2h.get("away_price") is not None
+        has_sp = spr.get("home_price") is not None or spr.get("away_price") is not None
+        has_tt = tot.get("home_price") is not None or tot.get("away_price") is not None
+
+        ml_block = _market_block("Moneyline", h2h.get("home_price"), h2h.get("away_price")) if has_ml else _na_block("Moneyline")
+        sp_block = _market_block("Spread", spr.get("home_price"), spr.get("away_price"), spr.get("home_point"), spr.get("away_point")) if has_sp else _na_block("Spread")
+        tt_block = _market_block("Total", tot.get("home_price"), tot.get("away_price")) if has_tt else _na_block("Total")
+
+        # Kalshi carries only a moneyline - render just that column instead of three "—" cells.
+        if primary_book == "kalshi" and has_ml and not has_sp and not has_tt:
+            lines_grid = f'<div class="gc-lines" style="grid-template-columns: 1fr;">{ml_block}</div>'
+        else:
+            lines_grid = f'<div class="gc-lines">{ml_block}{sp_block}{tt_block}</div>'
 
         lines_html = f"""
         <div class="gc-head">
           <div style="display:flex; gap:6px; align-items:center;">
             <span class="chip accent">{book_label}</span>
-            <span class="chip" style="font-size:9px;">{book_note}</span>
+            <span class="chip" style="font-size:9px; opacity:0.75;">{book_note}</span>
             {move_html}
           </div>
         </div>
-        <div class="gc-lines">
-          {ml_block}
-          {sp_block}
-          {tt_block}
-        </div>
+        {lines_grid}
         """
     else:
         lines_html = """
@@ -271,10 +293,10 @@ def game_card(
                 return "—"
             return f"{v*100:.1f}%"
         rows = []
-        # order: Pinnacle (sharpest book) → exchanges (no-vig) → DK (public book) → consensus
+        # order: Kalshi (default primary) → sharp refs → DK/consensus
         for label, key, chip_cls in [
-            ("Pinnacle",   "pinnacle",   "good"),
             ("Kalshi",     "kalshi",     "accent"),
+            ("Pinnacle",   "pinnacle",   "good"),
             ("Polymarket", "polymarket", "accent"),
             ("Betfair",    "betfair",    "accent"),
             ("DraftKings", "dk",         "warn"),
@@ -286,18 +308,22 @@ def game_card(
             if ah == "—" and hh == "—":
                 continue
             rows.append(
-                f'<tr>'
-                f'<td style="color:var(--muted); font-size:11px;"><span class="chip {chip_cls}" style="padding:2px 6px;">{label}</span></td>'
-                f'<td class="mono num" style="text-align:right;">{ah}</td>'
-                f'<td class="mono num" style="text-align:right; color:var(--accent);">{hh}</td>'
-                f'</tr>'
+                '<tr>'
+                f'<td style="padding:4px 0;"><span class="chip {chip_cls}" style="padding:2px 7px; font-size:9.5px;">{label}</span></td>'
+                f'<td class="mono" style="padding:4px 0; text-align:right; font-size:12.5px; color:var(--ink); font-weight:500;">{ah}</td>'
+                f'<td class="mono" style="padding:4px 0 4px 10px; text-align:right; font-size:12.5px; color:var(--accent); font-weight:600;">{hh}</td>'
+                '</tr>'
             )
         if rows:
+            away_abbr = (away.get("abbr") or "AWAY")
+            home_abbr = (home.get("abbr") or "HOME")
             prob_strip_html = (
                 '<div style="border-top: 1px dashed var(--rule); padding-top: 10px;">'
-                '<div class="label mono" style="font-size:10px; letter-spacing:0.14em; text-transform:uppercase; color:var(--muted); margin-bottom:6px;">Live Implied Probability</div>'
-                '<table style="width:100%; border-collapse:collapse;" class="prob-strip">'
-                f'<thead><tr><th></th><th style="text-align:right; font-size:10px; letter-spacing:0.1em; text-transform:uppercase; color:var(--muted); font-weight:500;">{(away.get("abbr") or "AWAY")}</th><th style="text-align:right; font-size:10px; letter-spacing:0.1em; text-transform:uppercase; color:var(--muted); font-weight:500;">{(home.get("abbr") or "HOME")}</th></tr></thead>'
+                '<div style="display:flex; justify-content:space-between; align-items:baseline; margin-bottom:6px;">'
+                '<div class="mono" style="font-size:9.5px; letter-spacing:0.14em; text-transform:uppercase; color:var(--muted);">Implied win probability</div>'
+                f'<div class="mono" style="font-size:9.5px; letter-spacing:0.14em; color:var(--muted);">{away_abbr}&nbsp;·&nbsp;<span style="color:var(--accent);">{home_abbr}</span></div>'
+                '</div>'
+                '<table style="width:100%; border-collapse:collapse;">'
                 f'<tbody>{"".join(rows)}</tbody>'
                 '</table>'
                 '</div>'

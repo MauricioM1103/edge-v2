@@ -236,15 +236,34 @@ def render_dashboard(settings: dict):
     # 3-column game grid - Streamlit columns to get real multi-column
     st.markdown('### Today\'s matchups')
     primary_book = settings.get("primary_book") or "kalshi"
+    extra_sources = set(settings.get("extra_sources") or [])
+    # Kalshi always shows in the strip; the user toggles the rest.
+    visible_sources = {"kalshi"} | extra_sources
     cols = st.columns(2)
     for i, (ev, odds_meta, exch_probs) in enumerate(merged):
         with cols[i % 2]:
-            prob_sources = _prob_sources_for(
+            all_sources = _prob_sources_for(
                 odds_meta,
                 kalshi_prob_home=exch_probs.get("kalshi"),
                 polymarket_prob_home=exch_probs.get("polymarket"),
                 betfair_prob_home=exch_probs.get("betfair"),
             )
+            # Filter down to what the user asked to see.
+            prob_sources = None
+            if all_sources:
+                # map UI key -> prob_sources key (dk == draftkings)
+                key_map = {
+                    "kalshi": "kalshi", "pinnacle": "pinnacle",
+                    "draftkings": "dk", "polymarket": "polymarket",
+                    "betfair": "betfair", "consensus": "consensus",
+                }
+                prob_sources = {
+                    key_map[k]: all_sources.get(key_map[k])
+                    for k in visible_sources
+                    if all_sources.get(key_map.get(k, k))
+                }
+                if not prob_sources:
+                    prob_sources = None
             game_card(
                 ev, odds_meta,
                 prob_sources=prob_sources,

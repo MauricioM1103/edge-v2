@@ -122,8 +122,21 @@ def _sidebar_settings() -> dict:
             }[k],
             index=0,
             key="sb_primary_book",
-            help="Pick which book's lines show as the main numbers on each game card. "
-                 "All sources still appear in the implied-probability strip.",
+        )
+        # Default: show ONLY Kalshi in the prob-strip. Toggle others on explicitly.
+        extra_sources = st.multiselect(
+            "Also show in implied-prob strip",
+            options=["pinnacle", "draftkings", "polymarket", "betfair", "consensus"],
+            format_func=lambda k: {
+                "pinnacle":   "Pinnacle (sharp)",
+                "draftkings": "DraftKings",
+                "polymarket": "Polymarket (exchange)",
+                "betfair":    "Betfair (exchange)",
+                "consensus":  "Consensus (all books)",
+            }[k],
+            default=[],
+            key="sb_extra_sources",
+            help="Kalshi always shows. Pick any additional sources to compare side-by-side.",
         )
 
         # ----- CLASSIC UNITS -----
@@ -199,6 +212,7 @@ def _sidebar_settings() -> dict:
         "kalshi_cash": kalshi_cash,
         "kalshi_source": kalshi_source,
         "primary_book": primary_book,
+        "extra_sources": extra_sources,
         "agent_kelly": agent_kelly,
         "agent_min_edge": agent_min_edge,
         "agent_min_books": agent_min_books,
