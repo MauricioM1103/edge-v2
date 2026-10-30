@@ -513,13 +513,19 @@ def _render_agent_panel(odds_games, kalshi_cash, settings,
         except Exception:
             pass
     summary = agent_calc.summarize_edges(edges)
+    unit_pct = settings.get("unit_pct") or 0.01
+    unit_dollars = kalshi_cash * unit_pct
+    # Convert stakes to units for display.
+    def _to_units(dollars):
+        return (dollars / unit_dollars) if unit_dollars > 0 else 0.0
+    total_stake_units = _to_units(summary['total_stake'])
+    cap_units = _to_units(kalshi_cash * daily_cap_pct)
     exposure_pct = (summary['total_stake'] / kalshi_cash) * 100 if kalshi_cash else 0
-    cap_dollars = kalshi_cash * daily_cap_pct
     exposure_tone = "warn" if exposure_pct > daily_cap_pct * 100 * 0.9 else ("good" if exposure_pct > 0 else "")
     metric_row([
         {"label": "Edges", "value": str(summary["count"]), "foot": f"≥{min_edge*100:.1f}% edge", "tone": "good" if summary["count"] else ""},
         {"label": "Best", "value": f"{(summary['best_edge'] or 0)*100:+.1f}pts" if summary["best_edge"] else "—"},
-        {"label": "Total stake", "value": f"${summary['total_stake']:,.0f}", "foot": f"of ${cap_dollars:,.0f} cap", "tone": exposure_tone},
+        {"label": "Total stake", "value": f"{total_stake_units:.1f}u", "foot": f"of {cap_units:.1f}u cap", "tone": exposure_tone},
         {"label": "Exposure", "value": f"{exposure_pct:.1f}%", "foot": f"{daily_cap_pct*100:.0f}% cap today", "tone": exposure_tone},
         {"label": "Avg edge", "value": f"{(summary['avg_edge'] or 0)*100:+.1f}pts" if summary["avg_edge"] else "—"},
     ])
@@ -638,7 +644,7 @@ def _render_agent_panel(odds_games, kalshi_cash, settings,
             f'<td class="num" style="text-align:right;">{kalshi_cell}</td>'
             f'<td class="num mono" style="color:var(--good);">{e["fair_prob"]*100:.1f}%</td>'
             f'<td class="num mono {tone}"><strong>{edge_pct:+.2f}</strong></td>'
-            f'<td class="num mono"><strong>${e["stake_dollars"]:,.2f}</strong></td>'
+            f'<td class="num mono"><strong>{_to_units(e["stake_dollars"]):.2f}u</strong></td>'
             f'<td>{_grade_cell(e)}</td>'
             f'<td>{link_cell}</td>'
             f'</tr>'
@@ -656,7 +662,7 @@ def _render_agent_panel(odds_games, kalshi_cash, settings,
         '<th class="num" title="Kalshi\'s YES price for comparison">Kalshi ¢</th>'
         '<th class="num" title="Pinnacle no-vig fair probability">Pinn fair</th>'
         '<th class="num">Edge (pts)</th>'
-        '<th class="num">Stake</th>'
+        '<th class="num" title="Stake in units. 1u = your configured unit size (default 1% of Kalshi cash).">Stake (u)</th>'
         '<th>Result</th>'
         '<th></th>'
         '</tr></thead>'
@@ -722,12 +728,13 @@ def _render_agent_panel(odds_games, kalshi_cash, settings,
             best_price = format_american(e.get("price"))
             kurl = e.get("kalshi_url") or "https://kalshi.com/markets"
             cols = st.columns([5, 1, 1, 1, 1])
+            stake_u = _to_units(e.get("stake_dollars") or 0)
             with cols[0]:
                 st.markdown(
                     f"**{matchup}** — {side_label}  "
                     f"<span style='color:var(--muted);font-size:12px;'>· {best_book} @ **{best_price}** · "
                     f"<span style='color:var(--good);'>+{edge_pct:.2f}pts</span> · "
-                    f"${e.get('stake_dollars'):,.2f}</span>",
+                    f"**{stake_u:.2f}u**</span>",
                     unsafe_allow_html=True,
                 )
             cols[1].markdown(f"**{best_price}**")
@@ -753,7 +760,7 @@ def _render_agent_panel(odds_games, kalshi_cash, settings,
                     "notes": f"{best_book} @ {best_price} vs Pinnacle · edge {edge_pct:+.2f}pts · Kalshi {int(e.get('kalshi_price_cents') or 0)}¢",
                 })
                 st.cache_data.clear()
-                st.toast(f"Logged: {side_label} @ {best_price} ({best_book})", icon="✅")
+                st.toast(f"Logged: {side_label} @ {best_price} · {stake_u:.2f}u ({best_book})", icon="✅")
 
     if overflow_funded:
         with st.expander(f"➕ {len(overflow_funded)} more funded picks", expanded=False):
@@ -787,8 +794,8 @@ def _render_agent_panel(odds_games, kalshi_cash, settings,
         f'(<em>Bovada, LowVig.ag, BetOnline.ag, BetUS, MyBookie.ag</em>) against <strong>Pinnacle no-vig</strong>. '
         f'For each outcome, the <strong>best price</strong> wins the row — bet on whichever book is shown. '
         f'Offshore books tolerate winning accounts; retail (DK/FD/MGM) are deliberately excluded. '
-        f'Stakes = <strong>{kelly_mult*100:.0f}%-Kelly</strong> × ${kalshi_cash:,.2f}, '
-        f'per-bet cap <strong>{max_bet*100:.1f}%</strong>, daily exposure cap <strong>{daily_cap_pct*100:.0f}%</strong>.'
+        f'Stakes sized at <strong>{kelly_mult*100:.0f}%-Kelly</strong>, 1u = {unit_pct*100:.1f}% of your Kalshi cash, '
+        f'per-bet cap <strong>{max_bet/unit_pct:.1f}u</strong>, daily total cap <strong>{daily_cap_pct/unit_pct:.1f}u</strong>.'
         '</div>'
     )
 

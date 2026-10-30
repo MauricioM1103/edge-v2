@@ -13,8 +13,9 @@ from typing import Any, Dict
 _DEFAULTS: Dict[str, Any] = {
     "sport_group": "US Majors",
     "sport": "nfl",
-    # Unit = this fraction of live Kalshi cash. 0.10 = 10%.
-    "unit_pct_of_kalshi": 0.10,
+    # Unit = this fraction of live Kalshi cash. Default 1% follows pro convention:
+    # 1u = 1% of bankroll, typical plays 0.5-3u, max confidence = 5u.
+    "unit_pct_of_kalshi": 0.01,
     # Fallback bankroll used when Kalshi cash is unavailable.
     "manual_kalshi_cash": 500.0,
     # Lines display

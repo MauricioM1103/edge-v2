@@ -146,19 +146,20 @@ def _sidebar_settings() -> dict:
                 settings_store.save({"manual_kalshi_cash": manual_fallback})
         kalshi_source = live_src or ("manual" if kalshi_cash else None)
 
-        # Unit = X% of (live) Kalshi cash, user-configurable, defaults to 10%.
+        # Unit = X% of (live) Kalshi cash. 1% follows pro convention.
         unit_pct_of_kalshi = st.slider(
             "1 unit = % of Kalshi cash",
-            min_value=1.0, max_value=25.0,
-            value=float(saved.get("unit_pct_of_kalshi", 0.10)) * 100,
-            step=0.5,
+            min_value=0.25, max_value=10.0,
+            value=float(saved.get("unit_pct_of_kalshi", 0.01)) * 100,
+            step=0.25,
             key="sb_unit_pct_kalshi",
-            help="Live. If your balance changes, 1 unit auto-recomputes.",
+            help="Pro convention is 1u = 1% of bankroll. Typical plays range 0.5-3u, "
+                 "max-confidence plays hit 5u.",
         ) / 100.0
-        if abs(unit_pct_of_kalshi - saved.get("unit_pct_of_kalshi", 0.10)) > 1e-6:
+        if abs(unit_pct_of_kalshi - saved.get("unit_pct_of_kalshi", 0.01)) > 1e-6:
             settings_store.save({"unit_pct_of_kalshi": unit_pct_of_kalshi})
         unit_dollars = kalshi_cash * unit_pct_of_kalshi
-        st.caption(f"1 unit = **${unit_dollars:,.2f}** ({unit_pct_of_kalshi*100:.1f}% of ${kalshi_cash:,.2f})")
+        st.caption(f"1u = **${unit_dollars:,.2f}** · max bet {(settings_store.load().get('agent_max_bet_pct', 0.05))/unit_pct_of_kalshi:.1f}u · daily cap {(settings_store.load().get('daily_exposure_cap_pct', 0.25))/unit_pct_of_kalshi:.1f}u")
 
         # ----- PRIMARY BOOK (sets which book shows in each game card's lines block) -----
         st.markdown("#### Lines display")
