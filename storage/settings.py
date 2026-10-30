@@ -38,11 +38,12 @@ _DEFAULTS: Dict[str, Any] = {
     # (Bovada, LowVig, BetOnline) alongside Pinnacle - these tolerate winning
     # accounts and produce bigger edges than the sharp exchanges alone.
     "odds_regions": "us,eu",
-    # Which Odds API markets to pull. Default includes all the profitable ones:
-    # h2h (always on - Kalshi's winner markets), totals (full-game O/U), the
-    # 1H variants where retail books are loosest, and BTTS for soccer.
-    # Spreads intentionally left out (rare edges). Each market adds 1 credit/region.
-    "odds_markets": "h2h,totals,h2h_h1,totals_h1,btts",
+    # Which Odds API markets to pull. The standard /odds endpoint only serves
+    # core markets: h2h (moneyline) and totals (over/under). Alternate markets
+    # (1H lines, BTTS, player props) require higher-tier plan AND the per-event
+    # endpoint - requesting them on the standard endpoint returns 0 games.
+    # Spreads intentionally left out (edges rare, costs 1 credit/region).
+    "odds_markets": "h2h,totals",
     # Cache TTL for live odds in seconds. 3600 = 1h.
     "odds_live_ttl": 3600,
     # Books the agent will shop against Pinnacle fair, in addition to Kalshi.
@@ -75,10 +76,12 @@ def load() -> Dict[str, Any]:
         with open(_path(), "r", encoding="utf-8") as f:
             disk = json.load(f)
         if isinstance(disk, dict):
-            # Migration 1: old odds_markets default was "h2h" only. If the user
-            # never explicitly broadened it, upgrade to the new full set so
-            # totals / 1H / BTTS markets actually get fetched.
-            if disk.get("odds_markets") == "h2h":
+            # Migration 1: old odds_markets defaults were either "h2h" (too
+            # narrow) or the ambitious "h2h,totals,h2h_h1,totals_h1,btts"
+            # which triggers an API error (alternate markets need per-event
+            # endpoint). Snap any retired default to the current safe set.
+            _RETIRED_MARKETS = {"h2h", "h2h,totals,h2h_h1,totals_h1,btts"}
+            if disk.get("odds_markets") in _RETIRED_MARKETS:
                 disk["odds_markets"] = _DEFAULTS["odds_markets"]
             # Migration 2: old unit_pct_of_kalshi default was 0.10 (10%); then
             # 0.01 (1%). If the saved value is one of those defaults, snap to
