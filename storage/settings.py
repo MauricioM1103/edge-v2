@@ -11,7 +11,8 @@ import os
 from typing import Any, Dict
 
 _DEFAULTS: Dict[str, Any] = {
-    "sport_group": "US Majors",
+    # Default to "All sports" so the main board surfaces every active slate out of the box.
+    "sport_group": "All sports",
     "sport": "nfl",
     # Unit = this fraction of live Kalshi cash. Default 1% follows pro convention:
     # 1u = 1% of bankroll, typical plays 0.5-3u, max confidence = 5u.

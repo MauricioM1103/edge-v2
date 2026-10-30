@@ -678,9 +678,15 @@ def _render_agent_panel(odds_games, kalshi_cash, settings,
             placeholder="Book filter",
         )
     with fc4:
+        # Default to 0.0 so "all markets" is truly all markets today — the
+        # agent's own `min_edge_pct` already filters below the setting, so this
+        # slider is a view-time cap on top. User can tighten it when they want
+        # to focus on bigger edges.
         f_min_edge = st.number_input(
-            "Min edge %", 0.0, 50.0, min_edge * 100, 0.5,
+            "Min edge %", 0.0, 50.0, 0.0, 0.5,
             key="agent_f_min_edge", label_visibility="collapsed",
+            help="View-time filter on the edges below. Leave at 0 to see every "
+                 "scanned edge; raise it to focus on bigger plays.",
         )
     # Apply filters - every toggle is independent and multi-select so turning
     # one off doesn't force you to re-tick everything.
@@ -720,10 +726,14 @@ def _render_agent_panel(odds_games, kalshi_cash, settings,
                 f'<span class="chip live" style="padding:2px 7px; font-size:9px;">● {detail}</span>'
                 + (f'<br><span class="mono" style="font-size:11px;">{score}</span>' if score else '')
             )
-        # pre-game: show start time in CT
-        start = e.get("start_utc")
+        # pre-game: show start time in CT (also use Pinnacle's commence_time as a
+        # fallback when the ESPN state didn't attach — happens for sports whose
+        # ESPN feed we skip, or when the team-name match fails).
+        start = e.get("start_utc") or e.get("commence_time")
         if start:
             try:
+                if isinstance(start, str):
+                    start = datetime.fromisoformat(start.replace("Z", "+00:00"))
                 t = start.astimezone(CT).strftime("%I:%M %p").lstrip("0") + " CT"
                 return f'<span class="mono" style="font-size:11px; color:var(--muted);">{t}</span>'
             except Exception:
@@ -1046,14 +1056,18 @@ def _render_single_pick_analysis(e, idx, total, unit_dollars, _units_fn, kelly_m
     elif status_state == "in":
         score = f"{as_}–{hs}" if hs is not None and as_ is not None else ""
         status_chip = f'<span class="chip live" style="padding:3px 10px;">● LIVE · {status_detail} · {score}</span>'
-    elif e.get("start_utc"):
-        from datetime import datetime
-        from zoneinfo import ZoneInfo
-        try:
-            t = e["start_utc"].astimezone(ZoneInfo("America/Chicago")).strftime("%a %I:%M %p").lstrip("0") + " CT"
-            status_chip = f'<span class="chip" style="padding:3px 10px;">{t}</span>'
-        except Exception:
-            pass
+    else:
+        start_dt = e.get("start_utc") or e.get("commence_time")
+        if start_dt:
+            from datetime import datetime
+            from zoneinfo import ZoneInfo
+            try:
+                if isinstance(start_dt, str):
+                    start_dt = datetime.fromisoformat(start_dt.replace("Z", "+00:00"))
+                t = start_dt.astimezone(ZoneInfo("America/Chicago")).strftime("%a %I:%M %p").lstrip("0") + " CT"
+                status_chip = f'<span class="chip" style="padding:3px 10px;">{t}</span>'
+            except Exception:
+                pass
 
     # Alt-book table
     alt_rows = ""
@@ -1437,7 +1451,7 @@ def render_pro_tools(settings: dict):
 def render_picks(settings: dict):
     brand_bar("Verified Picks Ledger")
 
-    cols = st.columns([1, 1, 1, 2])
+    cols = st.columns([1, 1, 1, 1, 1])
     with cols[0]:
         if st.button("↻ Auto-settle from ESPN"):
             n = picks_store.auto_settle()
@@ -1453,6 +1467,28 @@ def render_picks(settings: dict):
             "Sport", options=["All"] + sorted({p.get("sport") or "" for p in picks_store.list_picks() if p.get("sport")}),
             key="ledger_sport_filter", label_visibility="collapsed",
         )
+    with cols[3]:
+        # Ported from V1 Bet Log — one-click CSV download. Streams everything
+        # currently in the ledger, not just the filtered rows, so users can
+        # grab a full history without having to toggle filters off first.
+        all_picks = picks_store.list_picks()
+        if all_picks:
+            import csv, io
+            buf = io.StringIO()
+            fieldnames = [
+                "id", "created_at", "sport", "event_name", "market", "selection", "point",
+                "price_american", "implied_prob", "projected_prob",
+                "risk_units", "win_units", "status", "clv_pct", "methodology", "notes",
+            ]
+            writer = csv.DictWriter(buf, fieldnames=fieldnames, extrasaction="ignore")
+            writer.writeheader()
+            for p in all_picks:
+                writer.writerow({k: p.get(k) for k in fieldnames})
+            st.download_button(
+                "⬇ CSV", buf.getvalue().encode("utf-8"),
+                "picks.csv", "text/csv",
+                use_container_width=True, key="ledger_csv_dl",
+            )
 
     picks = picks_store.list_picks()
     s = picks_store.summarize(picks)
@@ -1568,6 +1604,255 @@ def render_picks(settings: dict):
                 st.cache_data.clear()
                 st.success("Deleted.")
             st.divider()
+
+
+# ============================================================================
+# TAB - Performance (equity curve + drawdown + withdrawal hints)
+# ============================================================================
+#
+# Ported from V1 edgeboard's "Bankroll & Performance" page. Adapted to v2's
+# JSON picks ledger (no SQLAlchemy models here) and unit-based accounting.
+
+def render_performance(settings: dict):
+    brand_bar("Performance · equity curve + drawdown + withdrawals")
+
+    picks = picks_store.list_picks()
+    settled = [p for p in picks if (p.get("status") or "open") in ("win", "loss", "push")]
+    if not settled:
+        html(
+            '<div class="hint">No settled picks yet. Log a few from the Dashboard and come back once '
+            'ESPN auto-settles them — the equity curve, high-water mark, and withdrawal suggestions '
+            'need realized P&L to work from.</div>'
+        )
+        return
+
+    # Build an in-memory equity series. Starts at the configured bankroll
+    # (Kalshi cash) and compounds settled P&L in dollars so the curve matches
+    # what the user actually has in their account.
+    kalshi_cash = float(settings.get("kalshi_cash") or 0) or 100.0
+    unit_pct = settings.get("unit_pct") or 0.01
+    unit_dollars = kalshi_cash * unit_pct
+    start_bank = kalshi_cash
+    settled_sorted = sorted(
+        settled, key=lambda p: p.get("created_at") or "",
+    )
+    equity = start_bank
+    rows = [{"when": "start", "equity": start_bank, "pl": 0.0}]
+    for p in settled_sorted:
+        status = p.get("status")
+        risk_u = float(p.get("risk_units") or 0)
+        win_u = float(p.get("win_units") or 0)
+        if status == "win":
+            pl = win_u * unit_dollars
+        elif status == "loss":
+            pl = -risk_u * unit_dollars
+        else:
+            pl = 0.0
+        equity += pl
+        rows.append({"when": p.get("created_at") or "", "equity": equity, "pl": pl})
+
+    hwm = max(r["equity"] for r in rows)
+    cur = rows[-1]["equity"]
+    dd = (cur - hwm) / hwm if hwm > 0 else 0.0
+    net = cur - start_bank
+    roi = net / start_bank if start_bank > 0 else 0.0
+    tone = "good" if net > 0 else ("bad" if net < 0 else "")
+
+    metric_row([
+        {"label": "Starting", "value": f"${start_bank:,.2f}", "foot": "Kalshi cash at session start"},
+        {"label": "Current", "value": f"${cur:,.2f}", "tone": tone, "foot": f"net {net:+,.2f}"},
+        {"label": "ROI", "value": f"{roi*100:+.2f}%", "tone": tone},
+        {"label": "High-water", "value": f"${hwm:,.2f}", "foot": "best balance to date"},
+        {"label": "Drawdown", "value": f"{dd*100:.1f}%", "tone": "warn" if dd < -0.05 else "",
+         "foot": "from HWM"},
+        {"label": "Settled picks", "value": str(len(settled))},
+    ])
+
+    # Equity curve.
+    try:
+        import pandas as _pd
+        df = _pd.DataFrame(rows)
+        if len(df) > 1:
+            st.markdown("### Equity curve")
+            # Use the row index for x-axis so uneven timestamps don't warp the chart.
+            st.line_chart(df["equity"], height=260)
+    except ImportError:
+        pass
+
+    # Rolling CLV — kept simple (mean of the last 50 CLV% observations), which
+    # is the quick-glance signal V1 surfaced; the deeper t-test lives on the
+    # Calibration tab.
+    clv_vals = [float(p.get("clv_pct")) for p in picks if p.get("clv_pct") is not None]
+    if clv_vals:
+        try:
+            import pandas as _pd
+            s = _pd.Series(clv_vals).rolling(min(50, len(clv_vals)), min_periods=1).mean()
+            st.markdown("### Rolling CLV (last 50)")
+            st.line_chart(s, height=200)
+            avg_clv = sum(clv_vals) / len(clv_vals)
+            beats = sum(1 for v in clv_vals if v > 0) / len(clv_vals)
+            metric_row([
+                {"label": "Mean CLV%", "value": f"{avg_clv*100:+.2f}%",
+                 "tone": "good" if avg_clv > 0 else "bad"},
+                {"label": "Beat-close rate", "value": f"{beats*100:.1f}%",
+                 "foot": f"n={len(clv_vals)}",
+                 "tone": "good" if beats > 0.5 else ""},
+            ])
+        except ImportError:
+            pass
+
+    # Withdrawal suggestions — V1's "sweep 50% of profit above the prior HWM"
+    # rule. Only kicks in when the current balance is new all-time-high and the
+    # dollar amount is meaningful.
+    st.markdown("### Withdrawal suggestions")
+    prior_hwm = max((r["equity"] for r in rows[:-1]), default=start_bank) if len(rows) > 1 else start_bank
+    profit_above_hwm = max(0.0, cur - prior_hwm)
+    monthly = profit_above_hwm * 0.5
+    if monthly >= 1.0:
+        html(
+            '<div class="hint" style="background:color-mix(in oklab, var(--good) 10%, var(--card));">'
+            f'<strong>Suggested monthly sweep:</strong> ${monthly:,.2f} '
+            f'(50% of profit above the prior HWM of ${prior_hwm:,.2f}).</div>'
+        )
+    else:
+        html(
+            '<div class="hint">No sweep suggested — you are not above a prior high-water mark, '
+            'so leaving every dollar in the bankroll is the right call.</div>'
+        )
+    cushion_ok = cur >= prior_hwm * 1.10
+    if cushion_ok:
+        html(
+            '<div class="hint">Weekly sweep is also safe — balance is at least 10% above the prior '
+            'HWM, so there is cushion for variance.</div>'
+        )
+    else:
+        html(
+            '<div class="hint" style="color:var(--muted);">Weekly sweep locked until the balance '
+            'clears +10% above the prior HWM.</div>'
+        )
+
+
+# ============================================================================
+# TAB - Calibration (reliability + Brier + CLV t-test)
+# ============================================================================
+#
+# Ported from V1 edgeboard's "Calibration" page. Simplified for the JSON ledger.
+
+def render_calibration(settings: dict):
+    brand_bar("Calibration · reliability, Brier, CLV t-test")
+
+    picks = picks_store.list_picks()
+    settled = [
+        p for p in picks
+        if (p.get("status") or "open") in ("win", "loss")
+        and p.get("projected_prob") is not None
+    ]
+    if not settled:
+        html(
+            '<div class="hint">Calibration needs settled wins/losses with a projected probability '
+            'on each pick. Log picks from the Dashboard (projected prob is captured automatically for '
+            'agent picks) and let ESPN auto-settle them.</div>'
+        )
+        return
+
+    # Reliability — bucket by projected probability.
+    try:
+        import pandas as _pd
+        data = []
+        for p in settled:
+            data.append({
+                "proj": float(p.get("projected_prob") or 0),
+                "won": 1 if (p.get("status") == "win") else 0,
+                "edge": (float(p.get("projected_prob") or 0) - float(p.get("implied_prob") or 0)),
+                "clv": float(p.get("clv_pct") or 0) if p.get("clv_pct") is not None else None,
+            })
+        df = _pd.DataFrame(data)
+        st.markdown("### Reliability — projected probability vs. realized win rate")
+        bins = [0.0, 0.3, 0.4, 0.5, 0.6, 0.7, 1.0]
+        df["bucket"] = _pd.cut(df["proj"], bins=bins, include_lowest=True)
+        rel = df.groupby("bucket", observed=True).agg(
+            n=("won", "count"),
+            realized=("won", "mean"),
+            expected=("proj", "mean"),
+        ).reset_index()
+        rel["gap_pts"] = (rel["realized"] - rel["expected"]) * 100
+        if rel.empty:
+            st.caption("Not enough settled picks across the probability buckets yet.")
+        else:
+            # Render as a lightweight HTML table so the formatting matches the
+            # rest of the dashboard rather than Streamlit's default dataframe.
+            rows_html = ""
+            for _, r in rel.iterrows():
+                tone = "good" if r["gap_pts"] >= 0 else "bad"
+                rows_html += (
+                    f'<tr>'
+                    f'<td class="mono">{r["bucket"]}</td>'
+                    f'<td class="num mono">{int(r["n"])}</td>'
+                    f'<td class="num mono">{r["expected"]*100:.1f}%</td>'
+                    f'<td class="num mono">{r["realized"]*100:.1f}%</td>'
+                    f'<td class="num mono {tone}">{r["gap_pts"]:+.1f}</td>'
+                    f'</tr>'
+                )
+            html(
+                '<table class="ledger" style="margin-top:6px;">'
+                '<thead><tr><th>Projected</th><th class="num">n</th>'
+                '<th class="num">Expected win %</th><th class="num">Realized win %</th>'
+                '<th class="num">Δ (pts)</th></tr></thead>'
+                f'<tbody>{rows_html}</tbody></table>'
+            )
+        # Brier — the standard calibration cost. 0 is perfect; a fair coin would score 0.25.
+        brier = ((df["proj"] - df["won"]) ** 2).mean()
+        st.markdown("### Scoring")
+        tone = "good" if brier < 0.24 else ("warn" if brier < 0.26 else "bad")
+        metric_row([
+            {"label": "Brier score", "value": f"{brier:.4f}",
+             "tone": tone, "foot": "lower is better · fair coin = 0.2500"},
+            {"label": "Settled picks", "value": str(len(settled))},
+            {"label": "Mean edge", "value": f"{df['edge'].mean()*100:+.2f} pts",
+             "foot": "projected − implied"},
+        ])
+    except ImportError:
+        html('<div class="hint err">pandas not available — install pandas to see calibration charts.</div>')
+        return
+
+    # CLV t-test — V1's go/no-go for taking the agent live. Need the picks to
+    # carry a closing_price so clv_pct is populated; prompt the user otherwise.
+    st.markdown("### CLV t-test — go/no-go")
+    clv_vals = df["clv"].dropna().tolist()
+    n = len(clv_vals)
+    if n < 2:
+        html(
+            '<div class="hint">Need at least 2 picks with a recorded closing price to run a t-test. '
+            'Add closing prices in the Picks Ledger (expand a pick → "Save CLV").</div>'
+        )
+    else:
+        import math, statistics
+        m = statistics.mean(clv_vals)
+        sd = statistics.stdev(clv_vals) if n > 1 else 0.0
+        t = (m / (sd / math.sqrt(n))) if sd > 0 else 0.0
+        passes = (n >= 300) and (t > 1.65)
+        tone = "good" if passes else "warn"
+        metric_row([
+            {"label": "n observations", "value": str(n),
+             "foot": "need ≥ 300 for the gate"},
+            {"label": "Mean CLV%", "value": f"{m*100:+.2f}%",
+             "tone": "good" if m > 0 else "bad"},
+            {"label": "t-stat", "value": f"{t:.2f}",
+             "foot": "need > 1.65 (one-sided, p < 0.05)",
+             "tone": tone},
+        ])
+        if passes:
+            html(
+                '<div class="hint" style="background:color-mix(in oklab, var(--good) 10%, var(--card));">'
+                '<strong>CLV gate passes.</strong> The agent is beating closing-line value with '
+                'statistical significance — safe to size up (keep stakes inside your Kelly / cap limits).</div>'
+            )
+        else:
+            html(
+                '<div class="hint warn"><strong>CLV gate fails.</strong> Keep sizing conservative '
+                'until you have ≥ 300 observations and a one-sided t-stat above 1.65 — that is the '
+                'standard sharp threshold for proving edge rather than variance.</div>'
+            )
 
 
 # ============================================================================

@@ -30,6 +30,35 @@ def _no_vig(home_price, away_price) -> Tuple[Optional[float], Optional[float]]:
     return no_vig_two_way(home_price, away_price)
 
 
+def _find_espn_ev(espn_events_by_game: Optional[dict], home_name, away_name) -> dict:
+    """Resolve an ESPN event record, tolerant to naming differences between feeds.
+
+    The agent sees Pinnacle (and Kalshi) team names, which often differ from the
+    ESPN scoreboard names ("Washington Commanders" vs. "Washington" vs. "WAS").
+    An exact tuple lookup misses those; we fall back to canonical same_team
+    matching so start times and live scores still attach.
+    """
+    if not espn_events_by_game:
+        return {}
+    # Fast exact lookups first - cheap when names already align.
+    exact = (
+        espn_events_by_game.get((home_name, away_name))
+        or espn_events_by_game.get((away_name, home_name))
+    )
+    if exact:
+        return exact
+    try:
+        from apis.team_mapping import same_team as _same
+    except Exception:
+        return {}
+    for (h_key, a_key), ev in espn_events_by_game.items():
+        if _same(h_key, home_name) and _same(a_key, away_name):
+            return ev
+        if _same(h_key, away_name) and _same(a_key, home_name):
+            return ev
+    return {}
+
+
 def _consensus_fair(prices_pairs: List[Tuple[float, float]]) -> Tuple[Optional[float], Optional[float]]:
     hs, as_ = [], []
     for h, a in prices_pairs:
@@ -503,11 +532,12 @@ def scan_kalshi_vs_pinnacle(
                 f"https://kalshi.com/markets/{kalshi_ticker.lower()}" if kalshi_ticker else "https://kalshi.com/markets"
             )
             # Attach ESPN status/score/time for in-table grading + live tracking.
+            # Try both the Kalshi-side names and the Pinnacle-side names; fall
+            # back to canonical same_team matching so start times still resolve
+            # when the feeds spell the team differently.
             espn_ev = (
-                espn_events_by_game.get((home_name, away_name))
-                or espn_events_by_game.get((pin_home_name, pin_away_name))
-                or espn_events_by_game.get((pin_away_name, pin_home_name))
-                or {}
+                _find_espn_ev(espn_events_by_game, home_name, away_name)
+                or _find_espn_ev(espn_events_by_game, pin_home_name, pin_away_name)
             )
             home_score = (espn_ev.get("home") or {}).get("score") if espn_ev else None
             away_score = (espn_ev.get("away") or {}).get("score") if espn_ev else None
@@ -561,8 +591,11 @@ def scan_kalshi_vs_pinnacle(
                 "kalshi_ticker": kalshi_ticker,
                 "kalshi_url": kalshi_url,
                 "candidates": candidates,
-                # ESPN status/score for live grading
+                # ESPN status/score for live grading. Fall back to the Odds API
+                # commence_time when ESPN hasn't matched the event (keeps the time
+                # column alive for sports we don't pull ESPN scores for).
                 "start_utc": espn_ev.get("start_utc"),
+                "commence_time": pin_game.get("commence_time"),
                 "status_state": espn_ev.get("status_state"),  # pre | in | post
                 "status_detail": espn_ev.get("status_detail"),
                 "home_score": home_score,
@@ -701,14 +734,10 @@ def scan_offshore_markets_vs_pinnacle(
             if mk in ("spreads", "totals", "totals_h1", "spreads_h1") and half_points_only:
                 if not (_is_half_pt(pin_entry.get("home_pt")) or _is_half_pt(pin_entry.get("away_pt"))):
                     continue
-            # Pre-attach ESPN state for grading.
+            # Pre-attach ESPN state for grading. Tolerant to feed name differences.
             home_name = g.get("home_team")
             away_name = g.get("away_team")
-            espn_ev = (
-                espn_events_by_game.get((home_name, away_name))
-                or espn_events_by_game.get((away_name, home_name))
-                or {}
-            )
+            espn_ev = _find_espn_ev(espn_events_by_game, home_name, away_name)
             # Shop best price per side across offshore books.
             for side_key, fair_prob, label_fallback, point_key in [
                 ("home", fair_home, pin_entry.get("home_label"), "home_pt"),
@@ -771,8 +800,9 @@ def scan_offshore_markets_vs_pinnacle(
                     "kalshi_implied": None,
                     "kalshi_ticker": None,
                     "kalshi_url": None,
-                    # ESPN state
+                    # ESPN state, with Odds-API commence_time as a fallback.
                     "start_utc": espn_ev.get("start_utc"),
+                    "commence_time": g.get("commence_time"),
                     "status_state": espn_ev.get("status_state"),
                     "status_detail": espn_ev.get("status_detail"),
                     "home_score": (espn_ev.get("home") or {}).get("score"),

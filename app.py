@@ -35,6 +35,7 @@ from ui.style import inject as inject_style
 from ui.pages import (
     render_dashboard, render_pro_tools, render_picks,
     render_settings, render_backtest, load_kalshi_balance,
+    render_performance, render_calibration,
 )
 
 
@@ -45,10 +46,15 @@ def _sidebar_settings() -> dict:
 
         # ----- SPORT PICKER (grouped) -----
         group_labels = [g[0] for g in espn.SPORT_GROUPS]
+        saved_group = saved.get("sport_group") or "All sports"
+        default_group_idx = group_labels.index(saved_group) if saved_group in group_labels else 0
         group_name = st.selectbox(
-            "Sport group", options=group_labels, index=0, key="sb_group",
-            help="'All sports' scans NFL/NBA/MLB/NHL/WNBA + top college in one view.",
+            "Sport group", options=group_labels, index=default_group_idx, key="sb_group",
+            help="'All sports' scans every supported league in one view.",
         )
+        # Persist group changes so the dashboard remembers across sessions.
+        if group_name != saved.get("sport_group"):
+            settings_store.save({"sport_group": group_name})
         group_sports = next((g[1] for g in espn.SPORT_GROUPS if g[0] == group_name), ["nfl"])
         # When "All sports" the sport-picker becomes a multi-select so the user can
         # trim the scan (saves Odds-API credits).
@@ -298,10 +304,13 @@ def main():
     inject_style(theme=saved_theme)
     settings = _sidebar_settings()
 
-    tab_dash, tab_pro, tab_picks, tab_backtest, tab_settings = st.tabs([
+    (tab_dash, tab_pro, tab_picks, tab_perf, tab_calib,
+     tab_backtest, tab_settings) = st.tabs([
         "Dashboard · Daily Slate",
         "Pro Handicapping Tools",
         "Verified Picks Ledger",
+        "Performance · Bankroll",
+        "Calibration · CLV t-test",
         "Backtest · 30-day",
         "Settings",
     ])
@@ -311,6 +320,10 @@ def main():
         render_pro_tools(settings)
     with tab_picks:
         render_picks(settings)
+    with tab_perf:
+        render_performance(settings)
+    with tab_calib:
+        render_calibration(settings)
     with tab_backtest:
         render_backtest(settings)
     with tab_settings:
