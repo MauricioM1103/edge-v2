@@ -22,6 +22,54 @@ from apis import espn
 from calc.odds import profit_on_win, implied_prob_american
 from calc.clv import clv_percent
 
+# Central US slate anchor. A pick's slate date is derived from the game's
+# start time in CT so that late-night games (00:30 UTC on 10-26 = 19:30 CT on
+# 10-25) correctly roll back to the Oct 25 slate, which is how sportsbooks
+# and bettors talk about days.
+try:
+    from zoneinfo import ZoneInfo
+    _CT = ZoneInfo("America/Chicago")
+except Exception:
+    _CT = timezone.utc
+
+
+def _slate_date_from(pick: dict) -> Optional[str]:
+    """Resolve the Central-US slate date for a pick as YYYY-MM-DD.
+
+    Preference order:
+      1. Pre-set `pick_date` (caller passed it).
+      2. Game start (`start_utc` or `commence_time`): the slate the game
+         actually belongs to — survives timezone math around midnight UTC.
+      3. `created_at`: when the row was written. Fallback only; a pick logged
+         late at night from a West-coast user could otherwise land on the
+         wrong Central day.
+    """
+    for src in ("pick_date",):
+        v = pick.get(src)
+        if v:
+            if isinstance(v, str) and len(v) >= 10:
+                return v[:10]
+    for src in ("start_utc", "commence_time"):
+        v = pick.get(src)
+        if v is None:
+            continue
+        try:
+            if isinstance(v, datetime):
+                dt = v
+            else:
+                dt = datetime.fromisoformat(str(v).replace("Z", "+00:00"))
+            return dt.astimezone(_CT).strftime("%Y-%m-%d")
+        except (ValueError, TypeError, AttributeError):
+            continue
+    created = pick.get("created_at")
+    if created:
+        try:
+            dt = datetime.fromisoformat(str(created).replace("Z", "+00:00"))
+            return dt.astimezone(_CT).strftime("%Y-%m-%d")
+        except (ValueError, TypeError):
+            pass
+    return None
+
 
 def _default_path() -> str:
     here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -62,11 +110,87 @@ def add_pick(pick: dict, path: Optional[str] = None) -> dict:
     # Fill implied prob if the caller didn't.
     if p.get("price_american") is not None and p.get("implied_prob") is None:
         p["implied_prob"] = implied_prob_american(p["price_american"])
+    # Anchor the pick to a Central-US slate date so look-back by date works.
+    if not p.get("pick_date"):
+        sd = _slate_date_from(p)
+        if sd:
+            p["pick_date"] = sd
     file_path = path or _default_path()
     picks = _load(file_path)
     picks.append(p)
     _save(file_path, picks)
     return p
+
+
+def backfill_pick_dates(path: Optional[str] = None) -> int:
+    """One-shot migration: fill pick_date on any legacy row missing it.
+
+    Returns the number of rows updated. Idempotent — rows that already have
+    pick_date are untouched, so this is safe to call on every dashboard load.
+    """
+    file_path = path or _default_path()
+    picks = _load(file_path)
+    changed = 0
+    for p in picks:
+        if p.get("pick_date"):
+            continue
+        sd = _slate_date_from(p)
+        if sd:
+            p["pick_date"] = sd
+            changed += 1
+    if changed:
+        _save(file_path, picks)
+    return changed
+
+
+def group_by_date(picks: Optional[List[dict]] = None, path: Optional[str] = None) -> List[dict]:
+    """Return per-slate-date summaries, newest first.
+
+    Each summary carries: date (YYYY-MM-DD), count, record (W-L-P), risk/net
+    in units, roi, mean CLV%, and the raw picks list for drill-down. Pure
+    aggregation — reads from the ledger, does not mutate it.
+    """
+    rows = picks if picks is not None else list_picks(path)
+    buckets: dict = {}
+    for p in rows:
+        d = p.get("pick_date") or _slate_date_from(p)
+        if not d:
+            continue
+        buckets.setdefault(d, []).append(p)
+    summaries = []
+    for date, items in buckets.items():
+        wins = sum(1 for p in items if p.get("status") == "win")
+        losses = sum(1 for p in items if p.get("status") == "loss")
+        pushes = sum(1 for p in items if p.get("status") == "push")
+        opens = sum(1 for p in items if (p.get("status") or "open") == "open")
+        risked = 0.0
+        net = 0.0
+        for p in items:
+            try:
+                risk_u = float(p.get("risk_units") or 0)
+                win_u = float(p.get("win_units") or 0)
+            except (TypeError, ValueError):
+                continue
+            status = p.get("status") or "open"
+            if status in ("win", "loss", "push"):
+                risked += risk_u
+            if status == "win":
+                net += win_u
+            elif status == "loss":
+                net -= risk_u
+        clv_vals = [float(p["clv_pct"]) for p in items if p.get("clv_pct") is not None]
+        summaries.append({
+            "date": date,
+            "count": len(items),
+            "wins": wins, "losses": losses, "pushes": pushes, "open": opens,
+            "risked_units": round(risked, 2),
+            "net_units": round(net, 2),
+            "roi": (net / risked) if risked > 0 else None,
+            "avg_clv_pct": (sum(clv_vals) / len(clv_vals)) if clv_vals else None,
+            "picks": items,
+        })
+    summaries.sort(key=lambda s: s["date"], reverse=True)
+    return summaries
 
 
 def _dedup_key(p: dict) -> tuple:
@@ -203,6 +327,12 @@ def auto_log_agent_edges(edges: list, settings: dict, path: Optional[str] = None
         edge_pct = (e.get("edge") or 0) * 100.0
         stake_dollars = float(e.get("stake_dollars") or 0)
         risk_units = round(stake_dollars / max(1e-6, unit_dollars), 2)
+        # Pass start_utc / commence_time through so _slate_date_from can
+        # anchor the pick to the correct Central-US slate even if the row is
+        # written hours after kickoff.
+        start_val = e.get("start_utc") or e.get("commence_time")
+        if isinstance(start_val, datetime):
+            start_val = start_val.isoformat()
         row = {
             "sport": (e.get("_sport") or "").lower(),
             "event_id": espn_eid,
@@ -218,6 +348,7 @@ def auto_log_agent_edges(edges: list, settings: dict, path: Optional[str] = None
             "win_units": None,
             "methodology": "Agent · Pinnacle fair",
             "source": "agent-auto",
+            "start_utc": start_val,
             "notes": (
                 f"{best_book} @ {e.get('price')} vs Pinnacle · "
                 f"edge {edge_pct:+.2f}pts · "

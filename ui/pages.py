@@ -1890,7 +1890,15 @@ def render_pro_tools(settings: dict):
 # ============================================================================
 
 def render_picks(settings: dict):
-    brand_bar("Verified Picks Ledger")
+    brand_bar("Verified Picks Ledger · by slate date")
+
+    # Backfill the slate-date anchor on legacy rows so every historical pick
+    # groups cleanly by date. Idempotent — rows that already have pick_date
+    # are untouched, so this is safe to call on every ledger view.
+    try:
+        picks_store.backfill_pick_dates()
+    except Exception:
+        pass
 
     cols = st.columns([1.1, 1.2, 1, 1, 1, 1])
     with cols[0]:
@@ -1990,12 +1998,110 @@ def render_picks(settings: dict):
         html('<div class="hint">No picks match the current filter. Log one from the Dashboard tab.</div>')
         return
 
-    # Render table
-    html("""
+    # ----- Daily records view (primary) -----
+    # Users want to look back at a specific day's slate: how many picks the
+    # agent made, which games, how they graded, net units for the day.
+    # Group by `pick_date` (Central-US slate) descending.
+    st.markdown("### Daily records")
+    st.caption(
+        "Each day's slate stays anchored to its Central-US date. Pick records "
+        "are permanent — this list is the audit trail of what the agent "
+        "recommended and how it finished, by day."
+    )
+    daily = picks_store.group_by_date(rows)
+    if not daily:
+        html('<div class="hint">No dated picks yet.</div>')
+    else:
+        from datetime import datetime as _dt
+        from zoneinfo import ZoneInfo as _ZI
+        today_c = datetime.now(_ZI("America/Chicago")).strftime("%Y-%m-%d")
+        for i, day in enumerate(daily):
+            d = day["date"]
+            try:
+                pretty = _dt.strptime(d, "%Y-%m-%d").strftime("%A, %b %d, %Y")
+            except ValueError:
+                pretty = d
+            is_today_slate = (d == today_c)
+            # Header line summarizing the day.
+            net_tone_d = "good" if day["net_units"] > 0 else ("bad" if day["net_units"] < 0 else "")
+            roi_d = f"{(day['roi'] or 0)*100:+.2f}%" if day["roi"] is not None else "—"
+            record = f"{day['wins']}-{day['losses']}-{day['pushes']}"
+            open_part = f" · {day['open']} open" if day["open"] else ""
+            today_badge = (
+                ' <span class="chip accent" style="padding:1px 7px; font-size:9.5px;">TODAY</span>'
+                if is_today_slate else ""
+            )
+            header = (
+                f"**{pretty}**{today_badge} · "
+                f"**{day['count']} picks** · {record}{open_part} · "
+                f"risk {day['risked_units']:.2f}u · "
+                f"net <span style='color:var(--{'good' if day['net_units']>0 else ('bad' if day['net_units']<0 else 'muted')});'>"
+                f"{day['net_units']:+.2f}u</span> · ROI {roi_d}"
+            )
+            # Today auto-expands; older days stay collapsed for scan-ability.
+            with st.expander(f"{pretty} · {day['count']} picks · {record} · {day['net_units']:+.2f}u",
+                             expanded=is_today_slate):
+                # Full table of the day's picks.
+                html(
+                    '<table class="ledger" style="margin-top:4px;">'
+                    '<thead><tr>'
+                    '<th>Logged</th><th>Src</th><th>Sport</th><th>Match-up</th><th>Market</th>'
+                    '<th>Selection</th><th class="num">Price</th><th class="num">Imp</th>'
+                    '<th class="num">Proj</th><th class="num">Risk</th>'
+                    '<th class="num">Net</th><th>Status</th><th class="num">CLV</th>'
+                    '</tr></thead><tbody>'
+                )
+                for p in sorted(day["picks"], key=lambda x: x.get("created_at") or "", reverse=True):
+                    status = p.get("status") or "open"
+                    status_cls = {"open":"","win":"good","loss":"bad","push":"warn","void":""}.get(status,"")
+                    status_lbl = status.upper()
+                    clv = p.get("clv_pct")
+                    clv_s = f"{clv*100:+.2f}%" if clv is not None else "—"
+                    src = p.get("source") or "manual"
+                    src_chip = (
+                        '<span class="chip accent" style="padding:1px 7px; font-size:9.5px;">AGENT</span>'
+                        if src == "agent-auto" else
+                        '<span class="chip" style="padding:1px 7px; font-size:9.5px;">MANUAL</span>'
+                    )
+                    risk_u = float(p.get("risk_units") or 0)
+                    win_u = float(p.get("win_units") or 0)
+                    if status == "win":
+                        net_u = win_u
+                    elif status == "loss":
+                        net_u = -risk_u
+                    else:
+                        net_u = 0.0
+                    net_class = "good" if net_u > 0 else ("bad" if net_u < 0 else "")
+                    net_disp = (
+                        f'<span class="num mono {net_class}">{net_u:+.2f}u</span>'
+                        if status in ("win","loss") else '<span style="color:var(--muted);">—</span>'
+                    )
+                    html(f"""
+                    <tr>
+                      <td class="mono" style="font-size:11px; color:var(--muted);">{(p.get('created_at') or '')[11:16]}</td>
+                      <td>{src_chip}</td>
+                      <td class="mono" style="color:var(--muted);">{(p.get('sport') or '').upper()}</td>
+                      <td>{p.get('event_name') or '-'}</td>
+                      <td class="mono" style="color:var(--muted);">{(p.get('market') or '').upper()}</td>
+                      <td><strong>{p.get('selection') or '-'}</strong>{(' ' + (f"{p.get('point'):+g}" if p.get('point') is not None else '')) if p.get('point') is not None else ''}</td>
+                      <td class="num mono">{format_american(p.get('price_american'))}</td>
+                      <td class="num mono">{(p.get('implied_prob') or 0)*100:.1f}%</td>
+                      <td class="num mono">{(p.get('projected_prob') or 0)*100:.1f}%</td>
+                      <td class="num mono">{risk_u:.2f}u</td>
+                      <td class="num mono">{net_disp}</td>
+                      <td><span class="chip {status_cls}">{status_lbl}</span></td>
+                      <td class="num mono">{clv_s}</td>
+                    </tr>
+                    """)
+                html("</tbody></table>")
+
+    # ----- Flat all-picks table (secondary, for raw lookup) -----
+    with st.expander(f"🔎 Flat all-picks table ({len(rows)} rows)", expanded=False):
+        html("""
     <table class="ledger">
       <thead>
         <tr>
-          <th>Logged</th><th>Src</th><th>Sport</th><th>Match-up</th><th>Market</th>
+          <th>Slate</th><th>Logged</th><th>Src</th><th>Sport</th><th>Match-up</th><th>Market</th>
           <th>Selection</th><th class="num">Price</th><th class="num">Imp</th>
           <th class="num">Proj</th><th>Method</th><th class="num">Risk</th>
           <th class="num">To Win</th><th>Status</th><th class="num">CLV</th>
@@ -2003,28 +2109,29 @@ def render_picks(settings: dict):
       </thead>
       <tbody>
     """)
-    for p in sorted(rows, key=lambda x: x.get("created_at") or "", reverse=True):
-        status = p.get("status") or "open"
-        status_cls = {
-            "open": "", "win": "good", "loss": "bad", "push": "warn", "void": "",
-        }.get(status, "")
-        status_lbl = status.upper()
-        clv = p.get("clv_pct")
-        clv_s = f"{clv*100:+.2f}%" if clv is not None else "—"
-        meth = p.get("methodology") or ""
-        tag_cls = {
-            "Model Edge": "model", "Line Move": "line",
-            "Situational": "sit", "Fade the Public": "fade",
-        }.get(meth, "model")
-        src = p.get("source") or "manual"
-        src_chip = (
-            '<span class="chip accent" style="padding:1px 7px; font-size:9.5px;">AGENT</span>'
-            if src == "agent-auto" else
-            '<span class="chip" style="padding:1px 7px; font-size:9.5px;">MANUAL</span>'
-        )
-        html(f"""
+        for p in sorted(rows, key=lambda x: x.get("created_at") or "", reverse=True):
+            status = p.get("status") or "open"
+            status_cls = {
+                "open": "", "win": "good", "loss": "bad", "push": "warn", "void": "",
+            }.get(status, "")
+            status_lbl = status.upper()
+            clv = p.get("clv_pct")
+            clv_s = f"{clv*100:+.2f}%" if clv is not None else "—"
+            meth = p.get("methodology") or ""
+            tag_cls = {
+                "Model Edge": "model", "Line Move": "line",
+                "Situational": "sit", "Fade the Public": "fade",
+            }.get(meth, "model")
+            src = p.get("source") or "manual"
+            src_chip = (
+                '<span class="chip accent" style="padding:1px 7px; font-size:9.5px;">AGENT</span>'
+                if src == "agent-auto" else
+                '<span class="chip" style="padding:1px 7px; font-size:9.5px;">MANUAL</span>'
+            )
+            html(f"""
         <tr>
-          <td class="mono" style="font-size:11px; color:var(--muted);">{(p.get('created_at') or '')[:16]}</td>
+          <td class="mono" style="font-size:11px; color:var(--muted);">{p.get('pick_date') or '—'}</td>
+          <td class="mono" style="font-size:11px; color:var(--muted);">{(p.get('created_at') or '')[11:16]}</td>
           <td>{src_chip}</td>
           <td class="mono" style="color:var(--muted);">{(p.get('sport') or '').upper()}</td>
           <td>{p.get('event_name') or '-'}</td>
@@ -2040,7 +2147,7 @@ def render_picks(settings: dict):
           <td class="num mono">{clv_s}</td>
         </tr>
         """)
-    html("</tbody></table>")
+        html("</tbody></table>")
 
     with st.expander("Pick notes & manual actions"):
         for p in sorted(rows, key=lambda x: x.get("created_at") or "", reverse=True):
