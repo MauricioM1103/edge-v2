@@ -773,10 +773,15 @@ def _render_agent_panel(odds_games, kalshi_cash, settings,
         else:
             link_cell = f'<span style="color:var(--muted); font-size:11px;">— offshore —</span>'
             best_book_html = f'<span class="chip warn" style="padding:2px 7px; font-size:9.5px;">{best_book}</span>'
-        row_style = (
-            ' style="background: color-mix(in oklab, var(--good) 10%, transparent);"'
-            if highlight else ""
-        )
+        # Finished picks get a muted bg + reduced opacity so they clearly read
+        # as "history" in the lower slots of the board.
+        is_settled = (e.get("status_state") == "post") or (e.get("grade") in ("win", "loss", "push"))
+        if is_settled:
+            row_style = ' style="background: color-mix(in oklab, var(--card-elev) 60%, transparent); opacity:0.78;"'
+        elif highlight:
+            row_style = ' style="background: color-mix(in oklab, var(--good) 10%, transparent);"'
+        else:
+            row_style = ""
         strong_open = "<strong>" if highlight else ""
         strong_close = "</strong>" if highlight else ""
         sport_label = (e.get("_sport") or "").upper() or "—"
@@ -819,18 +824,37 @@ def _render_agent_panel(odds_games, kalshi_cash, settings,
         '</tr></thead>'
     )
 
+    # Reorder: fresh picks (pre-game, live) on top sorted by edge desc; final
+    # picks sink to the bottom but stay visible as a record of what the agent
+    # ran today. User explicitly asked for this: finished picks keep their
+    # slot on the board — they just get moved below the still-actionable rows.
+    def _finished(e):
+        return (e.get("status_state") == "post") or (e.get("grade") in ("win", "loss", "push"))
+    fresh = [e for e in funded if not _finished(e)]
+    settled_rows = [e for e in funded if _finished(e)]
+    # Keep each half sorted by edge magnitude.
+    fresh.sort(key=lambda e: -float(e.get("edge") or 0))
+    settled_rows.sort(key=lambda e: -float(e.get("edge") or 0))
+    funded = fresh + settled_rows
+
     picks_shown = int(settings.get("agent_picks_shown") or saved_cfg.get("agent_picks_shown") or 10)
-    top = funded[:picks_shown]
-    overflow_funded = funded[picks_shown:]
+    # Fresh picks fill the top N slots; the first few settled picks fill the
+    # remainder so the board stays at ~picks_shown rows. Extra settled rows
+    # drop into the overflow expander below.
+    if len(fresh) >= picks_shown:
+        top = fresh[:picks_shown]
+    else:
+        top = fresh + settled_rows[:picks_shown - len(fresh)]
+    overflow_funded = funded[len(top):]
     # Attach stable anchor ids so the analysis boards can scroll-nav back and forth.
     for i, e in enumerate(top):
         e["_anchor"] = f"pick-{i+1}"
 
     # Auto-log every funded pick the agent surfaces so the Picks Ledger is a
-    # complete record of what it recommended. Dedup is handled inside the
-    # store (keyed by sport + ESPN event id + market + side), so re-renders
-    # don't double-write. Toggle off from the Settings tab if you want to
-    # keep the ledger strictly manual.
+    # complete record of what it recommended. Dedup handles re-render churn.
+    # Then run a full-ledger auto-settle: this grades previous days' picks
+    # using the dated ESPN scoreboard (today's board rolls off historical
+    # games, so without this they'd never settle).
     if saved_cfg.get("agent_auto_log", True):
         try:
             inserted = picks_store.auto_log_agent_edges(funded, settings)
@@ -838,6 +862,15 @@ def _render_agent_panel(odds_games, kalshi_cash, settings,
             inserted = 0
         if inserted:
             st.toast(f"Logged {inserted} new agent pick(s) to the ledger.", icon="📝")
+    # Full-ledger sweep (hits historical dates via the pick's created_at
+    # hint). Cheap when nothing is open; `auto_settle` only inserts if
+    # the game is final.
+    try:
+        settled_count = picks_store.auto_settle()
+        if settled_count:
+            st.toast(f"Graded {settled_count} finished pick(s) from the record.", icon="✅")
+    except Exception:
+        pass
 
     html('<div id="agent-table-top" style="position:relative; top:-40px;"></div>')
     if not top:
@@ -882,10 +915,32 @@ def _render_agent_panel(odds_games, kalshi_cash, settings,
             )
         html(f'<div class="hint">{suggestion}</div>')
         return []
+    # Build the body: fresh picks first, then a one-cell divider row saying
+    # "finished today", then the settled picks beneath. Settled rows are
+    # muted via _row() so the eye reads them as record, not actionable.
+    def _render_rows(items):
+        out_parts = []
+        has_fresh = any(not ((e.get("status_state") == "post") or (e.get("grade") in ("win", "loss", "push"))) for e in items)
+        divider_shown = False
+        for e in items:
+            is_settled = (e.get("status_state") == "post") or (e.get("grade") in ("win", "loss", "push"))
+            if is_settled and has_fresh and not divider_shown:
+                out_parts.append(
+                    '<tr><td colspan="14" style="padding:8px 10px; '
+                    'background:var(--card-elev); border-top:1px solid var(--rule); '
+                    'font-family:JetBrains Mono,monospace; font-size:10px; '
+                    'letter-spacing:0.14em; text-transform:uppercase; color:var(--muted);">'
+                    '— finished picks (kept on board as record) —'
+                    '</td></tr>'
+                )
+                divider_shown = True
+            out_parts.append(_row(e))
+        return "".join(out_parts)
+
     html(
         '<table class="ledger" style="margin-top:4px;">'
         + header
-        + f'<tbody>{"".join(_row(e) for e in top)}</tbody>'
+        + f'<tbody>{_render_rows(top)}</tbody>'
         + '</table>'
     )
     # One-click "Log pick"

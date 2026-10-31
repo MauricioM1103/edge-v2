@@ -259,20 +259,46 @@ def get_scoreboard(sport_key: str, date: Optional[str] = None) -> List[dict]:
     return events
 
 
-def is_event_final(sport_key: str, event_id: str) -> Optional[dict]:
+def is_event_final(sport_key: str, event_id: str,
+                   date: Optional[str] = None) -> Optional[dict]:
     """Minimal lookup for a single event's final status, used by picks auto-settle.
 
-    Returns dict with `is_final`, `home_score`, `away_score`, `home_won` on success;
-    or None if the event cannot be found.
+    When `date` is given (YYYYMMDD) we hit the dated scoreboard directly — the
+    "today" scoreboard rolls off historical games, so picks logged yesterday
+    could never settle without a date-aware fallback. If today has no hit
+    and no date was passed, we quietly scan the last 7 days so recently-closed
+    picks (overnight games, early-morning soccer) still grade.
     """
     if not event_id:
         return None
-    events = get_scoreboard(sport_key)
-    for ev in events:
-        if ev.get("id") == str(event_id):
-            if not ev.get("is_final"):
-                return {"is_final": False, **_ev_scores(ev)}
-            return {"is_final": True, **_ev_scores(ev)}
+    want = str(event_id)
+    # Preferred: dated scoreboard (deterministic, cheap once cached).
+    if date:
+        for ev in get_scoreboard(sport_key, date=date):
+            if ev.get("id") == want:
+                return {
+                    "is_final": bool(ev.get("is_final")),
+                    **_ev_scores(ev),
+                }
+        return None
+    # Fallback: today's scoreboard first.
+    for ev in get_scoreboard(sport_key):
+        if ev.get("id") == want:
+            return {
+                "is_final": bool(ev.get("is_final")),
+                **_ev_scores(ev),
+            }
+    # Last resort: sweep the last 7 days so overnight / yesterday games grade.
+    from datetime import datetime as _dt, timedelta as _td, timezone as _tz
+    today = _dt.now(_tz.utc).date()
+    for n in range(1, 8):
+        d = (today - _td(days=n)).strftime("%Y%m%d")
+        for ev in get_scoreboard(sport_key, date=d):
+            if ev.get("id") == want:
+                return {
+                    "is_final": bool(ev.get("is_final")),
+                    **_ev_scores(ev),
+                }
     return None
 
 

@@ -259,7 +259,13 @@ def _settle_spreads(pick, final):
 
 
 def auto_settle(path: Optional[str] = None) -> int:
-    """Query ESPN for each open pick's event; settle finals. Returns # settled."""
+    """Query ESPN for each open pick's event; settle finals. Returns # settled.
+
+    Each pick's `created_at` provides a date hint we pass to is_event_final so
+    historical events are looked up on the right dated scoreboard. The ESPN
+    "today" endpoint rolls old games off, so without this hint anything older
+    than the current day never settles.
+    """
     file_path = path or _default_path()
     picks = _load(file_path)
     settled = 0
@@ -270,7 +276,21 @@ def auto_settle(path: Optional[str] = None) -> int:
         event_id = p.get("event_id")
         if not sport or not event_id:
             continue
-        final = espn.is_event_final(sport, event_id)
+        # Hint ESPN with the pick's date (Central-time YYYYMMDD) so dated
+        # historical scoreboards are hit without the 7-day fallback sweep.
+        date_hint = None
+        created = p.get("created_at") or ""
+        if len(created) >= 10:
+            try:
+                dt = datetime.fromisoformat(created.replace("Z", "+00:00"))
+                date_hint = dt.strftime("%Y%m%d")
+            except ValueError:
+                date_hint = None
+        final = espn.is_event_final(sport, event_id, date=date_hint)
+        if not final:
+            # Fall back to the no-date lookup so games on the current scoreboard
+            # (or in the 7-day sweep) still resolve when the hint missed.
+            final = espn.is_event_final(sport, event_id)
         if not final or not final.get("is_final"):
             continue
         market = (p.get("market") or "h2h").lower()
