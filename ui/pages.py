@@ -430,7 +430,7 @@ def render_dashboard(settings: dict):
             '</div></div>'
         )
 
-    # Date-mode banner + live-refresh chip
+    # Date-mode banner + live-refresh chip + Odds API credit meter.
     live_chip = ""
     if _refresh_running:
         live_chip = (
@@ -442,8 +442,25 @@ def render_dashboard(settings: dict):
             ' · <span class="chip warn" style="padding:1px 7px; font-size:10px;">'
             'auto-refresh unavailable (install streamlit-autorefresh)</span>'
         )
+    # Credit chip — surfaces budget state next to the slate so the user can
+    # see at a glance whether a long session is safe before the Settings tab
+    # even opens.
+    credit_chip = ""
+    try:
+        _cs = odds_api.get_credit_status()
+        _rem = _cs.get("remaining")
+        if _rem is not None:
+            _pct_used = max(0.0, min(1.0, 1.0 - (int(_rem) / 20_000)))
+            _tone = "good" if _rem > 5000 else ("warn" if _rem > 1500 else "bad")
+            credit_chip = (
+                f' · <span class="chip {_tone}" style="padding:1px 7px; font-size:10px;" '
+                f'title="Odds API credits — 20k monthly budget">'
+                f'credits: {int(_rem):,} ({_pct_used*100:.0f}% used)</span>'
+            )
+    except Exception:
+        pass
     if is_today:
-        html(f'<div class="hint" style="margin-bottom:6px;"><strong>{date_str_pretty}</strong> (today, Central US) — live odds & agent active{live_chip}</div>')
+        html(f'<div class="hint" style="margin-bottom:6px;"><strong>{date_str_pretty}</strong> (today, Central US) — live odds & agent active{live_chip}{credit_chip}</div>')
     elif picked_date < central_today:
         html(f'<div class="hint warn" style="margin-bottom:6px;"><strong>{date_str_pretty}</strong> — past date. Showing ESPN finals only; the agent needs the Backtest tab for historical plays.</div>')
     else:
