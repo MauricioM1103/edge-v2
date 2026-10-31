@@ -70,14 +70,7 @@ def add_pick(pick: dict, path: Optional[str] = None) -> dict:
 
 
 def _dedup_key(p: dict) -> tuple:
-    """Stable key for deduplicating picks across auto-log runs.
-
-    Agent-logged picks replay every dashboard load, so we key on the sport,
-    the resolved ESPN event id (not the Kalshi ticker, which doesn't carry a
-    unique game id when the per-event Kalshi path changes), the market, and
-    the exact side label. Manual picks share the same shape so a manual log
-    before the agent one is still preserved as the canonical row.
-    """
+    """Stable key for exact-match deduplication (same side, same price slot)."""
     return (
         (p.get("sport") or "").lower(),
         str(p.get("event_id") or ""),
@@ -86,22 +79,105 @@ def _dedup_key(p: dict) -> tuple:
     )
 
 
-def upsert_agent_pick(pick: dict, path: Optional[str] = None) -> Optional[dict]:
-    """Insert a pick only if no matching row already exists.
+def _market_slot(p: dict) -> tuple:
+    """Group key for a single two-way market slot.
 
-    Returns the stored row on insert, or None when a dedup hit skipped it.
-    Agent picks also get a `source: "agent-auto"` tag so the ledger can
-    distinguish bot-written rows from manually logged ones.
+    Two picks that share this slot are opposite sides of the same market
+    (e.g. "Lakers wins" vs "Celtics wins" on the same h2h, or "Over 45.5"
+    vs "Under 45.5" on the same total). Point normalization:
+     - h2h / h2h_h1: point ignored (always None).
+     - spreads: home_pt = -away_pt, so key on abs(point) so "Lakers -3.5"
+       and "Celtics +3.5" collapse. Different numbers (-3.5 vs -7.5) stay
+       as distinct slots.
+     - totals: Over/Under share the same point, so point is used as-is.
+    """
+    sport = (p.get("sport") or "").lower()
+    event = str(p.get("event_id") or "")
+    market = (p.get("market") or "h2h").lower()
+    pt = p.get("point")
+    if market in ("spreads", "spreads_h1") and pt is not None:
+        try:
+            pt = abs(float(pt))
+        except (TypeError, ValueError):
+            pass
+    if market in ("h2h", "h2h_h1"):
+        pt = None  # moneyline is always two-sided with no point
+    return (sport, event, market, pt)
+
+
+def upsert_agent_pick(pick: dict, path: Optional[str] = None) -> Optional[dict]:
+    """Insert an agent pick, deduping against both exact and opposing-side matches.
+
+    Returns the stored row on insert, None when skipped. Rules:
+     - Exact-match (same side) is a no-op skip.
+     - Opposing-side match (same market slot, other side) keeps whichever
+       side has the higher Pinnacle fair prob. If the stored row is a loser,
+       it gets replaced by the better side; otherwise the incoming pick is
+       dropped. This prevents the ledger from ever carrying both sides of
+       the same two-way market, which was a user-reported bug.
     """
     p = dict(pick or {})
     p.setdefault("source", "agent-auto")
     file_path = path or _default_path()
     picks = _load(file_path)
-    key = _dedup_key(p)
-    for existing in picks:
-        if _dedup_key(existing) == key:
-            return None
+
+    exact = _dedup_key(p)
+    slot = _market_slot(p)
+    new_fp = float(p.get("projected_prob") or 0)
+
+    for i, existing in enumerate(picks):
+        # Only compare against still-open or just-settled agent rows; manually
+        # logged rows are the user's intentional decisions and we never touch them.
+        if (existing.get("source") or "manual") != "agent-auto":
+            continue
+        if _dedup_key(existing) == exact:
+            return None  # exact-side duplicate
+        if _market_slot(existing) != slot:
+            continue
+        # Opposing-side hit on the same market slot. Keep the Pinnacle-favored
+        # side; if it's already there, drop the incoming pick.
+        existing_fp = float(existing.get("projected_prob") or 0)
+        if new_fp > existing_fp + 1e-9:
+            # Replace in place so dates/CLV history continue to live under one id.
+            picks[i] = {**existing, **p, "id": existing.get("id") or p.get("id")}
+            _save(file_path, picks)
+            return picks[i]
+        return None
     return add_pick(p, path=file_path)
+
+
+def collapse_duplicate_sides(path: Optional[str] = None) -> int:
+    """One-shot cleanup: fold opposing agent-logged sides into one row.
+
+    Picks logged before the two-way collapse fix landed can still show both
+    sides on the ledger. Group by market slot and keep the side with the
+    higher Pinnacle fair prob (projected_prob); drop the rest. Only touches
+    rows tagged source="agent-auto" — manual logs are left alone.
+    Returns the number of rows removed.
+    """
+    file_path = path or _default_path()
+    picks = _load(file_path)
+    by_slot: dict = {}
+    others: list = []
+    for p in picks:
+        if (p.get("source") or "manual") != "agent-auto":
+            others.append(p)
+            continue
+        slot = _market_slot(p)
+        prev = by_slot.get(slot)
+        if prev is None:
+            by_slot[slot] = p
+            continue
+        prev_fp = float(prev.get("projected_prob") or 0)
+        cur_fp = float(p.get("projected_prob") or 0)
+        if cur_fp > prev_fp + 1e-9:
+            by_slot[slot] = p
+        # else keep prev; cur is dropped
+    kept_agent = list(by_slot.values())
+    removed = len(picks) - len(others) - len(kept_agent)
+    if removed > 0:
+        _save(file_path, others + kept_agent)
+    return removed
 
 
 def auto_log_agent_edges(edges: list, settings: dict, path: Optional[str] = None) -> int:

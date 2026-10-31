@@ -372,18 +372,63 @@ def render_dashboard(settings: dict):
     else:
         slate_foot = f"{live_count} live · {final_count} final"
     slate_label = f"{len(sports_list)} sports" if multi_sport_mode else sport_setting.upper()
+    # Headline strip: 4 numbers only — the ones that answer "what do I have,
+    # what am I running, what's my record". Everything else moved to the
+    # Performance tab so first-timers aren't drowned on load.
     metric_row([
-        {"label": "Kalshi cash", "value": kalshi_display, "foot": (kalshi_source or "not configured"), "tone": "accent" if kalshi_source == "live" else ""},
-        {"label": "Bankroll", "value": f"{bankroll_units:.1f}u", "foot": f"1u = {unit_pct*100:.1f}% of roll"},
-        {"label": "Open picks", "value": str(s["open"]), "foot": "awaiting result"},
-        {"label": "Record", "value": f"{s['wins']}-{s['losses']}-{s['pushes']}", "foot": f"settled: {s['total_settled']}"},
-        {"label": "Net units", "value": f"{s['net_units']:+.2f}u", "foot": roi_display + " ROI", "tone": net_tone},
-        {"label": "Avg CLV", "value": f"{(s['avg_clv_pct'] or 0)*100:+.2f}%" if s["avg_clv_pct"] is not None else "—", "foot": "closing line value"},
-        {"label": f"Slate · {slate_label}", "value": f"{live_count + upcoming + final_count}", "foot": slate_foot},
+        {"label": "Bankroll", "value": kalshi_display,
+         "foot": (f"{kalshi_source or 'not set'} · 1u = {unit_pct*100:.1f}%"),
+         "tone": "accent" if kalshi_source == "live" else ""},
+        {"label": f"Slate · {slate_label}", "value": f"{live_count + upcoming + final_count}",
+         "foot": slate_foot},
+        {"label": "Record", "value": f"{s['wins']}-{s['losses']}-{s['pushes']}",
+         "foot": f"{s['open']} open · {s['total_settled']} settled"},
+        {"label": "Net", "value": f"{s['net_units']:+.2f}u",
+         "foot": roi_display + " ROI · see Performance tab", "tone": net_tone},
     ])
 
-    if not api_key_ok:
-        html('<div class="hint warn">The Odds API key not set — showing ESPN schedule only. Add <code>THE_ODDS_API_KEY</code> to your environment or <code>.streamlit/secrets.toml</code> to enable live lines, EV, and Kelly suggestions.</div>')
+    # First-timer welcome: if no API key and no picks yet, surface a 3-step
+    # onboarding so new users know what to do before they stare at an empty board.
+    has_any_picks = bool(picks)
+    kalshi_connected = kalshi_source == "live"
+    if not api_key_ok or (not kalshi_connected and not has_any_picks):
+        step_odds = "✓" if api_key_ok else "1"
+        step_kalshi = "✓" if kalshi_connected else "2"
+        step_ready = "✓" if (api_key_ok and kalshi_connected) else "3"
+        s_tone = lambda done: ("good" if done else "")
+        html(
+            '<div style="background:var(--card); border:1px solid var(--rule); '
+            'border-radius:12px; padding:18px 20px; margin:8px 0 18px; '
+            'box-shadow:var(--card-shadow);">'
+            '<div style="display:flex; align-items:center; gap:10px; margin-bottom:12px;">'
+            '<span class="chip accent" style="padding:3px 10px;">GET STARTED</span>'
+            '<span style="font-family:Fraunces,serif; font-style:italic; font-size:17px;">'
+            'Three steps and the agent is working for you.</span>'
+            '</div>'
+            '<div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(220px, 1fr)); gap:12px;">'
+            f'<div style="padding:12px 14px; background:var(--card-elev); border-radius:8px;">'
+            f'<div class="mono {s_tone(api_key_ok)}" style="font-size:11px; letter-spacing:0.12em;'
+            f' text-transform:uppercase; margin-bottom:4px;">Step {step_odds} · Odds API</div>'
+            f'<div style="font-size:13px; color:var(--ink-dim);">'
+            + ("Connected — live lines flowing." if api_key_ok else
+               "Grab a free key at <a href='https://the-odds-api.com' target='_blank' style='color:var(--accent);'>the-odds-api.com</a>, add it in Settings → Odds API usage.")
+            + '</div></div>'
+            f'<div style="padding:12px 14px; background:var(--card-elev); border-radius:8px;">'
+            f'<div class="mono {s_tone(kalshi_connected)}" style="font-size:11px; letter-spacing:0.12em;'
+            f' text-transform:uppercase; margin-bottom:4px;">Step {step_kalshi} · Kalshi (optional)</div>'
+            f'<div style="font-size:13px; color:var(--ink-dim);">'
+            + ("Live cash + the agent book is set." if kalshi_connected else
+               "Optional — connect your Kalshi API keys in the sidebar to size bets off real cash and get the agent's Kalshi-vs-Pinnacle picks.")
+            + '</div></div>'
+            f'<div style="padding:12px 14px; background:var(--card-elev); border-radius:8px;">'
+            f'<div class="mono {s_tone(api_key_ok and kalshi_connected)}" style="font-size:11px; letter-spacing:0.12em;'
+            f' text-transform:uppercase; margin-bottom:4px;">Step {step_ready} · Watch the board</div>'
+            f'<div style="font-size:13px; color:var(--ink-dim);">'
+            'The agent scans every active sport, finds Pinnacle-rated mispricings, and auto-logs every funded pick. '
+            'Finished picks stay on the board as record — nothing to click.'
+            '</div></div>'
+            '</div></div>'
+        )
 
     # Date-mode banner + live-refresh chip
     live_chip = ""
@@ -469,16 +514,59 @@ def render_dashboard(settings: dict):
         sports_list=sports_list,
     ) or []
 
-    # Per-pick quantitative analysis boards.
-    if top_picks:
-        _render_analysis_boards(top_picks, settings, kalshi_cash)
+    # Stash board context for the Analysis / Explore tabs. The main Board stays
+    # clean — users opt into the deep dive explicitly by switching tabs. We
+    # keep the whole slate (merged) and the top picks so Analysis can rebuild
+    # the quant boards and the matchups grid without re-fetching data.
+    st.session_state["_board_top_picks"] = top_picks
+    st.session_state["_board_merged"] = merged
+    st.session_state["_board_sports_list"] = sports_list
+    st.session_state["_board_sport_setting"] = sport_setting
+    st.session_state["_board_multi_sport_mode"] = multi_sport_mode
 
     if not merged:
         html('<div class="hint">No games on the slate for this sport right now. Try another sport in the sidebar, or check back later.</div>')
         return
+    # Hint about the Analysis tab so users know where the deep dives moved.
+    if top_picks:
+        html(
+            '<div class="hint" style="margin-top:14px;">'
+            f'<strong>{len(top_picks)}</strong> funded pick(s) on the board. '
+            'Switch to the <strong>Analysis</strong> tab for per-pick quant breakdowns, '
+            'the probability ladder, Kelly math, and the matchups grid.'
+            '</div>'
+        )
 
-    # Everything below is secondary — collapse it so the main agent board stays prominent.
-    with st.expander("🎯 Quick-glance EV scanner + today's matchups", expanded=False):
+
+def render_analysis(settings: dict):
+    """Deep-dive tab for the board: per-pick quant breakdown + quick EV + matchups grid.
+
+    Reads board context the Dashboard already stashed in session_state so this
+    tab doesn't re-fetch APIs. If the user hasn't opened the Dashboard yet we
+    show a short prompt rather than running the full scan here.
+    """
+    brand_bar("Analysis · deep dive on today's picks")
+    top_picks = st.session_state.get("_board_top_picks") or []
+    merged = st.session_state.get("_board_merged") or []
+    sports_list = st.session_state.get("_board_sports_list") or []
+    sport_setting = st.session_state.get("_board_sport_setting") or "nfl"
+    multi_sport_mode = bool(st.session_state.get("_board_multi_sport_mode"))
+    if not (top_picks or merged):
+        html(
+            '<div class="hint">Open the <strong>Board</strong> tab first — once the '
+            'agent scans today\'s slate, this tab fills with per-pick quant breakdowns '
+            'and the matchups grid.</div>'
+        )
+        return
+
+    kalshi_cash = settings.get("kalshi_cash") or 0.0
+    unit_pct = settings.get("unit_pct") or 0.01
+    bankroll_units = settings.get("bankroll_units") or 100.0
+
+    if top_picks:
+        _render_analysis_boards(top_picks, settings, kalshi_cash)
+    if merged:
+        html('<h3 style="margin-top:24px;">Quick-glance EV scanner</h3>')
         _quick_label = ",".join(sports_list) if multi_sport_mode else sport_setting
         _render_quick_calculator(merged, unit_pct, bankroll_units, _quick_label)
         _render_matchups_grid(merged, sports_list, settings, unit_pct, bankroll_units, multi_sport_mode)
@@ -1787,30 +1875,40 @@ def render_pro_tools(settings: dict):
 def render_picks(settings: dict):
     brand_bar("Verified Picks Ledger")
 
-    cols = st.columns([1, 1, 1, 1, 1, 1])
+    cols = st.columns([1.1, 1.2, 1, 1, 1, 1])
     with cols[0]:
         if st.button("↻ Auto-settle from ESPN"):
             n = picks_store.auto_settle()
             st.cache_data.clear()
             st.success(f"Settled {n} pick(s).")
     with cols[1]:
+        # Legacy cleanup: picks logged before the two-way collapse landed can
+        # still show both sides of the same market. One click fixes.
+        if st.button("⟲ Collapse opposing sides"):
+            removed = picks_store.collapse_duplicate_sides()
+            st.cache_data.clear()
+            if removed:
+                st.success(f"Removed {removed} duplicate opposing-side pick(s).")
+            else:
+                st.info("No opposing-side duplicates found.")
+    with cols[2]:
         filter_status = st.selectbox(
             "Filter", options=["All", "Open", "Won", "Lost", "Push"],
             key="ledger_filter", label_visibility="collapsed",
         )
-    with cols[2]:
+    with cols[3]:
         filter_sport = st.selectbox(
             "Sport", options=["All"] + sorted({p.get("sport") or "" for p in picks_store.list_picks() if p.get("sport")}),
             key="ledger_sport_filter", label_visibility="collapsed",
         )
-    with cols[3]:
+    with cols[4]:
         # Source filter — distinguishes picks the agent auto-logged from manual
         # entries so users can audit either stream in isolation.
         filter_source = st.selectbox(
             "Source", options=["All", "Agent (auto)", "Manual"],
             key="ledger_source_filter", label_visibility="collapsed",
         )
-    with cols[4]:
+    with cols[5]:
         # Ported from V1 Bet Log — one-click CSV download. Streams everything
         # currently in the ledger, not just the filtered rows, so users can
         # grab a full history without having to toggle filters off first.
@@ -2554,6 +2652,29 @@ def render_settings(settings: dict):
         '<br><strong>Edge (pts)</strong> = Fair IP − Book IP, in percentage points. '
         'A +4 pts edge means the sharp consensus considers the outcome 4 points more likely than '
         'this book is pricing it, so you expect long-run profit at that price.'
+        '</div>'
+    )
+
+    # ----- Access from phone / away from home -----
+    st.markdown("### Access from phone or anywhere")
+    html(
+        '<div class="hint">'
+        '<strong>Yes — this works from your phone, anywhere with internet.</strong> '
+        'The app is deployed on Streamlit Cloud, which gives you a public URL '
+        '(for this repo it looks like <code>edge-v2-xxxx.streamlit.app</code>). '
+        'Open that URL in Safari / Chrome on your phone and you get the same '
+        'board, auto-refreshing live scores and all. Add it to your home screen '
+        '(Share → Add to Home Screen) and it behaves like a native app.'
+        '<br><br>'
+        '<strong>What travels with you:</strong> every setting (sport group, '
+        'Kelly multiplier, auto-log preference, Kalshi credentials) is server-side '
+        'in the Streamlit container, so your phone sees the same state as your laptop. '
+        'Picks you log on one device appear on the other immediately.'
+        '<br><br>'
+        '<strong>Credit guard on mobile:</strong> the auto-refresh only runs while '
+        'you have at least one live game AND the tab is visible — closing the tab '
+        'on your phone stops the polling, so you can\'t accidentally burn Odds-API '
+        'credits in your pocket.'
         '</div>'
     )
 

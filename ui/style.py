@@ -1,51 +1,60 @@
-"""Premium sportsbook aesthetic.
+"""Modern financial-dashboard aesthetic.
 
-Inspiration: Action Network's deep-charcoal cards, Pinnacle's precise typographic
-hierarchy, VSiN's monospace stat framing. Streamlit's default theme is replaced
-with CSS variables that respond to the user's dark/light preference.
+Inspiration: Bloomberg Terminal's density + Linear's airiness. Dark-first,
+cool-neutral grays, a single confident accent (sky blue), semantic greens and
+reds for P&L. Everything key is still monospace + tabular — numbers must line
+up like a trading screen.
 """
 
 CUSTOM_CSS = r"""
 <style>
 :root {
-  --bg: #0b0f17;
-  --surface: #141a26;
-  --card: #1b2232;
-  --card-elev: #212a3d;
-  --rule: #2a3348;
-  --rule-strong: #3a4660;
-  --ink: #ECEFF4;
-  --ink-dim: #B8C0CC;
-  --muted: #7A8396;
-  --muted-dim: #5A6378;
-  --accent: #4FD1C5;
-  --accent-ink: #0b0f17;
-  --good: #4ADE80;
+  /* Base canvas: deep slate-blue, not pure black — easier on the eyes
+     for extended screen time, which this dashboard asks for. */
+  --bg: #0A0F1C;
+  --surface: #10172A;
+  --card: #141C33;
+  --card-elev: #1B2440;
+  --rule: #233055;
+  --rule-strong: #334471;
+  /* Text ladder: high-contrast primary; dim stays legible at 11px. */
+  --ink: #F1F5F9;
+  --ink-dim: #CBD5E1;
+  --muted: #7F8CA8;
+  --muted-dim: #566180;
+  /* Accent: sky-500 — modern, high-contrast on slate, no teal/dated feel. */
+  --accent: #38BDF8;
+  --accent-ink: #0A0F1C;
+  /* Semantic: tuned so WIN/LOSS/PUSH read instantly on dark bg. */
+  --good: #22C55E;
   --warn: #F59E0B;
-  --bad: #F87171;
-  --live: #EF4444;
-  --chip: #2a3348;
+  --bad: #EF4444;
+  --live: #F43F5E;
+  --chip: #1A2340;
+  /* Elevation hints for cards/panels — tiny glow + shadow, not a hard border. */
+  --card-shadow: 0 1px 2px rgba(0,0,0,.35), 0 8px 24px rgba(5,10,22,.35);
 }
 
 @media (prefers-color-scheme: light) {
   :root:not([data-theme="dark"]) {
-    --bg: #F6F5F0;
+    --bg: #F8FAFC;
     --surface: #FFFFFF;
     --card: #FFFFFF;
-    --card-elev: #FBFAF4;
-    --rule: #E3E0D4;
-    --rule-strong: #CBC7B6;
-    --ink: #1A1F2C;
-    --ink-dim: #3F4654;
-    --muted: #6B7284;
-    --muted-dim: #9099A7;
-    --accent: #0E7C7B;
+    --card-elev: #F1F5F9;
+    --rule: #E2E8F0;
+    --rule-strong: #CBD5E1;
+    --ink: #0F172A;
+    --ink-dim: #334155;
+    --muted: #64748B;
+    --muted-dim: #94A3B8;
+    --accent: #0369A1;
     --accent-ink: #FFFFFF;
-    --good: #138A4B;
-    --warn: #B37100;
+    --good: #15803D;
+    --warn: #B45309;
     --bad: #B91C1C;
-    --live: #DC2626;
-    --chip: #F0EDE1;
+    --live: #BE123C;
+    --chip: #F1F5F9;
+    --card-shadow: 0 1px 2px rgba(0,0,0,.04), 0 2px 10px rgba(15,23,42,.06);
   }
 }
 
@@ -100,48 +109,54 @@ h3 { font-size: 17px; }
 }
 [data-testid="stSidebar"] * { color: var(--ink); }
 
-/* tabs — big and clean */
+/* tabs — pill-shaped, modern, no faux-browser underlines */
 .stTabs [data-baseweb="tab-list"] {
-  gap: 6px; border-bottom: 1px solid var(--rule);
-  margin-bottom: 20px;
+  gap: 4px; border-bottom: 1px solid var(--rule);
+  margin-bottom: 22px; padding-bottom: 2px;
 }
 .stTabs [data-baseweb="tab"] {
-  padding: 10px 16px; background: transparent;
+  padding: 9px 16px; background: transparent;
   color: var(--muted); font-weight: 500;
-  border-radius: 8px 8px 0 0;
+  border-radius: 8px;
   border: 1px solid transparent;
-  border-bottom: 2px solid transparent;
+  font-family: "Public Sans", -apple-system, sans-serif;
+  font-size: 13.5px; letter-spacing: 0.005em;
+  transition: color 160ms ease, background 160ms ease;
 }
+.stTabs [data-baseweb="tab"]:hover { color: var(--ink-dim); }
 .stTabs [aria-selected="true"] {
-  color: var(--ink);
-  border-bottom-color: var(--accent);
-  background: var(--surface);
+  color: var(--ink); font-weight: 600;
+  background: var(--card);
+  border-color: var(--rule);
+  box-shadow: inset 0 -2px 0 var(--accent);
 }
 
 /* ===== brand header ===== */
 .brand-bar {
   display: flex; align-items: baseline; justify-content: space-between;
-  gap: 16px; margin-bottom: 10px;
+  gap: 16px; margin: 0 0 18px;
   padding-bottom: 14px; border-bottom: 1px solid var(--rule);
 }
 .brand {
-  display: flex; align-items: baseline; gap: 10px;
+  display: flex; align-items: baseline; gap: 12px;
 }
 .brand .dot {
   width: 10px; height: 10px; border-radius: 50%;
   background: var(--accent); display: inline-block;
+  box-shadow: 0 0 12px color-mix(in oklab, var(--accent) 50%, transparent);
 }
 .brand .name {
   font-family: "Fraunces", Georgia, serif !important;
-  font-style: italic; font-size: 28px; font-weight: 400;
-  color: var(--ink); letter-spacing: -0.01em;
+  font-style: italic; font-size: 30px; font-weight: 400;
+  color: var(--ink); letter-spacing: -0.015em;
 }
 .brand .ver {
   font-family: "JetBrains Mono", monospace;
   font-size: 10px; letter-spacing: 0.14em;
-  color: var(--muted); padding: 3px 8px;
+  color: var(--muted); padding: 3px 10px;
   border: 1px solid var(--rule); border-radius: 999px;
   text-transform: uppercase;
+  background: var(--chip);
 }
 .brand-right {
   font-family: "JetBrains Mono", monospace;
@@ -151,24 +166,27 @@ h3 { font-size: 17px; }
 
 /* ===== metric row ===== */
 .metric-grid {
-  display: grid; gap: 10px;
+  display: grid; gap: 12px;
   grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
   margin: 10px 0 22px;
 }
 .metric-card {
   background: var(--card); border: 1px solid var(--rule);
-  border-radius: 10px; padding: 14px 16px;
+  border-radius: 12px; padding: 14px 16px;
+  box-shadow: var(--card-shadow);
+  transition: border-color 160ms ease, transform 160ms ease;
 }
+.metric-card:hover { border-color: var(--rule-strong); }
 .metric-card .label {
   font-family: "JetBrains Mono", monospace;
-  font-size: 10px; letter-spacing: 0.12em;
+  font-size: 10px; letter-spacing: 0.14em;
   text-transform: uppercase; color: var(--muted);
   margin-bottom: 6px;
 }
 .metric-card .value {
   font-family: "JetBrains Mono", monospace;
   font-size: 24px; font-weight: 500; color: var(--ink);
-  font-variant-numeric: tabular-nums;
+  font-variant-numeric: tabular-nums; letter-spacing: -0.01em;
 }
 .metric-card .value.good { color: var(--good); }
 .metric-card .value.bad { color: var(--bad); }
@@ -260,21 +278,54 @@ h3 { font-size: 17px; }
 .ev-plus { color: var(--good); font-weight: 600; }
 .ev-minus { color: var(--bad); font-weight: 600; }
 
-/* ledger table */
-table.ledger { width: 100%; border-collapse: collapse; font-size: 13px; }
-table.ledger th, table.ledger td { padding: 8px 10px; border-bottom: 1px solid var(--rule); text-align: left; vertical-align: middle; }
-table.ledger th { color: var(--muted); font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase; font-weight: 500; }
-table.ledger td.num { font-family: "JetBrains Mono", monospace; font-variant-numeric: tabular-nums; text-align: right; }
-table.ledger tr:hover { background: color-mix(in oklab, var(--rule) 30%, transparent); }
+/* ledger table — modern financial grid */
+table.ledger {
+  width: 100%; border-collapse: collapse; font-size: 13px;
+  background: var(--card); border-radius: 10px; overflow: hidden;
+  box-shadow: var(--card-shadow);
+}
+table.ledger th, table.ledger td {
+  padding: 10px 12px; border-bottom: 1px solid var(--rule);
+  text-align: left; vertical-align: middle;
+}
+table.ledger thead th {
+  color: var(--muted); font-size: 10px; letter-spacing: 0.12em;
+  text-transform: uppercase; font-weight: 600;
+  background: color-mix(in oklab, var(--card-elev) 60%, var(--card));
+  border-bottom: 1px solid var(--rule-strong);
+}
+table.ledger td.num {
+  font-family: "JetBrains Mono", monospace;
+  font-variant-numeric: tabular-nums; text-align: right;
+}
+table.ledger tbody tr {
+  transition: background 120ms ease;
+}
+table.ledger tbody tr:hover {
+  background: color-mix(in oklab, var(--accent) 6%, transparent);
+}
+table.ledger tbody tr:last-child td { border-bottom: none; }
 
-/* buttons – let Streamlit's own buttons harmonize */
+/* buttons — matched to new chrome */
 .stButton>button, .stDownloadButton>button {
   background: var(--card-elev); color: var(--ink);
-  border: 1px solid var(--rule-strong); border-radius: 8px;
+  border: 1px solid var(--rule); border-radius: 8px;
   font-family: "Public Sans", sans-serif; font-weight: 500;
   padding: 8px 14px;
+  transition: background 160ms ease, border-color 160ms ease, color 160ms ease;
 }
-.stButton>button:hover { border-color: var(--accent); color: var(--accent); background: var(--card); }
+.stButton>button:hover, .stDownloadButton>button:hover {
+  border-color: var(--accent); color: var(--accent);
+  background: color-mix(in oklab, var(--accent) 8%, var(--card));
+}
+.stButton>button[kind="primary"] {
+  background: var(--accent); color: var(--accent-ink);
+  border-color: var(--accent); font-weight: 600;
+}
+.stButton>button[kind="primary"]:hover {
+  background: color-mix(in oklab, var(--accent) 85%, white);
+  color: var(--accent-ink);
+}
 
 /* alerts */
 .hint {
@@ -410,23 +461,24 @@ LIGHT_THEME_CSS = r"""
 <style>
 :root { color-scheme: light; }
 :root {
-  --bg: #F6F5F0;
+  --bg: #F8FAFC;
   --surface: #FFFFFF;
   --card: #FFFFFF;
-  --card-elev: #FBFAF4;
-  --rule: #E3E0D4;
-  --rule-strong: #CBC7B6;
-  --ink: #1A1F2C;
-  --ink-dim: #3F4654;
-  --muted: #6B7284;
-  --muted-dim: #9099A7;
-  --accent: #0E7C7B;
+  --card-elev: #F1F5F9;
+  --rule: #E2E8F0;
+  --rule-strong: #CBD5E1;
+  --ink: #0F172A;
+  --ink-dim: #334155;
+  --muted: #64748B;
+  --muted-dim: #94A3B8;
+  --accent: #0369A1;
   --accent-ink: #FFFFFF;
-  --good: #138A4B;
-  --warn: #B37100;
+  --good: #15803D;
+  --warn: #B45309;
   --bad: #B91C1C;
-  --live: #DC2626;
-  --chip: #F0EDE1;
+  --live: #BE123C;
+  --chip: #F1F5F9;
+  --card-shadow: 0 1px 2px rgba(0,0,0,.04), 0 2px 10px rgba(15,23,42,.06);
 }
 </style>
 """

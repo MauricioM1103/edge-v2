@@ -33,7 +33,7 @@ from apis import espn, odds as odds_api, kalshi
 from storage import picks as picks_store, settings as settings_store
 from ui.style import inject as inject_style
 from ui.pages import (
-    render_dashboard, render_pro_tools, render_picks,
+    render_dashboard, render_analysis, render_pro_tools, render_picks,
     render_settings, render_backtest, load_kalshi_balance,
     render_performance, render_calibration,
 )
@@ -304,21 +304,27 @@ def main():
     inject_style(theme=saved_theme)
     settings = _sidebar_settings()
 
-    (tab_dash, tab_pro, tab_picks, tab_perf, tab_calib,
-     tab_backtest, tab_settings) = st.tabs([
-        "Dashboard · Daily Slate",
-        "Pro Handicapping Tools",
-        "Verified Picks Ledger",
-        "Performance · Bankroll",
-        "Calibration · CLV t-test",
-        "Backtest · 30-day",
+    # Tab order follows the user's journey: the Board is what they look at
+    # every day; everything else is one click away but out of sight so the
+    # main view stays uncluttered for first-timers.
+    (tab_board, tab_analysis, tab_tools, tab_ledger,
+     tab_perf, tab_calib, tab_backtest, tab_settings) = st.tabs([
+        "Board",
+        "Analysis",
+        "Tools",
+        "Ledger",
+        "Performance",
+        "Calibration",
+        "Backtest",
         "Settings",
     ])
-    with tab_dash:
+    with tab_board:
         render_dashboard(settings)
-    with tab_pro:
+    with tab_analysis:
+        render_analysis(settings)
+    with tab_tools:
         render_pro_tools(settings)
-    with tab_picks:
+    with tab_ledger:
         render_picks(settings)
     with tab_perf:
         render_performance(settings)
