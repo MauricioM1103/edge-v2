@@ -31,9 +31,10 @@ from backtest import engine as backtest_engine
 # cached data loaders - respect API rate limits
 # ============================================================================
 
-@st.cache_data(ttl=60, show_spinner=False)
+@st.cache_data(ttl=20, show_spinner=False)
 def load_espn_scoreboard(sport_key: str, date_str: Optional[str] = None):
-    """ESPN scoreboard - 60s TTL so live scores stay fresh. ESPN is free, so no credit worry."""
+    """ESPN scoreboard - 20s TTL so the live-refresh loop actually sees new
+    scores on each tick. ESPN is free, so cache pressure is a non-issue."""
     try:
         return espn.get_scoreboard(sport_key, date_str)
     except Exception:
@@ -217,6 +218,19 @@ def _merge_events_with_odds(
 def render_dashboard(settings: dict):
     brand_bar("Live Daily Slate")
 
+    # Live-score auto-refresh. We rerun the whole dashboard on an interval
+    # so ESPN score fetches (20s TTL) get a chance to pick up new goals /
+    # final whistles / live clocks without the user hitting refresh.
+    # Odds API responses stay cached for the full live_ttl (1h default), so
+    # this costs 0 Odds-API credits — only ESPN takes the hit, and ESPN is free.
+    try:
+        from streamlit_autorefresh import st_autorefresh  # type: ignore
+    except ImportError:
+        st_autorefresh = None  # dep not installed yet; fallback is manual refresh
+    _saved_cfg_tmp = settings_store.load()
+    _refresh_sec = int(_saved_cfg_tmp.get("live_refresh_sec", 30) or 0)
+    _refresh_running = False
+
     sport_setting = settings.get("sport") or "nfl"
     # Normalize to a list so single-sport and all-sports modes share code.
     sports_list = sport_setting if isinstance(sport_setting, list) else [sport_setting]
@@ -324,6 +338,23 @@ def render_dashboard(settings: dict):
     upcoming = sum(1 for ev, _, _ in merged if ev.get("status_state") == "pre")
     api_key_ok = odds_api.get_api_key() is not None
 
+    # Kick on the live auto-refresh now that we know how many games are
+    # in-progress. We only poll while at least one game is live — once the
+    # slate is all pre-game or all final there's nothing moving to refresh.
+    if (
+        st_autorefresh is not None
+        and _refresh_sec > 0
+        and live_count > 0
+        and is_today
+    ):
+        st_autorefresh(
+            interval=_refresh_sec * 1000,
+            key="dash_live_refresh",
+            # None = run forever while mounted.
+            limit=None,
+        )
+        _refresh_running = True
+
     net_tone = "good" if (s["net_units"] or 0) > 0 else ("bad" if (s["net_units"] or 0) < 0 else "")
     roi_display = f"{(s['roi'] or 0)*100:+.1f}%" if s["roi"] is not None else "—"
     kalshi_source = settings.get("kalshi_source")
@@ -354,9 +385,20 @@ def render_dashboard(settings: dict):
     if not api_key_ok:
         html('<div class="hint warn">The Odds API key not set — showing ESPN schedule only. Add <code>THE_ODDS_API_KEY</code> to your environment or <code>.streamlit/secrets.toml</code> to enable live lines, EV, and Kelly suggestions.</div>')
 
-    # Date-mode banner
+    # Date-mode banner + live-refresh chip
+    live_chip = ""
+    if _refresh_running:
+        live_chip = (
+            f' · <span class="chip live" style="padding:1px 7px; font-size:10px;">'
+            f'● LIVE auto-refresh · {_refresh_sec}s</span>'
+        )
+    elif st_autorefresh is None and _refresh_sec > 0 and is_today:
+        live_chip = (
+            ' · <span class="chip warn" style="padding:1px 7px; font-size:10px;">'
+            'auto-refresh unavailable (install streamlit-autorefresh)</span>'
+        )
     if is_today:
-        html(f'<div class="hint" style="margin-bottom:6px;"><strong>{date_str_pretty}</strong> (today, Central US) — live odds & agent active</div>')
+        html(f'<div class="hint" style="margin-bottom:6px;"><strong>{date_str_pretty}</strong> (today, Central US) — live odds & agent active{live_chip}</div>')
     elif picked_date < central_today:
         html(f'<div class="hint warn" style="margin-bottom:6px;"><strong>{date_str_pretty}</strong> — past date. Showing ESPN finals only; the agent needs the Backtest tab for historical plays.</div>')
     else:
@@ -2421,6 +2463,30 @@ def render_settings(settings: dict):
             "regions=eu, markets=h2h, cache=60min, min-edge=1%, unit=10% of Kalshi cash, "
             "daily cap=25%, theme=dark. "
             "Does **not** clear your API keys or Kalshi connection."
+        )
+
+    # ----- Live score auto-refresh -----
+    st.markdown("### Live score auto-refresh")
+    lr1, lr2 = st.columns([1, 3])
+    with lr1:
+        cur_lr = int(saved.get("live_refresh_sec", 30) or 0)
+        lr_options = [0, 15, 30, 60, 120]
+        lr_pick = st.select_slider(
+            "Refresh interval",
+            options=lr_options,
+            value=cur_lr if cur_lr in lr_options else 30,
+            format_func=lambda v: "Off" if v == 0 else f"{v}s",
+            key="set_live_refresh",
+        )
+        if lr_pick != cur_lr:
+            settings_store.save({"live_refresh_sec": int(lr_pick)})
+            st.success(f"Live refresh: {'OFF' if lr_pick == 0 else str(lr_pick)+'s'}.")
+    with lr2:
+        st.caption(
+            "Rerun the Dashboard automatically to pull fresh ESPN live scores "
+            "while the tab is open. Only polls while at least one game on the "
+            "slate is in-progress — outside those windows the tab is idle. "
+            "ESPN is free; Odds API responses stay cached, so this costs 0 credits."
         )
 
     # ----- Agent auto-logging -----

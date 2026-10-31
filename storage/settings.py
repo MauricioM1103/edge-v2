@@ -74,6 +74,11 @@ _DEFAULTS: Dict[str, Any] = {
     # ledger automatically (dedup-aware), so you get a complete record of what
     # the agent recommended — not just what you clicked "Log" on.
     "agent_auto_log": True,
+    # Seconds between live-score refreshes on the Dashboard. 0 disables the
+    # auto-rerun entirely (manual refresh only). Only active while at least
+    # one game on the slate is in-progress; outside those windows the
+    # dashboard is idle regardless of this value.
+    "live_refresh_sec": 30,
 }
 
 

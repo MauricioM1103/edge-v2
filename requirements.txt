@@ -1,2 +1,5 @@
 streamlit>=1.32,<2.0
 cryptography>=42.0
+# Lightweight custom component that reruns the app on an interval, used to
+# auto-refresh live ESPN scores on the Dashboard tab.
+streamlit-autorefresh>=1.0
