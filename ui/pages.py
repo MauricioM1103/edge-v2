@@ -613,7 +613,47 @@ def _render_agent_panel(odds_games, kalshi_cash, settings,
             continue
         seen.add(key)
         deduped.append(e)
-    edges = sorted(deduped, key=lambda e: -e["edge"])
+
+    # Collapse opposing sides of the same two-way market down to one row.
+    # Scanners can emit both home and away when both show positive edge
+    # (bookmakers price asymmetrically), but keeping both on the board is
+    # noise — in a two-way market the fair probs sum to 1, so one side is
+    # always the "favored by Pinnacle" bet. Keep that side.
+    #
+    # Group key normalization matters here:
+    #  - h2h: no point, so (event, market) alone groups the two sides.
+    #  - spreads: home_pt and away_pt are inverses (e.g. -3.5 / +3.5), so
+    #    we key on abs(point) so "Lakers -3.5" and "Celtics +3.5" collapse.
+    #  - totals: Over and Under share the SAME point, so point goes in
+    #    directly; different lines (Over 45.5 vs Over 48.5) stay distinct.
+    #  - alt markets (h2h_h1, spreads_h1, totals_h1, btts): same rules per family.
+    def _group_key(e):
+        mk = (e.get("market") or "h2h").lower()
+        pt = e.get("point")
+        if mk in ("spreads", "spreads_h1") and pt is not None:
+            try:
+                pt_norm = abs(float(pt))
+            except (TypeError, ValueError):
+                pt_norm = pt
+        else:
+            pt_norm = pt
+        return (e.get("event_id"), mk, pt_norm)
+    grouped: Dict[tuple, dict] = {}
+    for e in deduped:
+        gk = _group_key(e)
+        prev = grouped.get(gk)
+        if prev is None:
+            grouped[gk] = e
+            continue
+        # Keep the side with the higher Pinnacle fair prob (the no-vig
+        # favorite). Ties fall back to the larger edge.
+        prev_fp = float(prev.get("fair_prob") or 0)
+        cur_fp = float(e.get("fair_prob") or 0)
+        if cur_fp > prev_fp + 1e-9:
+            grouped[gk] = e
+        elif abs(cur_fp - prev_fp) <= 1e-9 and float(e.get("edge") or 0) > float(prev.get("edge") or 0):
+            grouped[gk] = e
+    edges = sorted(grouped.values(), key=lambda e: -float(e.get("edge") or 0))
 
     # Apply total-exposure cap.
     _cap_fn = getattr(agent_calc, "apply_daily_cap", None)
