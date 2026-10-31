@@ -1052,8 +1052,11 @@ def _render_agent_panel(odds_games, kalshi_cash, settings,
     # using the dated ESPN scoreboard (today's board rolls off historical
     # games, so without this they'd never settle).
     if saved_cfg.get("agent_auto_log", True):
+        # Only log the picks the agent is actually surfacing on the board
+        # (top-N by Pinnacle fair prob). Overflow / cap-dropped edges never
+        # hit the ledger — they aren't recommendations, just scan residue.
         try:
-            inserted = picks_store.auto_log_agent_edges(funded, settings)
+            inserted = picks_store.auto_log_agent_edges(top, settings)
         except Exception:
             inserted = 0
         if inserted:
