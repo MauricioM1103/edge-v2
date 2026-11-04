@@ -2184,7 +2184,7 @@ def render_picks(settings: dict):
 HIGH_CONF_THRESHOLD = 0.55
 
 def render_results(settings: dict):
-    brand_bar(f"Results · picks with > {int(HIGH_CONF_THRESHOLD*100)}% Pinnacle fair prob")
+    brand_bar(f"Results · past 7 days · picks with > {int(HIGH_CONF_THRESHOLD*100)}% Pinnacle fair prob")
 
     # Backfill pick_date on legacy rows so the by-date grouping works.
     try:
@@ -2192,17 +2192,26 @@ def render_results(settings: dict):
     except Exception:
         pass
 
+    # Last 7 slate dates (Central), inclusive of today.
+    from datetime import timedelta as _td
+    from zoneinfo import ZoneInfo as _ZI
+    today_c = datetime.now(_ZI("America/Chicago")).date()
+    window_start = today_c - _td(days=6)  # 7 days including today
+    window_dates = {(today_c - _td(days=n)).strftime("%Y-%m-%d") for n in range(7)}
+
     all_picks = picks_store.list_picks()
     high_conf = [
         p for p in all_picks
         if (p.get("source") or "manual") == "agent-auto"
         and float(p.get("projected_prob") or 0) > HIGH_CONF_THRESHOLD
+        and (p.get("pick_date") or "")[:10] in window_dates
     ]
     if not high_conf:
         html(
             f'<div class="hint">No agent picks above the {int(HIGH_CONF_THRESHOLD*100)}% '
-            'Pinnacle fair prob threshold yet. The Results tab lights up once the agent '
-            'surfaces high-confidence edges and they grade from ESPN.</div>'
+            'Pinnacle fair prob threshold in the past 7 days. The Results tab lights up once '
+            'the agent surfaces high-confidence edges and they grade from ESPN. '
+            f'Window: <strong>{window_start.strftime("%b %d")} – {today_c.strftime("%b %d, %Y")}</strong>.</div>'
         )
         return
 
