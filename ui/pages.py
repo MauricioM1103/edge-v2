@@ -684,9 +684,15 @@ def _render_agent_panel(odds_games, kalshi_cash, settings,
                         espn_events_by_sport=None, pinnacle_games_by_sport=None):
     """Agent edge-scanner — Kalshi (free) as the book, Pinnacle no-vig as fair."""
     saved_cfg = settings_store.load()
-    st.markdown("### Agent · Kalshi vs Pinnacle edge scanner")
+    st.markdown("### Agent · ranked by Pinnacle fair prob")
     kelly_mult = settings.get("agent_kelly") or 0.25
-    min_edge = settings.get("agent_min_edge") or 0.02
+    # Historic agent_min_edge is the AUTO-LOG threshold (picks need to be
+    # +EV before they hit the ledger). For the BOARD we show every candidate
+    # ranked by fair prob, so the scanner threshold is pinned negative to
+    # let -EV + flat picks through for display. Kelly naturally returns 0
+    # stake on non-positive-edge picks, so stake sizing stays honest.
+    min_edge_log = settings.get("agent_min_edge") or 0.01
+    min_edge_scan = -1.0
     max_bet = settings.get("agent_max_bet_pct") or 0.025
     daily_cap_pct = saved_cfg.get("daily_exposure_cap_pct", 0.25)
 
@@ -756,7 +762,7 @@ def _render_agent_panel(odds_games, kalshi_cash, settings,
                     bankroll_cash=kalshi_cash,
                     sport_key=sp,
                     kelly_mult=kelly_mult,
-                    min_edge_pct=min_edge,
+                    min_edge_pct=min_edge_scan,
                     max_bet_pct=max_bet,
                     shop_books=shop_books,
                     espn_events_by_game=sp_espn,
@@ -780,7 +786,7 @@ def _render_agent_panel(odds_games, kalshi_cash, settings,
                     markets=other_markets,
                     shop_books=shop_books,
                     kelly_mult=kelly_mult,
-                    min_edge_pct=min_edge,
+                    min_edge_pct=min_edge_scan,
                     max_bet_pct=max_bet,
                     espn_events_by_game=sp_espn,
                 )
@@ -869,7 +875,7 @@ def _render_agent_panel(odds_games, kalshi_cash, settings,
     exposure_pct = (summary['total_stake'] / kalshi_cash) * 100 if kalshi_cash else 0
     exposure_tone = "warn" if exposure_pct > daily_cap_pct * 100 * 0.9 else ("good" if exposure_pct > 0 else "")
     metric_row([
-        {"label": "Edges", "value": str(summary["count"]), "foot": f"≥{min_edge*100:.1f}% edge", "tone": "good" if summary["count"] else ""},
+        {"label": "Picks shown", "value": str(summary["count"]), "foot": "ranked by Pinn fair prob", "tone": "good" if summary["count"] else ""},
         {"label": "Best", "value": f"{(summary['best_edge'] or 0)*100:+.1f}pts" if summary["best_edge"] else "—"},
         {"label": "Total stake", "value": f"{total_stake_units:.1f}u", "foot": f"of {cap_units:.1f}u cap", "tone": exposure_tone},
         {"label": "Exposure", "value": f"{exposure_pct:.1f}%", "foot": f"{daily_cap_pct*100:.0f}% cap today", "tone": exposure_tone},
@@ -895,9 +901,13 @@ def _render_agent_panel(odds_games, kalshi_cash, settings,
     if not filtered:
         html('<div class="hint">Every edge was filtered out. Clear a filter above to see picks again.</div>')
         return []
-    # Separate funded picks from cap-dropped picks so the main table only shows actionable rows.
-    funded = [e for e in filtered if (e.get("stake_dollars") or 0) > 0]
-    dropped = [e for e in filtered if (e.get("stake_dollars") or 0) <= 0]
+    # Previously we hid picks that didn't qualify for a Kelly stake. User
+    # explicitly asked for every candidate to show on the board ranked by
+    # Pinnacle fair prob — so "funded" is now just "all picks that passed
+    # the Sports/Markets filter". Picks without a positive edge (stake = 0)
+    # still render; they're the "Pinnacle favorites at a bad price" watch-list.
+    funded = list(filtered)
+    dropped = []  # kept for compatibility with the "capped out" expander below
 
     # Build a status/score cell for an edge based on ESPN state.
     from datetime import datetime
@@ -1072,45 +1082,14 @@ def _render_agent_panel(odds_games, kalshi_cash, settings,
 
     html('<div id="agent-table-top" style="position:relative; top:-40px;"></div>')
     if not top:
-        # Re-scan at progressively looser thresholds to tell the user WHY they see nothing.
-        suggestion = ""
-        for try_thr in (0.01, 0.005, 0.0):
-            try_edges = []
-            for sp in (sports_list or []):
-                sp_kalshi = kalshi_markets_by_sport.get(sp, {})
-                if not sp_kalshi:
-                    continue
-                try:
-                    try_edges += scan_fn(
-                        kalshi_markets_by_game=sp_kalshi,
-                        pinnacle_games=pinnacle_games_by_sport.get(sp, []),
-                        bankroll_cash=kalshi_cash,
-                        sport_key=sp, kelly_mult=kelly_mult,
-                        min_edge_pct=try_thr, max_bet_pct=max_bet,
-                        shop_books=shop_books,
-                        espn_events_by_game=espn_events_by_sport.get(sp, {}),
-                    )
-                except Exception:
-                    pass
-            # dedupe
-            seen2 = set(); de = []
-            for e in try_edges:
-                k = (e.get("event_id"), e.get("side_label"))
-                if k in seen2:
-                    continue
-                seen2.add(k); de.append(e)
-            if de:
-                suggestion = (
-                    f'<strong>{len(de)} edges exist at {try_thr*100:.1f}%+</strong> — '
-                    f'current threshold is {min_edge*100:.1f}%. Lower it in the sidebar '
-                    f'"Minimum edge (%)" slider or on the Settings tab.'
-                )
-                break
-        if not suggestion:
-            suggestion = (
-                "No Kalshi market is mispriced vs Pinnacle today — both are near-fair exchanges, "
-                "so this happens on efficient slates. Check back closer to game time."
-            )
+        # Board scans with no edge floor, so an empty top list means either no
+        # games matched the Sports/Markets filter or Pinnacle didn't price any
+        # games we could join.
+        suggestion = (
+            "No games match the current Sports / Markets filter, or Pinnacle "
+            "didn't have two-way prices on anything we scanned today. Widen the "
+            "filter above the board or check back closer to game time."
+        )
         html(f'<div class="hint">{suggestion}</div>')
         return []
     # Build the body: fresh picks first, then a one-cell divider row saying
