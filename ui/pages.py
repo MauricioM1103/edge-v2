@@ -844,9 +844,14 @@ def _render_agent_panel(odds_games, kalshi_cash, settings,
             grouped[gk] = e
     # Rank the board by Pinnacle fair prob (highest first) — the "most
     # confident this side wins" ordering. Edge magnitude is the tiebreaker.
+    # Rank: positive-edge picks first (actionable), then watch-list picks
+    # (fair-prob only, no price edge). Within each group, highest Pinnacle
+    # fair prob first, bigger edge as tiebreaker.
+    def _pos_edge_tier(e):
+        return 0 if float(e.get("edge") or 0) > 0 else 1
     edges = sorted(
         grouped.values(),
-        key=lambda e: (-float(e.get("fair_prob") or 0), -float(e.get("edge") or 0)),
+        key=lambda e: (_pos_edge_tier(e), -float(e.get("fair_prob") or 0), -float(e.get("edge") or 0)),
     )
 
     # Apply total-exposure cap.
@@ -1045,8 +1050,12 @@ def _render_agent_panel(odds_games, kalshi_cash, settings,
     # Keep each half sorted by Pinnacle fair prob (highest first), with edge
     # magnitude as the tiebreaker so same-confidence picks still favor the
     # juicier price.
+    # Same ordering as the master sort: positive edge first, then by fair
+    # prob descending, then edge magnitude. Keeps the "actionable rows on
+    # top, watch-list below" split visible within the fresh and settled halves.
     def _rank_key(e):
-        return (-float(e.get("fair_prob") or 0), -float(e.get("edge") or 0))
+        tier = 0 if float(e.get("edge") or 0) > 0 else 1
+        return (tier, -float(e.get("fair_prob") or 0), -float(e.get("edge") or 0))
     fresh.sort(key=_rank_key)
     settled_rows.sort(key=_rank_key)
     funded = fresh + settled_rows
