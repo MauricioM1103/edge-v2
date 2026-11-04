@@ -199,11 +199,11 @@ def _sidebar_settings() -> dict:
         agent_picks_shown = st.select_slider(
             "Picks shown on main board",
             options=[5, 10, 15, 20, 25],
-            value=int(saved.get("agent_picks_shown", 10)),
+            value=int(saved.get("agent_picks_shown", 15)),
             key="sb_agent_picks_shown",
             help="Top-N picks surfaced in the main agent table and analysis boards. Extras go to the overflow expander.",
         )
-        if agent_picks_shown != saved.get("agent_picks_shown", 10):
+        if agent_picks_shown != saved.get("agent_picks_shown", 15):
             settings_store.save({"agent_picks_shown": int(agent_picks_shown)})
 
         st.markdown("---")

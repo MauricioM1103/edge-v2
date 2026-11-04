@@ -1051,7 +1051,7 @@ def _render_agent_panel(odds_games, kalshi_cash, settings,
     settled_rows.sort(key=_rank_key)
     funded = fresh + settled_rows
 
-    picks_shown = int(settings.get("agent_picks_shown") or saved_cfg.get("agent_picks_shown") or 10)
+    picks_shown = int(settings.get("agent_picks_shown") or saved_cfg.get("agent_picks_shown") or 15)
     # Fresh picks fill the top N slots; the first few settled picks fill the
     # remainder so the board stays at ~picks_shown rows. Extra settled rows
     # drop into the overflow expander below.

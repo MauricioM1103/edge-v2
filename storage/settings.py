@@ -69,7 +69,7 @@ _DEFAULTS: Dict[str, Any] = {
     # Theme: "dark" (default) or "light".
     "theme": "dark",
     # How many picks the main agent table surfaces (slider: 5, 10, 15, 20, 25).
-    "agent_picks_shown": 10,
+    "agent_picks_shown": 15,
     # When true, every funded edge the agent surfaces is written to the picks
     # ledger automatically (dedup-aware), so you get a complete record of what
     # the agent recommended — not just what you clicked "Log" on.
@@ -134,6 +134,10 @@ def load() -> Dict[str, Any]:
             # intentionally selects a narrower group will re-save that choice.
             if disk.get("sport_group") == "US Majors":
                 disk["sport_group"] = _DEFAULTS["sport_group"]
+            # Migration 6: agent_picks_shown default moved from 10 → 15. Snap
+            # the stale 10 forward so returning users see the wider board.
+            if disk.get("agent_picks_shown") == 10:
+                disk["agent_picks_shown"] = _DEFAULTS["agent_picks_shown"]
             out.update(disk)
     except (OSError, json.JSONDecodeError, ValueError):
         pass
