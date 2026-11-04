@@ -896,6 +896,15 @@ def _render_agent_panel(odds_games, kalshi_cash, settings,
         mk = (e.get("market") or "h2h").lower()
         if board_markets_sel and mk not in board_markets_sel:
             return False
+        # Hide heavy Pinnacle favorites that don't carry a positive edge.
+        # A 76% fair prob with no edge usually translates to a -400ish
+        # moneyline — not worth the risk/reward even if it hits most of
+        # the time, because the vig costs eat the long-run return. Rule:
+        # drop when fair_prob > 75% AND edge <= 0.
+        fair = float(e.get("fair_prob") or 0)
+        edge_val = float(e.get("edge") or 0)
+        if fair > 0.75 and edge_val <= 0:
+            return False
         return True
     filtered = [e for e in edges if _keep(e)]
     if not filtered:
