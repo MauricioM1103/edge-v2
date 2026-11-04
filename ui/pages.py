@@ -231,8 +231,48 @@ def render_dashboard(settings: dict):
     _refresh_sec = int(_saved_cfg_tmp.get("live_refresh_sec", 30) or 0)
     _refresh_running = False
 
-    sport_setting = settings.get("sport") or "nfl"
-    # Normalize to a list so single-sport and all-sports modes share code.
+    # ===== Board filters: Sports + Markets (replaces sidebar sport picker + 4-column agent filter row) =====
+    saved_cfg_board = settings_store.load()
+    all_available_sports = list(dict.fromkeys(
+        s for _g, group_list in espn.SPORT_GROUPS
+        for s in group_list
+    ))
+    saved_board_sports = saved_cfg_board.get("board_sports") or all_available_sports
+    saved_board_markets = saved_cfg_board.get("board_markets") or ["h2h", "spreads", "totals"]
+    bf1, bf2 = st.columns(2)
+    with bf1:
+        board_sports = st.multiselect(
+            "Sports",
+            options=all_available_sports,
+            default=[s for s in saved_board_sports if s in all_available_sports] or all_available_sports,
+            format_func=lambda k: espn.DISPLAY_NAMES.get(k, k.upper()),
+            key="board_sports_filter",
+            placeholder="All sports",
+            help="Which leagues the agent scans. Default scans every supported league. "
+                 "Untick any to trim your Odds-API credit burn.",
+        )
+    with bf2:
+        all_markets_opts = ["h2h", "spreads", "totals"]
+        board_markets = st.multiselect(
+            "Markets",
+            options=all_markets_opts,
+            default=[m for m in saved_board_markets if m in all_markets_opts] or all_markets_opts,
+            format_func=lambda m: {"h2h": "Moneyline", "spreads": "Spread", "totals": "Total"}.get(m, m),
+            key="board_markets_filter",
+            placeholder="All markets",
+            help="Which bet markets the agent considers.",
+        )
+    # Persist + expose to the rest of the app.
+    if board_sports and list(board_sports) != list(saved_board_sports):
+        settings_store.save({"board_sports": list(board_sports)})
+    if board_markets and list(board_markets) != list(saved_board_markets):
+        settings_store.save({"board_markets": list(board_markets)})
+    # Share with sidebar + Analysis tab via session_state.
+    st.session_state["board_sports"] = list(board_sports) if board_sports else all_available_sports
+    st.session_state["board_markets"] = list(board_markets) if board_markets else all_markets_opts
+
+    # Resolve downstream vars from the filter choices.
+    sport_setting = list(board_sports) if board_sports else all_available_sports
     sports_list = sport_setting if isinstance(sport_setting, list) else [sport_setting]
     multi_sport_mode = len(sports_list) > 1
     unit_pct = settings.get("unit_pct") or 0.01
@@ -372,19 +412,15 @@ def render_dashboard(settings: dict):
     else:
         slate_foot = f"{live_count} live · {final_count} final"
     slate_label = f"{len(sports_list)} sports" if multi_sport_mode else sport_setting.upper()
-    # Headline strip: 4 numbers only — the ones that answer "what do I have,
-    # what am I running, what's my record". Everything else moved to the
-    # Performance tab so first-timers aren't drowned on load.
+    # Headline strip: 2 cards only — bankroll + slate. Record and net cards
+    # moved to the Performance tab; the user doesn't want a running P&L
+    # tally on the Board where it distracts from the recommendations.
     metric_row([
         {"label": "Bankroll", "value": kalshi_display,
          "foot": (f"{kalshi_source or 'not set'} · 1u = {unit_pct*100:.1f}%"),
          "tone": "accent" if kalshi_source == "live" else ""},
         {"label": f"Slate · {slate_label}", "value": f"{live_count + upcoming + final_count}",
          "foot": slate_foot},
-        {"label": "Record", "value": f"{s['wins']}-{s['losses']}-{s['pushes']}",
-         "foot": f"{s['open']} open · {s['total_settled']} settled"},
-        {"label": "Net", "value": f"{s['net_units']:+.2f}u",
-         "foot": roi_display + " ROI · see Performance tab", "tone": net_tone},
     ])
 
     # First-timer welcome: if no API key and no picks yet, surface a 3-step
@@ -843,53 +879,16 @@ def _render_agent_panel(odds_games, kalshi_cash, settings,
     if not edges:
         html('<div class="hint">No edges meet the threshold right now. Lower the edge requirement in the Settings tab to see thinner opportunities.</div>')
         return []
-    # ----- Filter controls -----
-    all_sports = sorted({(e.get("_sport") or "").upper() for e in edges if e.get("_sport")})
-    all_markets_present = sorted({e.get("market") or "h2h" for e in edges})
-    all_books_present = sorted({e.get("book") or "" for e in edges if e.get("book")})
-    all_venues = ["Kalshi", "Offshore shop"]  # grouped venue filter
-
-    fc1, fc2, fc3, fc4 = st.columns([2, 2, 2, 1])
-    with fc1:
-        f_sports = st.multiselect(
-            "Sport", options=all_sports, default=all_sports,
-            key="agent_f_sports", label_visibility="collapsed",
-            placeholder="Sport filter",
-        )
-    with fc2:
-        f_markets = st.multiselect(
-            "Market", options=all_markets_present, default=all_markets_present,
-            format_func=lambda m: agent_calc.MARKET_LABELS.get(m, m),
-            key="agent_f_markets", label_visibility="collapsed",
-            placeholder="Market filter",
-        )
-    with fc3:
-        f_books = st.multiselect(
-            "Book", options=all_books_present, default=all_books_present,
-            key="agent_f_books", label_visibility="collapsed",
-            placeholder="Book filter",
-        )
-    with fc4:
-        # Default to 0.0 so "all markets" is truly all markets today — the
-        # agent's own `min_edge_pct` already filters below the setting, so this
-        # slider is a view-time cap on top. User can tighten it when they want
-        # to focus on bigger edges.
-        f_min_edge = st.number_input(
-            "Min edge %", 0.0, 50.0, 0.0, 0.5,
-            key="agent_f_min_edge", label_visibility="collapsed",
-            help="View-time filter on the edges below. Leave at 0 to see every "
-                 "scanned edge; raise it to focus on bigger plays.",
-        )
-    # Apply filters - every toggle is independent and multi-select so turning
-    # one off doesn't force you to re-tick everything.
+    # The Board's Sports + Markets filter row (above the agent panel) now
+    # drives slate selection — no in-panel filter row here.
+    board_sports_sel = {s.lower() for s in (st.session_state.get("board_sports") or [])}
+    board_markets_sel = {m.lower() for m in (st.session_state.get("board_markets") or [])}
     def _keep(e):
-        if f_sports and (e.get("_sport") or "").upper() not in f_sports:
+        sp = (e.get("_sport") or "").lower()
+        if board_sports_sel and sp and sp not in board_sports_sel:
             return False
-        if f_markets and (e.get("market") or "h2h") not in f_markets:
-            return False
-        if f_books and (e.get("book") or "") not in f_books:
-            return False
-        if e.get("edge", 0) * 100 < f_min_edge:
+        mk = (e.get("market") or "h2h").lower()
+        if board_markets_sel and mk not in board_markets_sel:
             return False
         return True
     filtered = [e for e in edges if _keep(e)]
@@ -2183,6 +2182,159 @@ def render_picks(settings: dict):
                 st.cache_data.clear()
                 st.success("Deleted.")
             st.divider()
+
+
+# ============================================================================
+# TAB - Results (high-confidence agent picks + whether they hit)
+# ============================================================================
+#
+# User-driven view: which picks did the agent flag as higher-than-coinflip
+# confidence (Pinnacle no-vig fair prob > 55%), and what was the hit rate?
+# This is the "did the agent actually get it right" readout — intentionally
+# separate from the Ledger so the signal isn't lost in the noise.
+
+HIGH_CONF_THRESHOLD = 0.55
+
+def render_results(settings: dict):
+    brand_bar(f"Results · picks with > {int(HIGH_CONF_THRESHOLD*100)}% Pinnacle fair prob")
+
+    # Backfill pick_date on legacy rows so the by-date grouping works.
+    try:
+        picks_store.backfill_pick_dates()
+    except Exception:
+        pass
+
+    all_picks = picks_store.list_picks()
+    high_conf = [
+        p for p in all_picks
+        if (p.get("source") or "manual") == "agent-auto"
+        and float(p.get("projected_prob") or 0) > HIGH_CONF_THRESHOLD
+    ]
+    if not high_conf:
+        html(
+            f'<div class="hint">No agent picks above the {int(HIGH_CONF_THRESHOLD*100)}% '
+            'Pinnacle fair prob threshold yet. The Results tab lights up once the agent '
+            'surfaces high-confidence edges and they grade from ESPN.</div>'
+        )
+        return
+
+    # Decide-only stats — opens don't count as results until they grade.
+    decided = [p for p in high_conf if (p.get("status") or "open") in ("win", "loss")]
+    wins = sum(1 for p in decided if p.get("status") == "win")
+    losses = len(decided) - wins
+    hit_rate = (wins / len(decided)) if decided else None
+    pending = len(high_conf) - len(decided) - sum(1 for p in high_conf if p.get("status") == "push")
+    # Expected win-rate if the Pinnacle fair prob is calibrated: average of
+    # projected_probs across decided rows. Difference vs realized is the
+    # calibration gap.
+    exp = [float(p.get("projected_prob") or 0) for p in decided]
+    exp_rate = (sum(exp) / len(exp)) if exp else None
+    gap_pts = ((hit_rate - exp_rate) * 100) if (hit_rate is not None and exp_rate is not None) else None
+
+    tone = "good" if (hit_rate or 0) >= (exp_rate or 0) else "bad"
+    metric_row([
+        {"label": f"Picks > {int(HIGH_CONF_THRESHOLD*100)}%", "value": str(len(high_conf)),
+         "foot": f"{pending} open · {len(decided)} decided"},
+        {"label": "Record", "value": f"{wins}-{losses}",
+         "foot": f"n = {len(decided)} decided"},
+        {"label": "Hit rate", "value": (f"{hit_rate*100:.1f}%" if hit_rate is not None else "—"),
+         "tone": tone, "foot": "actual wins / decided"},
+        {"label": "Expected", "value": (f"{exp_rate*100:.1f}%" if exp_rate is not None else "—"),
+         "foot": "avg Pinn fair prob"},
+        {"label": "Gap vs expected",
+         "value": (f"{gap_pts:+.1f} pts" if gap_pts is not None else "—"),
+         "tone": tone,
+         "foot": "positive = agent beats fair"},
+    ])
+
+    # Per-day summary + drill-down (newest first).
+    daily = picks_store.group_by_date(high_conf)
+    st.markdown("### By slate date")
+    from datetime import datetime as _dt
+    from zoneinfo import ZoneInfo as _ZI
+    today_c = datetime.now(_ZI("America/Chicago")).strftime("%Y-%m-%d")
+    for day in daily:
+        d = day["date"]
+        try:
+            pretty = _dt.strptime(d, "%Y-%m-%d").strftime("%A, %b %d, %Y")
+        except ValueError:
+            pretty = d
+        items = day["picks"]
+        d_wins = sum(1 for p in items if p.get("status") == "win")
+        d_losses = sum(1 for p in items if p.get("status") == "loss")
+        d_open = sum(1 for p in items if (p.get("status") or "open") == "open")
+        d_hit = (d_wins / (d_wins + d_losses)) if (d_wins + d_losses) else None
+        hit_disp = f" · hit {d_hit*100:.0f}%" if d_hit is not None else ""
+        is_today = (d == today_c)
+        header = (
+            f"{pretty} · {len(items)} high-conf picks · "
+            f"{d_wins}-{d_losses}{(' · ' + str(d_open) + ' open') if d_open else ''}"
+            f"{hit_disp}"
+        )
+        with st.expander(header, expanded=is_today):
+            # Table: event, side, fair prob, price, status with hit highlight.
+            rows_html = ""
+            for p in sorted(items, key=lambda x: -float(x.get("projected_prob") or 0)):
+                status = p.get("status") or "open"
+                fair = float(p.get("projected_prob") or 0)
+                proj_tone = "good" if fair >= 0.65 else "accent"
+                if status == "win":
+                    result_chip = '<span class="chip good" style="padding:2px 9px;">✓ HIT</span>'
+                    row_bg = ' style="background:color-mix(in oklab, var(--good) 8%, transparent);"'
+                elif status == "loss":
+                    result_chip = '<span class="chip bad" style="padding:2px 9px;">✗ MISS</span>'
+                    row_bg = ' style="background:color-mix(in oklab, var(--bad) 8%, transparent);"'
+                elif status == "push":
+                    result_chip = '<span class="chip warn" style="padding:2px 9px;">= PUSH</span>'
+                    row_bg = ""
+                else:
+                    result_chip = '<span class="chip" style="padding:2px 9px;">· OPEN</span>'
+                    row_bg = ""
+                mk = (p.get("market") or "h2h").upper()
+                sport = (p.get("sport") or "").upper()
+                side = p.get("selection") or "—"
+                pt = p.get("point")
+                if pt is not None and pt != 0 and " " not in str(side):
+                    try:
+                        side = f"{side} {float(pt):+g}"
+                    except (TypeError, ValueError):
+                        pass
+                rows_html += (
+                    f'<tr{row_bg}>'
+                    f'<td class="mono" style="color:var(--muted); font-size:11px;">{sport}</td>'
+                    f'<td>{p.get("event_name") or "—"}</td>'
+                    f'<td class="mono" style="color:var(--muted); font-size:11px;">{mk}</td>'
+                    f'<td><strong>{side}</strong></td>'
+                    f'<td class="num mono {proj_tone}"><strong>{fair*100:.1f}%</strong></td>'
+                    f'<td class="num mono">{format_american(p.get("price_american"))}</td>'
+                    f'<td>{result_chip}</td>'
+                    f'</tr>'
+                )
+            html(
+                '<table class="ledger" style="margin-top:4px;">'
+                '<thead><tr>'
+                '<th>Sport</th><th>Event</th><th>Market</th><th>Pick</th>'
+                '<th class="num">Pinn fair</th>'
+                '<th class="num">Price</th>'
+                '<th>Result</th>'
+                '</tr></thead>'
+                f'<tbody>{rows_html}</tbody></table>'
+            )
+
+    # One-line interpretive footer.
+    if hit_rate is not None and exp_rate is not None:
+        if gap_pts is not None and gap_pts >= 0:
+            interp = (
+                f"Agent is beating its own fair-prob estimate by "
+                f"<strong class='good'>{gap_pts:+.1f} pts</strong> — "
+                "picks above 55% confidence are converting at or above their expected rate."
+            )
+        else:
+            interp = (
+                f"Agent is running <strong class='bad'>{gap_pts:+.1f} pts</strong> below "
+                "its fair-prob estimate — small samples bounce, but watch this gap as n grows."
+            )
+        html(f'<div class="hint" style="margin-top:14px;">{interp}</div>')
 
 
 # ============================================================================

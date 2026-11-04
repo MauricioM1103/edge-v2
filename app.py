@@ -35,7 +35,7 @@ from ui.style import inject as inject_style
 from ui.pages import (
     render_dashboard, render_analysis, render_pro_tools, render_picks,
     render_settings, render_backtest, load_kalshi_balance,
-    render_performance, render_calibration,
+    render_performance, render_calibration, render_results,
 )
 
 
@@ -44,39 +44,10 @@ def _sidebar_settings() -> dict:
     with st.sidebar:
         st.markdown("### Settings")
 
-        # ----- SPORT PICKER (grouped) -----
-        group_labels = [g[0] for g in espn.SPORT_GROUPS]
-        saved_group = saved.get("sport_group") or "All sports"
-        default_group_idx = group_labels.index(saved_group) if saved_group in group_labels else 0
-        group_name = st.selectbox(
-            "Sport group", options=group_labels, index=default_group_idx, key="sb_group",
-            help="'All sports' scans every supported league in one view.",
-        )
-        # Persist group changes so the dashboard remembers across sessions.
-        if group_name != saved.get("sport_group"):
-            settings_store.save({"sport_group": group_name})
-        group_sports = next((g[1] for g in espn.SPORT_GROUPS if g[0] == group_name), ["nfl"])
-        # When "All sports" the sport-picker becomes a multi-select so the user can
-        # trim the scan (saves Odds-API credits).
-        if group_name == "All sports":
-            picked = st.multiselect(
-                "Sports to scan",
-                options=group_sports,
-                default=group_sports,  # EVERY sport in the All-sports list is on by default
-                format_func=lambda k: espn.DISPLAY_NAMES.get(k, k.upper()),
-                key="sb_sports_multi",
-                help="Default scans every sport. Untick any to trim your credit burn.",
-            )
-            sport = picked or group_sports
-        else:
-            sport = st.selectbox(
-                "Sport / league",
-                options=group_sports,
-                format_func=lambda k: espn.DISPLAY_NAMES.get(k, k.upper()),
-                index=0,
-                key="sb_sport",
-            )
-        st.markdown("---")
+        # Sports selection moved to the Board itself (the Sports/Markets filter
+        # strip above the agent table). The sidebar now holds only connection
+        # + sizing + tuning concerns; the slate choice lives where the user
+        # looks at results.
 
         # ----- KALSHI LIVE CONNECTION -----
         st.markdown("#### Kalshi")
@@ -123,35 +94,21 @@ def _sidebar_settings() -> dict:
                 st.rerun()
 
         # Resolve current balance (session creds take priority, then env/secrets).
+        # Manual cash entry removed — the ONLY bankroll source is the Kalshi
+        # connection above. When no credentials are set, we fall back to a
+        # saved placeholder so sizing math still works without crashing.
         balance = load_kalshi_balance() or {"usd": None, "source": None}
         live_usd = balance.get("usd")
         live_src = balance.get("source")
         if live_src == "live":
             st.success(f"Live Kalshi balance: ${live_usd:,.2f}")
         elif live_src == "manual":
-            st.info(f"Manual balance (env): ${live_usd:,.2f}")
+            st.info(f"Env balance: ${live_usd:,.2f}")
         else:
-            st.caption("Not connected — enter cash manually below.")
+            st.caption("Not connected — bankroll sizing uses the last known value.")
 
-        # Live > manual (persisted) > hard default.
-        if live_usd is not None:
-            kalshi_cash = float(live_usd)
-            # keep manual value in sync with the live reading so it's a sensible fallback.
-            manual_fallback = float(saved.get("manual_kalshi_cash") or live_usd)
-        else:
-            kalshi_cash = st.number_input(
-                "Available Kalshi cash ($)",
-                min_value=0.0, max_value=10_000_000.0,
-                value=float(saved.get("manual_kalshi_cash") or 500.0),
-                step=25.0,
-                key="sb_kalshi_cash_manual",
-                help="Connect Kalshi above for live. This manual value is used until then.",
-            )
-            manual_fallback = kalshi_cash
-            # Persist manual tweak immediately
-            if manual_fallback != saved.get("manual_kalshi_cash"):
-                settings_store.save({"manual_kalshi_cash": manual_fallback})
-        kalshi_source = live_src or ("manual" if kalshi_cash else None)
+        kalshi_cash = float(live_usd) if live_usd is not None else float(saved.get("manual_kalshi_cash") or 500.0)
+        kalshi_source = live_src or ("saved" if kalshi_cash else None)
 
         # Unit = X% of (live) Kalshi cash. 1% follows pro convention.
         unit_pct_of_kalshi = st.slider(
@@ -275,8 +232,18 @@ def _sidebar_settings() -> dict:
         st.markdown("---")
         st.caption("Edge v2.0 · ESPN + The Odds API + Kalshi")
 
+    # `sport` now comes from the Sports filter above the Board (render_dashboard
+    # writes it into session_state so the Analysis tab sees the same selection).
+    # Fall back to the persisted group if the Board hasn't rendered yet.
+    board_sports = st.session_state.get("board_sports")
+    if not board_sports:
+        saved_group = saved.get("sport_group") or "All sports"
+        board_sports = next(
+            (g[1] for g in espn.SPORT_GROUPS if g[0] == saved_group),
+            espn.SPORT_GROUPS[0][1],
+        )
     return {
-        "sport": sport,
+        "sport": board_sports,
         "unit_pct": unit_pct,
         "unit_dollars": unit_dollars,
         "bankroll_units": bankroll_units,
@@ -307,9 +274,10 @@ def main():
     # Tab order follows the user's journey: the Board is what they look at
     # every day; everything else is one click away but out of sight so the
     # main view stays uncluttered for first-timers.
-    (tab_board, tab_analysis, tab_tools, tab_ledger,
+    (tab_board, tab_results, tab_analysis, tab_tools, tab_ledger,
      tab_perf, tab_calib, tab_backtest, tab_settings) = st.tabs([
         "Board",
+        "Results",
         "Analysis",
         "Tools",
         "Ledger",
@@ -320,6 +288,8 @@ def main():
     ])
     with tab_board:
         render_dashboard(settings)
+    with tab_results:
+        render_results(settings)
     with tab_analysis:
         render_analysis(settings)
     with tab_tools:
