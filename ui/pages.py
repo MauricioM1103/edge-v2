@@ -518,19 +518,32 @@ def _build_featured_matrix(item: dict, merged: list) -> str:
     away_abbr = ((ev.get("away") or {}).get("abbr") or "AWAY").upper()
     home_abbr = ((ev.get("home") or {}).get("abbr") or "HOME").upper()
 
-    def _pair(cur_v, open_v=None):
-        """Format as 'open → current' when both exist and differ, else the single value."""
+    def _pair(cur_v, open_v=None, is_price=False):
+        """Format as 'open → current' when both exist and differ, single value
+        otherwise. is_price=True adds the '+' sign to positive American prices
+        so '+185' reads right next to '-110'."""
         if cur_v is None:
             return None
+        fmt = (lambda x: f"{x:+g}") if is_price else (lambda x: f"{x:g}")
+        if isinstance(cur_v, (int, float)):
+            cur_s = fmt(cur_v)
+        else:
+            cur_s = str(cur_v)
         if open_v is None or open_v == cur_v:
-            return f"{cur_v}"
-        return f"{open_v} → {cur_v}"
+            return cur_s
+        if isinstance(open_v, (int, float)):
+            open_s = fmt(open_v)
+        else:
+            open_s = str(open_v)
+        return f"{open_s} → {cur_s}"
 
+    # Spread/Total cells show the POINT (handicap/line), not the juice price.
+    # ML cells show the American moneyline price on each side.
     cells = [
-        ("Spread", _pair(spr.get("home_price"), spr.get("home_opener")), "accent"),
-        ("Total",  _pair(tot.get("home_price"), tot.get("home_opener")), ""),
-        (f"{away_abbr} ML", _pair(h2h.get("away_price"), h2h.get("away_opener")), ""),
-        (f"{home_abbr} ML", _pair(h2h.get("home_price"), h2h.get("home_opener")), ""),
+        ("Spread", _pair(spr.get("home_point"), is_price=True), "accent"),
+        ("Total",  _pair(tot.get("home_point")), ""),
+        (f"{away_abbr} ML", _pair(h2h.get("away_price"), h2h.get("away_opener"), is_price=True), ""),
+        (f"{home_abbr} ML", _pair(h2h.get("home_price"), h2h.get("home_opener"), is_price=True), ""),
     ]
     # Spec §4: every cell must have real data; else drop the tile.
     if any(v is None for _k, v, _c in cells):
@@ -955,26 +968,33 @@ def _render_breaking_news(sports_list: list, merged: list):
             -(len(x.get("published") or "")),
         ),
     )
-    # Spec §1+3+4a: validator + replace loop. Walk ranked queue, keep good
-    # tiles in slot order (featured, mid, mid, wide, wide, wide).
+    # Spec §1+3+4a: validator + replace loop. For each slot, walk the ranked
+    # queue skipping items already used. An item can fail for featured (needs
+    # matrix) but pass for mid/wide (needs market-tail only), so we re-scan
+    # the queue per slot instead of using a one-shot iterator.
     slot_sizes = ["featured", "mid", "mid", "wide", "wide", "wide"]
     accepted: list = []
-    queue_iter = iter(ranked)
+    used_ids: set = set()
     drop_log: list = []
     for size in slot_sizes:
         picked = None
         picked_bundle = None
-        for item in queue_iter:
+        for idx, item in enumerate(ranked):
+            if idx in used_ids:
+                continue
             v = _validate_tile(item, merged, size)
             if v and not v.get("_drop_reason"):
-                picked = item
+                picked = (idx, item)
                 picked_bundle = v
                 break
             if v and v.get("_drop_reason"):
                 drop_log.append((size, v.get("_drop_reason"), (item.get("headline") or "")[:60]))
         if picked is None:
-            break  # queue dry — render whatever we accepted so far
-        accepted.append((size, picked, picked_bundle))
+            # Featured can fail (needs matrix) while mid/wide pass (market-tail
+            # only), so don't stop — continue scanning other slots.
+            continue
+        used_ids.add(picked[0])
+        accepted.append((size, picked[1], picked_bundle))
     # Server-side drop log (stderr; Streamlit Cloud captures it).
     if drop_log:
         try:
