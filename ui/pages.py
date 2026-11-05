@@ -212,6 +212,179 @@ def _merge_events_with_odds(
 
 
 # ============================================================================
+# Breaking News hero — bento-grid of ESPN news/injuries scoped to today's sports.
+# ============================================================================
+
+@st.cache_data(ttl=300, show_spinner=False)
+def load_news_for_sports(sports_tuple: tuple, per_sport: int = 6):
+    """Cached ESPN news fetch. 5-min TTL; aggregated newest-first."""
+    try:
+        return espn.get_news_for_sports(list(sports_tuple), per_sport=per_sport)
+    except Exception:
+        return []
+
+
+def _relative_time(iso_ts: str) -> str:
+    if not iso_ts:
+        return ""
+    try:
+        if iso_ts.endswith("Z"):
+            iso_ts = iso_ts.replace("Z", "+00:00")
+        dt = datetime.fromisoformat(iso_ts)
+        delta = datetime.now(timezone.utc) - dt.astimezone(timezone.utc)
+        s = int(delta.total_seconds())
+        if s < 60:
+            return "just now"
+        if s < 3600:
+            return f"{s // 60} min ago"
+        if s < 86400:
+            return f"{s // 3600} hr ago"
+        return f"{s // 86400} d ago"
+    except (ValueError, AttributeError):
+        return ""
+
+
+_SEV_ICON = {"out": "✕ Out", "gtd": "◐ Game-Time", "weather": "⚑ Weather", "line": "↑ Sharp Move", "news": "◆ News"}
+
+
+def _esc(s: str) -> str:
+    return (s or "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
+
+
+def _tile_bg_colors(teams: list) -> tuple:
+    """Pick (c1, c2) from first team's color, falling back to card bg."""
+    primary = ""
+    if teams:
+        primary = (teams[0].get("color") or "").strip().lstrip("#")
+    if primary and len(primary) in (3, 6):
+        return (f"#{primary}", f"#{primary}22")
+    return ("#131F35", "#0a1220")
+
+
+def _render_news_tile(item: dict, size: str = "mid") -> str:
+    """Return the HTML for one bento tile. `size` ∈ {featured, mid, wide}."""
+    sev = (item.get("severity") or "news").lower()
+    rel = _relative_time(item.get("published", ""))
+    headline = _esc(item.get("headline", ""))
+    snippet = _esc(item.get("snippet", "") or "")[:220]
+    teams = item.get("teams") or []
+    athlete = item.get("athlete") or {}
+    c1, c2 = _tile_bg_colors(teams)
+    team_color = c1  # left accent bar
+
+    # Portrait: prefer athlete headshot; else fall back to the two team logos composition.
+    portrait_html = ""
+    logos_html = ""
+    if athlete.get("headshot"):
+        portrait_html = f'<div class="portrait" style="background-image:url(\'{_esc(athlete["headshot"])}\');"></div>'
+    elif len(teams) >= 2:
+        l1 = _esc(teams[0].get("logo") or "")
+        l2 = _esc(teams[1].get("logo") or "")
+        logos_html = (
+            f'<div class="team-logos">'
+            f'<img src="{l1}" alt="{_esc(teams[0].get("abbr") or "")}">'
+            f'<span class="vs">vs</span>'
+            f'<img src="{l2}" alt="{_esc(teams[1].get("abbr") or "")}">'
+            f'</div>'
+        )
+    elif len(teams) == 1:
+        l1 = _esc(teams[0].get("logo") or "")
+        logos_html = f'<div class="team-logos"><img src="{l1}" alt="{_esc(teams[0].get("abbr") or "")}"></div>'
+
+    team_chips = "".join(
+        f'<span class="chip" style="background:{_esc(t.get("color") and "#" + t["color"] or "var(--chip)")}; color:#fff; font-size:10px; padding:2px 7px; font-family:JetBrains Mono,monospace; font-weight:700;">{_esc(t.get("abbr") or "")}</span>'
+        for t in teams[:2]
+    )
+    league_label = (item.get("sport_key") or "").upper()
+
+    link = item.get("url") or ""
+    read_more = f'<a href="{_esc(link)}" target="_blank">Read ESPN ▸</a>' if link else ""
+
+    return (
+        f'<div class="news-tile {size}" style="--c1:{c1}; --c2:{c2};">'
+        f'  {portrait_html}{logos_html}'
+        f'  <div class="scrim-left"></div>'
+        f'  <div class="scrim-bottom"></div>'
+        f'  <div class="accent-bar" style="--team-color:{team_color};"></div>'
+        f'  <div class="body">'
+        f'    <div class="head">'
+        f'      <span class="sev {sev}">{_SEV_ICON.get(sev, "◆ News")}</span>'
+        f'      <span class="ts">{_esc(rel) or "—"}</span>'
+        f'    </div>'
+        f'    <div class="text-col">'
+        f'      <h3>{headline}</h3>'
+        f'      {"<p class=snippet>" + snippet + "</p>" if snippet else ""}'
+        f'      <div style="display:flex; gap:7px; align-items:center;">{team_chips}'
+        f'        <span style="color:#9fb0ce; font-family:JetBrains Mono,monospace; font-size:11px;">· {league_label}</span>'
+        f'      </div>'
+        f'    </div>'
+        f'    <div class="foot">{read_more}</div>'
+        f'  </div>'
+        f'</div>'
+    )
+
+
+def _render_line_moves_ticker(merged: list) -> str:
+    """Build a horizontally scrolling ticker of recent line movers.
+    Falls back to a static set of today's matchups if no movement data is loaded."""
+    items: list = []
+    for ev, _odds, _exch in (merged or [])[:12]:
+        home = (ev.get("home") or {}).get("abbr") or (ev.get("home") or {}).get("name") or ""
+        away = (ev.get("away") or {}).get("abbr") or (ev.get("away") or {}).get("name") or ""
+        if home and away:
+            items.append(f'<span class="item"><span class="matchup">{_esc(away)}–{_esc(home)}</span> <span class="pm">LIVE</span></span>')
+    if not items:
+        return ""
+    # Double the list for the seamless scroll loop.
+    run = "".join(items + items)
+    return (
+        '<div class="news-tile ticker">'
+        '  <span class="ticker-label"><span class="bolt">⚡</span> Live Line Moves</span>'
+        f' <div class="ticker-track"><div class="ticker-run">{run}</div></div>'
+        '</div>'
+    )
+
+
+def _render_breaking_news(sports_list: list, merged: list):
+    """The Breaking News hero: 1 featured + up to 5 smaller tiles + ticker.
+    Renders a compact empty-state card if ESPN returns nothing."""
+    news = load_news_for_sports(tuple(sports_list), per_sport=6) or []
+    html(
+        '<div class="news-head"><div class="news-title">'
+        '<h2>Breaking · Today\'s Slate</h2>'
+        f'<span class="count-pill"><span class="cdot"></span>{len(news)} live updates</span>'
+        '</div></div>'
+    )
+    if not news:
+        html(
+            '<div class="news-empty">No breaking news from ESPN for your selected sports right now. '
+            'The feed refreshes every 5 minutes.</div>'
+        )
+        return
+    # Rank: injuries/weather/line first, then plain news; within each, newest first (already sorted).
+    priority = {"out": 0, "gtd": 1, "weather": 2, "line": 3, "news": 4}
+    ranked = sorted(news, key=lambda x: priority.get(x.get("severity", "news"), 5))
+    tiles: list = []
+    for i, item in enumerate(ranked[:6]):
+        size = "featured" if i == 0 else ("mid" if i in (1, 2) else "wide")
+        tiles.append(_render_news_tile(item, size=size))
+    tiles.append(_render_line_moves_ticker(merged))
+    html(f'<section class="bento">{"".join(tiles)}</section>')
+
+
+def _render_snapshot_strip(bankroll_display: str, bankroll_source: str, unit_pct: float,
+                            slate_count: int, qual_count: int, exposure_usd: float, exposure_pct: float):
+    html(
+        '<div class="snap-strip">'
+        f'<div class="cell"><span class="k">Bankroll</span><span class="v accent">{_esc(bankroll_display)}</span></div>'
+        f'<div class="cell"><span class="k">Slate</span><span class="v">{slate_count} games</span></div>'
+        f'<div class="cell"><span class="k">Qualifying picks</span><span class="v good">{qual_count}</span></div>'
+        f'<div class="cell"><span class="k">Daily exposure</span><span class="v">${exposure_usd:,.0f} / {exposure_pct:.1f}%</span></div>'
+        '</div>'
+    )
+
+
+# ============================================================================
 # TAB 1 - Dashboard / Live Daily Slate
 # ============================================================================
 
@@ -412,16 +585,10 @@ def render_dashboard(settings: dict):
     else:
         slate_foot = f"{live_count} live · {final_count} final"
     slate_label = f"{len(sports_list)} sports" if multi_sport_mode else sport_setting.upper()
-    # Headline strip: 2 cards only — bankroll + slate. Record and net cards
-    # moved to the Performance tab; the user doesn't want a running P&L
-    # tally on the Board where it distracts from the recommendations.
-    metric_row([
-        {"label": "Bankroll", "value": kalshi_display,
-         "foot": (f"{kalshi_source or 'not set'} · 1u = {unit_pct*100:.1f}%"),
-         "tone": "accent" if kalshi_source == "live" else ""},
-        {"label": f"Slate · {slate_label}", "value": f"{live_count + upcoming + final_count}",
-         "foot": slate_foot},
-    ])
+    # Hero: Breaking News & Injuries bento (scoped to today's sports), fed by
+    # ESPN's news feed. Replaces the two metric cards (bankroll + slate) that
+    # used to live here; those move to a compact strip at the bottom.
+    _render_breaking_news(sports_list, merged)
 
     # First-timer welcome: if no API key and no picks yet, surface a 3-step
     # onboarding so new users know what to do before they stare at an empty board.
@@ -589,6 +756,27 @@ def render_dashboard(settings: dict):
             'the probability ladder, Kelly math, and the matchups grid.'
             '</div>'
         )
+
+    # Bottom snapshot strip: Bankroll + Slate + Qualifying picks + Daily exposure.
+    # Demoted from the top of the page (replaced by the Breaking News hero);
+    # still visible at a glance without competing with the news/injury feed.
+    try:
+        total_exposure = sum(
+            (float(p.get("stake") or 0.0))
+            for p in (top_picks or []) if isinstance(p, dict)
+        )
+    except Exception:
+        total_exposure = 0.0
+    exposure_pct = (total_exposure / kalshi_cash * 100.0) if kalshi_cash else 0.0
+    _render_snapshot_strip(
+        bankroll_display=kalshi_display,
+        bankroll_source=kalshi_source or "not set",
+        unit_pct=unit_pct,
+        slate_count=len(merged),
+        qual_count=len(top_picks or []),
+        exposure_usd=total_exposure,
+        exposure_pct=exposure_pct,
+    )
 
 
 def render_analysis(settings: dict):

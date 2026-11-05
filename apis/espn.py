@@ -319,3 +319,148 @@ def _ev_scores(ev):
 
 def all_sport_keys() -> List[str]:
     return list(SPORT_PATHS.keys())
+
+
+# ============================================================================
+# News + injuries — feed for the Breaking News hero on the Dashboard.
+# ============================================================================
+
+ESPN_NEWS = "https://site.api.espn.com/apis/site/v2/sports/{path}/news?limit=25"
+ESPN_HEADSHOT = "https://a.espncdn.com/i/headshots/{league}/players/full/{pid}.png"
+ESPN_TEAMLOGO = "https://a.espncdn.com/i/teamlogos/{league}/500/{abbr}.png"
+
+# ESPN "news" `path` → headshot/logo `league` slug.
+_LEAGUE_FROM_SPORT: Dict[str, str] = {
+    "nfl": "nfl", "nba": "nba", "mlb": "mlb", "nhl": "nhl",
+    "ncaaf": "college-football", "ncaab": "mens-college-basketball",
+    "ncaaw": "womens-college-basketball",
+    "wnba": "wnba", "mls": "soccer", "epl": "soccer", "la_liga": "soccer",
+    "bundesliga": "soccer", "serie_a": "soccer", "ligue_1": "soccer",
+    "ucl": "soccer", "uel": "soccer", "nwsl": "soccer", "liga_mx": "soccer",
+    "ufc": "mma", "boxing": "boxing",
+}
+
+
+def _classify_news(headline: str, description: str) -> str:
+    """Rough severity bucket from the headline — out / gtd / weather / line / news."""
+    text = f"{headline or ''} {description or ''}".lower()
+    if any(k in text for k in ("ruled out", "out for", "sidelined", "placed on ir", "will miss", "won't play", "won’t play")):
+        return "out"
+    if any(k in text for k in ("game-time decision", "questionable", "game time decision", "doubtful", "day-to-day", "day to day")):
+        return "gtd"
+    if any(k in text for k in ("weather", "wind", "rain", "snow", "storm", "forecast")):
+        return "weather"
+    if any(k in text for k in ("line move", "sharp money", "steam", "total drops", "spread moves", "odds shift")):
+        return "line"
+    return "news"
+
+
+def _fetch_json(url: str, timeout: float = 4.0):
+    # Caller (ui layer) handles st.cache_data; apis stays framework-free.
+    try:
+        req = Request(url, headers={"User-Agent": "edge-dashboard/2.1"})
+        with urlopen(req, timeout=timeout) as resp:
+            return json.loads(resp.read().decode("utf-8", "replace"))
+    except (URLError, TimeoutError, ValueError, OSError):
+        return None
+
+
+def get_news(sport_key: str, limit: int = 12) -> List[Dict]:
+    """Return a list of news/injury items for one sport. Each item:
+        {
+          id, headline, snippet, published, severity,
+          sport_key, league,
+          athlete: {id, name, headshot},     # may be None
+          teams:   [{abbr, logo, color}],     # 0..2 entries
+          url,
+        }
+    All network errors become an empty list. Caller should cache (st.cache_data).
+    """
+    path = SPORT_PATHS.get(sport_key)
+    if not path:
+        return []
+    url = ESPN_NEWS.format(path=path)
+    data = _fetch_json(url)
+    if not data or not isinstance(data, dict):
+        return []
+    league = _LEAGUE_FROM_SPORT.get(sport_key, sport_key)
+    articles = data.get("articles") or data.get("headlines") or []
+    out: List[Dict] = []
+    for a in articles[:limit]:
+        if not isinstance(a, dict):
+            continue
+        headline = a.get("headline") or a.get("title") or ""
+        description = a.get("description") or a.get("summary") or ""
+        if not headline:
+            continue
+        # Extract athlete (first one, if any).
+        athlete = None
+        for key in ("categories", "athletes"):
+            cats = a.get(key) or []
+            for c in cats:
+                if not isinstance(c, dict):
+                    continue
+                ath = c.get("athlete") if key == "categories" else c
+                if isinstance(ath, dict) and ath.get("id"):
+                    pid = ath.get("id")
+                    athlete = {
+                        "id": pid,
+                        "name": ath.get("displayName") or ath.get("fullName") or "",
+                        "headshot": (ath.get("headshot") or {}).get("href")
+                        or ESPN_HEADSHOT.format(league=league, pid=pid),
+                    }
+                    break
+            if athlete:
+                break
+        # Extract teams (up to 2).
+        teams: List[Dict] = []
+        for key in ("categories",):
+            cats = a.get(key) or []
+            for c in cats:
+                if not isinstance(c, dict):
+                    continue
+                t = c.get("team")
+                if isinstance(t, dict) and t.get("abbreviation"):
+                    abbr = (t.get("abbreviation") or "").lower()
+                    teams.append({
+                        "abbr": t.get("abbreviation") or "",
+                        "name": t.get("displayName") or "",
+                        "color": t.get("color") or "",
+                        "logo": t.get("logos", [{}])[0].get("href")
+                        if t.get("logos") else ESPN_TEAMLOGO.format(league=league, abbr=abbr),
+                    })
+                if len(teams) >= 2:
+                    break
+        # Public link.
+        link = ""
+        for ln in a.get("links") or []:
+            if isinstance(ln, dict):
+                web = (ln.get("web") or {}).get("href") if isinstance(ln.get("web"), dict) else ln.get("href")
+                if web:
+                    link = web
+                    break
+        out.append({
+            "id": a.get("id") or headline[:40],
+            "headline": headline.strip(),
+            "snippet": (description or "").strip(),
+            "published": a.get("published") or a.get("lastModified") or "",
+            "severity": _classify_news(headline, description),
+            "sport_key": sport_key,
+            "league": league,
+            "athlete": athlete,
+            "teams": teams[:2],
+            "url": link,
+        })
+    return out
+
+
+def get_news_for_sports(sport_keys: List[str], per_sport: int = 6) -> List[Dict]:
+    """Aggregate news across multiple sports, newest first (by `published`)."""
+    items: List[Dict] = []
+    for sp in sport_keys:
+        try:
+            items.extend(get_news(sp, limit=per_sport))
+        except Exception:
+            continue
+    items.sort(key=lambda x: x.get("published") or "", reverse=True)
+    return items

@@ -9,30 +9,31 @@ up like a trading screen.
 CUSTOM_CSS = r"""
 <style>
 :root {
-  /* Base canvas: deep slate-blue, not pure black — easier on the eyes
-     for extended screen time, which this dashboard asks for. */
-  --bg: #0A0F1C;
-  --surface: #10172A;
-  --card: #141C33;
-  --card-elev: #1B2440;
-  --rule: #233055;
-  --rule-strong: #334471;
-  /* Text ladder: high-contrast primary; dim stays legible at 11px. */
-  --ink: #F1F5F9;
-  --ink-dim: #CBD5E1;
-  --muted: #7F8CA8;
-  --muted-dim: #566180;
-  /* Accent: sky-500 — modern, high-contrast on slate, no teal/dated feel. */
-  --accent: #38BDF8;
-  --accent-ink: #0A0F1C;
-  /* Semantic: tuned so WIN/LOSS/PUSH read instantly on dark bg. */
-  --good: #22C55E;
-  --warn: #F59E0B;
-  --bad: #EF4444;
-  --live: #F43F5E;
-  --chip: #1A2340;
-  /* Elevation hints for cards/panels — tiny glow + shadow, not a hard border. */
-  --card-shadow: 0 1px 2px rgba(0,0,0,.35), 0 8px 24px rgba(5,10,22,.35);
+  /* Court Side v2.1 — deep navy canvas, electric emerald accent, magenta for live.
+     Reads as a premium sports analytics product; distinct from the red/green
+     semantics used for P&L and win/loss. */
+  --bg: #0A1220;
+  --surface: #0F1A2E;
+  --card: #131F35;
+  --card-elev: #192842;
+  --rule: #1E2E4C;
+  --rule-strong: #2B4068;
+  /* Text ladder */
+  --ink: #F1F6FF;
+  --ink-dim: #C6D1E4;
+  --muted: #7A8CAA;
+  --muted-dim: #4F5D7A;
+  /* Emerald accent — electric, pops on navy without the "neon crypto" vibe. */
+  --accent: #10E0A1;
+  --accent-ink: #06180F;
+  /* Semantic */
+  --good: #10E0A1;
+  --warn: #FFB84D;
+  --bad: #FF4477;
+  --info: #5AB7FF;
+  --live: #FF3D7F;
+  --chip: #1A2745;
+  --card-shadow: 0 1px 2px rgba(0,0,0,.4), 0 18px 40px rgba(6,16,32,.45);
 }
 
 @media (prefers-color-scheme: light) {
@@ -47,11 +48,12 @@ CUSTOM_CSS = r"""
     --ink-dim: #334155;
     --muted: #64748B;
     --muted-dim: #94A3B8;
-    --accent: #0369A1;
+    --accent: #0A8F6A;
     --accent-ink: #FFFFFF;
-    --good: #15803D;
+    --good: #0A8F6A;
     --warn: #B45309;
     --bad: #B91C1C;
+    --info: #0369A1;
     --live: #BE123C;
     --chip: #F1F5F9;
     --card-shadow: 0 1px 2px rgba(0,0,0,.04), 0 2px 10px rgba(15,23,42,.06);
@@ -432,6 +434,233 @@ button[kind="headerDeploy"] { display: none !important; }
 /* Tighten the Streamlit date picker so it doesn't truncate at narrow widths. */
 [data-testid="stDateInput"] input { font-size: 13px; }
 
+/* =============================================================
+   Breaking News hero (bento grid with player portraits + ticker)
+   ============================================================= */
+.news-head{
+  display:flex; justify-content:space-between; align-items:center;
+  margin: 2px 0 12px;
+}
+.news-head .news-title{display:flex; align-items:center; gap:12px}
+.news-head .news-title h2{
+  font-family:"Fraunces", serif; font-weight:500; font-size:24px;
+  margin:0; letter-spacing:-0.015em;
+}
+.news-head .news-title .count-pill{
+  font-family:"JetBrains Mono", monospace; font-size:10.5px;
+  letter-spacing:0.16em; text-transform:uppercase;
+  color: var(--accent); background: color-mix(in oklab, var(--accent) 12%, transparent);
+  border:1px solid color-mix(in oklab, var(--accent) 40%, transparent);
+  padding:4px 10px; border-radius:999px;
+  display:inline-flex; align-items:center; gap:7px;
+}
+.news-head .news-title .count-pill .cdot{
+  width:6px; height:6px; border-radius:50%;
+  background: var(--accent); box-shadow: 0 0 8px var(--accent);
+}
+.bento{
+  display:grid; gap:12px;
+  grid-template-columns: repeat(6, 1fr);
+  grid-auto-rows: minmax(130px, auto);
+  margin-bottom: 14px;
+}
+.news-tile{
+  position:relative; overflow:hidden;
+  border-radius:14px; border:1px solid var(--rule);
+  box-shadow: var(--card-shadow);
+  transition: border-color 200ms, transform 200ms;
+  min-height:180px;
+  isolation:isolate;
+  background: linear-gradient(135deg, var(--c1, #131F35) 0%, var(--c2, #0a1220) 100%);
+}
+.news-tile:hover{border-color: var(--rule-strong); transform: translateY(-2px);}
+.news-tile .portrait{
+  position:absolute; inset:0 0 0 auto;
+  width:95%; max-width:620px;
+  background-size: contain; background-position: top right;
+  background-repeat: no-repeat; z-index:0;
+  -webkit-mask-image: linear-gradient(90deg, transparent 0%, rgba(0,0,0,.4) 8%, #000 18%, #000 100%);
+          mask-image: linear-gradient(90deg, transparent 0%, rgba(0,0,0,.4) 8%, #000 18%, #000 100%);
+}
+.news-tile.featured{grid-column: span 3; grid-row: span 2; min-height:380px}
+.news-tile.featured .portrait{
+  width:80%; max-width:900px;
+  background-position: top right; background-size: contain;
+}
+.news-tile.mid{grid-column: span 2; min-height:220px}
+.news-tile.wide{grid-column: span 2; min-height:220px}
+.news-tile .scrim-left{
+  position:absolute; inset:0; z-index:0;
+  background: linear-gradient(90deg,
+    color-mix(in oklab, var(--c1, #0a1220) 92%, transparent) 0%,
+    color-mix(in oklab, var(--c1, #0a1220) 80%, transparent) 20%,
+    color-mix(in oklab, var(--c1, #0a1220) 50%, transparent) 40%,
+    transparent 70%);
+}
+.news-tile.featured .scrim-left{
+  background: linear-gradient(90deg,
+    color-mix(in oklab, var(--c1, #0a1220) 92%, transparent) 0%,
+    color-mix(in oklab, var(--c1, #0a1220) 82%, transparent) 25%,
+    color-mix(in oklab, var(--c1, #0a1220) 55%, transparent) 50%,
+    transparent 80%);
+}
+.news-tile .scrim-bottom{
+  position:absolute; left:0; right:0; bottom:0; height:55%; z-index:0;
+  background: linear-gradient(0deg, rgba(5,10,20,.65) 0%, transparent 100%);
+}
+.news-tile .accent-bar{
+  position:absolute; left:0; top:0; bottom:0; width:3px;
+  background: var(--team-color, var(--rule-strong)); z-index:2;
+}
+.news-tile .team-logos{
+  position:absolute; right:12px; top:50%;
+  transform: translateY(-50%);
+  display:flex; align-items:center; gap:10px;
+  z-index:0; opacity:.95;
+  filter: drop-shadow(0 4px 14px rgba(0,0,0,.5));
+}
+.news-tile .team-logos img{width:92px; height:92px; object-fit:contain;}
+.news-tile .team-logos .vs{
+  font-family:"Fraunces", serif; font-style:italic;
+  font-size:22px; color: rgba(255,255,255,.4);
+}
+.news-tile .body{
+  position:relative; z-index:1;
+  padding:16px 18px;
+  display:flex; flex-direction:column; gap:10px;
+  height:100%;
+}
+.news-tile.featured .body{padding:20px 22px}
+.news-tile .head{display:flex; justify-content:space-between; align-items:flex-start; gap:10px;}
+.news-tile .sev{
+  display:inline-flex; align-items:center; gap:7px;
+  padding:4px 10px; border-radius:999px;
+  font-family:"JetBrains Mono", monospace; font-size:9.5px;
+  letter-spacing:0.18em; text-transform:uppercase; font-weight:600;
+  white-space:nowrap; backdrop-filter: blur(8px);
+}
+.news-tile .sev.out{background: rgba(255,68,119,.2); color:#ff8aad; border:1px solid rgba(255,68,119,.5);}
+.news-tile .sev.gtd{background: rgba(255,184,77,.2); color:#ffd08a; border:1px solid rgba(255,184,77,.5);}
+.news-tile .sev.weather{background: rgba(90,183,255,.2); color:#a8d4ff; border:1px solid rgba(90,183,255,.5);}
+.news-tile .sev.line{background: rgba(16,224,161,.2); color:#67f0c7; border:1px solid rgba(16,224,161,.5);}
+.news-tile .sev.news{background: rgba(255,255,255,.12); color: var(--ink-dim); border:1px solid rgba(255,255,255,.2);}
+.news-tile .ts{
+  font-family:"JetBrains Mono", monospace; font-size:10px;
+  color:#cbd6ea; letter-spacing:0.08em;
+  background: rgba(10,18,32,.55); padding:2px 8px; border-radius:4px;
+  backdrop-filter: blur(8px);
+}
+.news-tile .text-col{max-width:52%; display:flex; flex-direction:column; gap:10px; flex:1;}
+.news-tile.featured .text-col{max-width:50%}
+.news-tile h3{
+  font-family:"Fraunces", serif; font-weight:500;
+  letter-spacing:-0.01em; color:#fff;
+  margin:0; line-height:1.18;
+  text-shadow: 0 2px 12px rgba(0,0,0,.6);
+}
+.news-tile.featured h3{font-size:28px; line-height:1.1}
+.news-tile.mid h3, .news-tile.wide h3{font-size:16.5px}
+.news-tile .snippet{color:#dbe3f1; font-size:13px; line-height:1.5; text-shadow: 0 1px 6px rgba(0,0,0,.5);}
+.news-tile .foot{
+  margin-top:auto; display:flex; gap:12px; flex-wrap:wrap;
+  padding-top:8px; border-top:1px solid rgba(255,255,255,.08);
+  font-family:"JetBrains Mono", monospace; font-size:10.5px;
+  color:#aab7d2; letter-spacing:0.06em;
+}
+.news-tile .foot a{color: var(--accent); text-decoration:none;}
+
+/* Line Moves ticker */
+.news-tile.ticker{
+  grid-column: span 6; min-height:68px;
+  background:
+    linear-gradient(90deg,
+      rgba(16,224,161,.14) 0%,
+      rgba(16,224,161,.04) 12%,
+      rgba(10,18,32,.6) 50%,
+      rgba(16,224,161,.04) 88%,
+      rgba(16,224,161,.14) 100%),
+    var(--card-elev);
+  border-color: rgba(16,224,161,.45);
+  box-shadow:
+    0 0 0 1px rgba(16,224,161,.25),
+    0 0 24px rgba(16,224,161,.18),
+    0 10px 30px rgba(0,0,0,.4);
+  position:relative; overflow:hidden;
+  display:flex; flex-direction:row; align-items:center; gap:18px;
+  padding:14px 24px;
+}
+.news-tile.ticker::before, .news-tile.ticker::after{
+  content:""; position:absolute; left:0; right:0; height:2px;
+  background: linear-gradient(90deg, transparent, var(--accent), transparent);
+  box-shadow: 0 0 12px var(--accent);
+  animation: tickerBeam 4s ease-in-out infinite;
+}
+.news-tile.ticker::before{top:0}
+.news-tile.ticker::after{bottom:0; animation-direction: reverse;}
+@keyframes tickerBeam{0%,100%{opacity:.5} 50%{opacity:1}}
+.news-tile.ticker .portrait, .news-tile.ticker .scrim-left, .news-tile.ticker .scrim-bottom{display:none}
+.ticker-label{
+  display:inline-flex; align-items:center; gap:8px;
+  font-family:"JetBrains Mono", monospace; font-size:11.5px;
+  letter-spacing:0.26em; text-transform:uppercase;
+  color: var(--accent-ink); background: var(--accent);
+  padding:7px 14px 7px 12px; border-radius:6px;
+  white-space:nowrap; font-weight:700;
+  box-shadow: 0 0 18px rgba(16,224,161,.55), 0 4px 14px rgba(0,0,0,.4);
+}
+.ticker-label .bolt{display:inline-block; font-size:14px; animation: bolt 1.4s ease-in-out infinite;}
+@keyframes bolt{0%,100%{opacity:1; transform:scale(1)} 50%{opacity:.4; transform:scale(.8)}}
+.ticker-track{
+  overflow:hidden; flex:1; white-space:nowrap;
+  mask-image: linear-gradient(90deg, transparent 0, #000 40px, #000 calc(100% - 40px), transparent 100%);
+}
+.ticker-run{
+  display:inline-flex; gap:0; animation: tick 42s linear infinite;
+  padding-left:100%;
+  font-family:"JetBrains Mono", monospace; font-size:14.5px; color: var(--ink);
+  letter-spacing:0.02em; font-weight:500;
+}
+.ticker-run .item{display:inline-flex; align-items:center; gap:10px; padding:0 22px; position:relative;}
+.ticker-run .item + .item::before{
+  content:""; position:absolute; left:0; top:50%;
+  transform: translateY(-50%);
+  width:1px; height:18px; background: rgba(16,224,161,.35);
+}
+.ticker-run .matchup{color:#fff; font-weight:600; letter-spacing:0.06em}
+.ticker-run .up{color: var(--good); font-weight:700; text-shadow: 0 0 10px rgba(16,224,161,.5);}
+.ticker-run .dn{color: var(--bad); font-weight:700; text-shadow: 0 0 10px rgba(255,68,119,.5);}
+.ticker-run .pm{color: var(--muted)}
+@keyframes tick{from{transform:translateX(0)} to{transform:translateX(-50%)}}
+.news-empty{
+  padding: 18px 20px; border:1px dashed var(--rule-strong);
+  border-radius:12px; color: var(--muted);
+  font-size:13px; text-align:center; margin-bottom:14px;
+}
+
+/* bottom snapshot strip (demoted bankroll/slate/picks/exposure) */
+.snap-strip{
+  display:grid; grid-template-columns: repeat(4, 1fr); gap:10px;
+  margin: 20px 0 10px;
+}
+.snap-strip .cell{
+  background: var(--card); border:1px solid var(--rule);
+  border-radius:12px; padding:12px 15px;
+  display:flex; justify-content:space-between; align-items:baseline;
+}
+.snap-strip .k{font-family:"JetBrains Mono", monospace; font-size:10px; letter-spacing:0.14em; text-transform:uppercase; color: var(--muted);}
+.snap-strip .v{font-family:"JetBrains Mono", monospace; font-size:16px; color: var(--ink); font-variant-numeric: tabular-nums; letter-spacing:-0.01em;}
+.snap-strip .v.accent{color: var(--accent)}
+.snap-strip .v.good{color: var(--good)}
+
+/* mobile fallback — stack the bento to single column */
+@media (max-width: 760px){
+  .bento{grid-template-columns: 1fr; grid-auto-rows: auto;}
+  .news-tile.featured, .news-tile.mid, .news-tile.wide, .news-tile.ticker{grid-column: 1;}
+  .news-tile .portrait{opacity:.5}
+  .news-tile .text-col, .news-tile.featured .text-col{max-width:85%}
+  .snap-strip{grid-template-columns: repeat(2, 1fr);}
+}
+
 /* fonts (incl. Material Symbols so Streamlit's icon ligatures resolve to glyphs) */
 @import url('https://fonts.googleapis.com/css2?family=Fraunces:ital,wght@0,400;0,500;1,400&family=Public+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&family=Material+Symbols+Rounded:opsz,wght,FILL,GRAD@24,400,0,0&display=swap');
 </style>
@@ -471,11 +700,12 @@ LIGHT_THEME_CSS = r"""
   --ink-dim: #334155;
   --muted: #64748B;
   --muted-dim: #94A3B8;
-  --accent: #0369A1;
+  --accent: #0A8F6A;
   --accent-ink: #FFFFFF;
-  --good: #15803D;
+  --good: #0A8F6A;
   --warn: #B45309;
   --bad: #B91C1C;
+  --info: #0369A1;
   --live: #BE123C;
   --chip: #F1F5F9;
   --card-shadow: 0 1px 2px rgba(0,0,0,.04), 0 2px 10px rgba(15,23,42,.06);
