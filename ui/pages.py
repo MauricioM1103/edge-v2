@@ -2230,7 +2230,7 @@ def _render_agent_panel(odds_games, kalshi_cash, settings,
     _watch_total = sum(1 for e in funded if _is_watch(e))
     _render_board_header(_total_games, _actionable_total, _watch_total)
     html(
-        '<div class="board-wrap">'
+        '<div class="board-wrap"><div class="beam"></div>'
         '<table class="board-table">'
         + header
         + f'<tbody>{_render_rows(top, watch_total=_watch_total)}</tbody>'

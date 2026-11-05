@@ -809,24 +809,33 @@ button[kind="headerDeploy"] { display: none !important; }
 /* Streamlit fades stale elements to ~33% while a rerun is in flight. Keep
    everything at full strength; the border beam below is the refresh signal. */
 [data-stale="true"], [data-stale="true"] *{opacity:1 !important;}
-@property --beam-angle{syntax:"<angle>"; inherits:false; initial-value:0deg;}
-.board-wrap::after{
-  content:""; position:absolute; inset:0; border-radius:inherit; padding:2px;
-  background: conic-gradient(from var(--beam-angle),
-    transparent 0deg, transparent 250deg,
-    color-mix(in oklab, var(--accent) 35%, transparent) 300deg,
-    var(--accent) 340deg, #ffffff 352deg, transparent 360deg);
-  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
-  -webkit-mask-composite: xor; mask-composite: exclude;
+/* A glowing comet rides a motion path traced on the Board's own border, so it
+   works at any box size (the full-slate table is thousands of px tall).
+   Motion path is used on purpose: @property registration does not take
+   effect inside Streamlit's injected <style>, so a custom-angle conic
+   animation never runs there. */
+.board-wrap .beam{
+  position:absolute; inset:0; border-radius:inherit; overflow:hidden;
   opacity:0; pointer-events:none; z-index:5;
   transition: opacity .25s ease;
 }
-.stApp[data-test-script-state="running"] .board-wrap::after{
-  opacity:1;
-  animation: beam-spin 1.4s linear infinite;
-  filter: drop-shadow(0 0 6px var(--accent)) drop-shadow(0 0 14px color-mix(in oklab, var(--accent) 60%, transparent));
+.board-wrap .beam::before{
+  content:""; position:absolute; top:0; left:0;
+  width:220px; height:3px; border-radius:3px;
+  background: linear-gradient(90deg,
+    transparent 0%,
+    color-mix(in oklab, var(--accent) 55%, transparent) 45%,
+    var(--accent) 80%, #ffffff 100%);
+  box-shadow: 0 0 8px var(--accent), 0 0 20px color-mix(in oklab, var(--accent) 70%, transparent);
+  offset-path: inset(1px round 14px);
+  offset-rotate: auto;
+  offset-distance: 0%;
 }
-@keyframes beam-spin{to{--beam-angle:360deg;}}
+.stApp[data-test-script-state="running"] .board-wrap .beam{opacity:1;}
+.stApp[data-test-script-state="running"] .board-wrap .beam::before{
+  animation: beam-travel 3s linear infinite;
+}
+@keyframes beam-travel{to{offset-distance:100%;}}
 /* Header pill that only shows while the script is running. */
 .board-hero-head .refresh-pill{
   display:none; align-items:center; gap:6px;
