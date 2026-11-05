@@ -723,6 +723,102 @@ button[kind="headerDeploy"] { display: none !important; }
 }
 
 /* ============================================================
+   The Board — full-slate table, Court Side look
+   ============================================================ */
+.board-wrap{
+  background: var(--card); border:1px solid var(--rule);
+  border-radius:14px; overflow:hidden;
+  box-shadow: var(--card-shadow);
+  margin-top: 6px;
+}
+table.board-table{
+  width:100%; border-collapse: collapse; font-size:13px;
+  background: transparent;
+}
+table.board-table thead th{
+  background: var(--card-elev);
+  color: var(--muted); font-family:"JetBrains Mono", monospace;
+  font-size:10px; letter-spacing:0.14em; text-transform:uppercase; font-weight:600;
+  padding:12px 14px; text-align:left;
+  border-bottom:1px solid var(--rule-strong);
+  white-space:nowrap;
+}
+table.board-table thead th.num{text-align:right;}
+table.board-table tbody td{
+  padding:12px 14px; border-bottom:1px solid var(--rule);
+  color: var(--ink); vertical-align:middle;
+}
+table.board-table tbody tr:hover{background: color-mix(in oklab, var(--accent) 5%, transparent);}
+table.board-table tbody tr:last-child td{border-bottom:none;}
+table.board-table tbody tr.row-divider td{
+  background: var(--surface); padding:8px 14px;
+  font-family:"JetBrains Mono", monospace; font-size:10px;
+  letter-spacing:0.16em; text-transform:uppercase; color: var(--muted);
+  border-bottom:1px solid var(--rule-strong);
+}
+table.board-table .rank-cell{
+  font-family:"JetBrains Mono", monospace; color: var(--muted-dim);
+  font-size:11px; width:40px;
+}
+table.board-table .tier-cell{width:52px;}
+.tier-badge{
+  display:inline-flex; align-items:center; justify-content:center;
+  width:22px; height:22px; border-radius:6px;
+  font-family:"JetBrains Mono", monospace; font-size:11px; font-weight:700;
+  line-height:1;
+}
+.tier-badge.a{background: rgba(16,224,161,.2); color: var(--accent); border:1px solid rgba(16,224,161,.5);}
+.tier-badge.b{background: rgba(90,183,255,.15); color: var(--info); border:1px solid rgba(90,183,255,.4);}
+.tier-badge.c{background: rgba(255,184,77,.15); color: var(--warn); border:1px solid rgba(255,184,77,.4);}
+.tier-badge.w{background: var(--chip); color: var(--muted); border:1px solid var(--rule-strong);}
+.matchup-cell{font-weight:500;}
+.matchup-cell .chip-row{display:flex; align-items:center; gap:7px; flex-wrap:wrap;}
+.matchup-cell .chip-row .team-chip{
+  display:inline-block; padding:2px 7px; border-radius:4px;
+  font-family:"JetBrains Mono", monospace; font-size:10px; font-weight:700;
+  color:#fff; letter-spacing:0.04em;
+  background: var(--team-color, var(--rule-strong));
+  box-shadow: 0 2px 6px rgba(0,0,0,.3);
+}
+.matchup-cell .chip-row .team-chip.light{color:#002D62;}
+.matchup-cell .chip-row .at{color: var(--muted); font-family:"Fraunces", serif; font-style:italic; font-size:11px;}
+.matchup-cell .time{
+  font-family:"JetBrains Mono", monospace; font-size:10.5px;
+  color: var(--muted); letter-spacing:0.05em; display:block; margin-top:4px;
+}
+.side-cell{display:flex; flex-direction:column; gap:2px;}
+.side-cell .mkt{font-family:"JetBrains Mono", monospace; font-size:9.5px; letter-spacing:0.14em; text-transform:uppercase; color: var(--muted);}
+.side-cell .pick{font-weight:600; color: var(--ink); font-size:13px;}
+.book-cell{font-family:"JetBrains Mono", monospace; font-size:11.5px; color: var(--ink-dim); white-space:nowrap;}
+.book-cell .n{color: var(--accent); font-weight:600;}
+td.num-cell{font-family:"JetBrains Mono", monospace; font-size:13px; font-variant-numeric: tabular-nums; text-align:right; letter-spacing:-0.01em;}
+td.num-cell.good{color: var(--good); font-weight:600;}
+td.num-cell.bad{color: var(--bad);}
+td.num-cell.accent{color: var(--accent); font-weight:600;}
+td.num-cell.muted{color: var(--muted);}
+.stake-cell{display:flex; flex-direction:column; align-items:flex-end; gap:1px;}
+.stake-cell .u{font-family:"JetBrains Mono", monospace; font-size:13.5px; color: var(--accent); font-weight:600; font-variant-numeric: tabular-nums;}
+.stake-cell .d{font-family:"JetBrains Mono", monospace; font-size:10.5px; color: var(--muted); font-variant-numeric: tabular-nums;}
+.stake-cell .u.watch{color: var(--muted);}
+.method-tag{
+  display:inline-block; padding:3px 9px; border-radius:4px;
+  font-family:"JetBrains Mono", monospace; font-size:9.5px;
+  letter-spacing:0.1em; text-transform:uppercase; font-weight:600;
+}
+.method-tag.model{background: rgba(16,224,161,.15); color: var(--accent);}
+.method-tag.line{background: rgba(255,184,77,.15); color: var(--warn);}
+.method-tag.sit{background: rgba(90,183,255,.15); color: var(--info);}
+.method-tag.fade{background: rgba(255,68,119,.15); color: var(--bad);}
+.method-tag.watch{background: var(--chip); color: var(--muted); border:1px solid var(--rule-strong);}
+
+/* Board on mobile: horizontal scroll inside the card so the layout holds */
+@media (max-width: 900px){
+  .board-wrap{overflow-x: auto;}
+  table.board-table{min-width: 820px;}
+  table.board-table thead th, table.board-table tbody td{padding:9px 10px; font-size:12px;}
+}
+
+/* ============================================================
    Mobile-first polish (phones + tall tablets)
    ============================================================ */
 @media (max-width: 900px){

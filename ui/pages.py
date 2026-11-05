@@ -1225,77 +1225,115 @@ def _render_agent_panel(odds_games, kalshi_cash, settings,
         if g == "tied":   return '<span class="chip" style="padding:2px 7px; font-size:9px;">= tied</span>'
         return '<span style="color:var(--muted); font-size:11px;">—</span>'
 
-    def _row(e, highlight: bool = False):
-        edge_pct = e["edge"] * 100.0
-        tone = "ev-plus" if edge_pct > 0 else "ev-minus"
-        side_label = e.get("side_label", "")
-        best_book = e.get("book", "?")
-        is_kalshi_best = best_book.lower() == "kalshi"
-        best_price = format_american(e.get("price"))
-        best_imp = f"{e['book_implied']*100:.1f}%"
-        kalshi_cents = e.get("kalshi_price_cents")
-        kalshi_cell = (
-            f'<span class="mono">{int(kalshi_cents)}¢</span>'
-            if kalshi_cents is not None else '<span style="color:var(--muted);">—</span>'
-        )
-        kalshi_url = e.get("kalshi_url") or "https://kalshi.com/markets"
-        if is_kalshi_best:
-            link_cell = (
-                f'<a href="{kalshi_url}" target="_blank" rel="noopener" '
-                'style="color:var(--accent); text-decoration:none; font-size:11px;">Open ↗</a>'
-            )
-            best_book_html = f'<span class="chip accent" style="padding:2px 7px; font-size:9.5px;">Kalshi</span>'
-        else:
-            link_cell = f'<span style="color:var(--muted); font-size:11px;">— offshore —</span>'
-            best_book_html = f'<span class="chip warn" style="padding:2px 7px; font-size:9.5px;">{best_book}</span>'
-        # Finished picks get a muted bg + reduced opacity so they clearly read
-        # as "history" in the lower slots of the board.
-        is_settled = (e.get("status_state") == "post") or (e.get("grade") in ("win", "loss", "push"))
+    def _esc_row(s: str) -> str:
+        return (s or "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+    def _tier_for_edge(edge_val: float) -> str:
+        """Match the mockup: A ≥ 2%, B ≥ 1%, C > 0, else Watch."""
+        if edge_val >= 0.020:
+            return "a"
+        if edge_val >= 0.010:
+            return "b"
+        if edge_val > 0:
+            return "c"
+        return "w"
+
+    def _methodology_tag(edge_val: float, is_settled: bool) -> str:
         if is_settled:
-            row_style = ' style="background: color-mix(in oklab, var(--card-elev) 60%, transparent); opacity:0.78;"'
-        elif highlight:
-            row_style = ' style="background: color-mix(in oklab, var(--good) 10%, transparent);"'
-        else:
-            row_style = ""
-        strong_open = "<strong>" if highlight else ""
-        strong_close = "</strong>" if highlight else ""
-        sport_label = (e.get("_sport") or "").upper() or "—"
+            return '<span class="method-tag watch">Settled</span>'
+        if edge_val > 0.020:
+            return '<span class="method-tag line">Sharp Move</span>'
+        if edge_val > 0:
+            return '<span class="method-tag model">Model Edge</span>'
+        return '<span class="method-tag watch">Market</span>'
+
+    def _matchup_chips(e: dict) -> str:
+        """Split "Away at Home" or "Away vs Home" into two team chips.
+        Falls back to a single chip with the whole matchup string if the
+        split doesn't land (international soccer, odd punctuation, etc.)."""
+        m = e.get("matchup", "") or ""
+        joiner = " at " if " at " in m else (" vs " if " vs " in m else None)
+        if joiner:
+            away, home = m.split(joiner, 1)
+            away_chip = _esc_row(away.strip()[:14])
+            home_chip = _esc_row(home.strip()[:14])
+            return (
+                f'<span class="team-chip">{away_chip}</span>'
+                f'<span class="at">{joiner.strip()}</span>'
+                f'<span class="team-chip">{home_chip}</span>'
+            )
+        return f'<span class="team-chip">{_esc_row(m[:28])}</span>'
+
+    def _start_time_ct(e: dict) -> str:
+        from datetime import datetime as _dt
+        from zoneinfo import ZoneInfo as _Z
+        state = e.get("status_state")
+        if state == "post":
+            hs = e.get("home_score"); as_ = e.get("away_score")
+            score = f"{as_}–{hs}" if hs is not None and as_ is not None else ""
+            return f"FINAL · {score}" if score else "FINAL"
+        if state == "in":
+            detail = (e.get("status_detail") or "LIVE")[:18]
+            return f"● {detail}"
+        start = e.get("start_utc") or e.get("commence_time")
+        if start:
+            try:
+                if isinstance(start, str):
+                    start = _dt.fromisoformat(start.replace("Z", "+00:00"))
+                return (e.get("_sport") or "").upper() + " · " + start.astimezone(_Z("America/Chicago")).strftime("%I:%M %p").lstrip("0") + " CT"
+            except Exception:
+                pass
+        return (e.get("_sport") or "").upper() or "—"
+
+    def _row(e, highlight: bool = False, rank: int = 0):
+        edge_val = float(e.get("edge") or 0)
+        edge_pct = edge_val * 100.0
+        fair_pct = float(e.get("fair_prob") or 0) * 100.0
+        side_label = _esc_row(e.get("side_label", ""))
+        best_book = _esc_row(e.get("book", "?"))
+        best_price = format_american(e.get("price"))
+        stake_u = _to_units(e.get("stake_dollars") or 0)
+        stake_d = float(e.get("stake_dollars") or 0)
+        is_settled = (e.get("status_state") == "post") or (e.get("grade") in ("win", "loss", "push"))
+        tier = _tier_for_edge(edge_val) if not is_settled else "w"
         market_label = e.get("market_label") or agent_calc.MARKET_LABELS.get(e.get("market", "h2h"), "Moneyline")
+        edge_cls = "good" if edge_val > 0 else ("bad" if edge_val < -0.001 else "muted")
+        fair_cls = "accent" if edge_val > 0 else "muted"
+        stake_classes = "u" if stake_u > 0 else "u watch"
+        stake_detail = f"${stake_d:,.2f}" if stake_u > 0 else "watch"
+        stake_value = f"{stake_u:.1f}u" if stake_u > 0 else "—"
         return (
-            f'<tr{row_style}>'
-            f'<td><span class="chip" style="padding:1px 6px; font-size:9.5px;">{sport_label}</span></td>'
-            f'<td>{_status_cell(e)}</td>'
-            f'<td>{strong_open}{e["matchup"]}{strong_close}</td>'
-            f'<td class="mono" style="color:var(--muted); font-size:11px;">{market_label}</td>'
-            f'<td>{strong_open}{side_label}{strong_close}</td>'
-            f'<td>{best_book_html}</td>'
-            f'<td class="num mono"><strong>{best_price}</strong></td>'
-            f'<td class="num mono">{best_imp}</td>'
-            f'<td class="num" style="text-align:right;">{kalshi_cell}</td>'
-            f'<td class="num mono" style="color:var(--good);">{e["fair_prob"]*100:.1f}%</td>'
-            f'<td class="num mono {tone}"><strong>{edge_pct:+.2f}</strong></td>'
-            f'<td class="num mono"><strong>{_to_units(e["stake_dollars"]):.2f}u</strong></td>'
-            f'<td>{_grade_cell(e)}</td>'
-            f'<td>{link_cell}</td>'
-            f'</tr>'
+            '<tr>'
+            f'<td class="rank-cell">{rank or ""}</td>'
+            f'<td class="tier-cell"><span class="tier-badge {tier}">{tier.upper()}</span></td>'
+            f'<td class="matchup-cell">'
+            f'  <div class="chip-row">{_matchup_chips(e)}</div>'
+            f'  <span class="time">{_esc_row(_start_time_ct(e))}</span>'
+            f'</td>'
+            f'<td><div class="side-cell"><span class="mkt">{_esc_row(market_label)}</span>'
+            f'<span class="pick">{side_label}</span></div></td>'
+            f'<td class="book-cell">{best_book} <span class="n">{best_price}</span></td>'
+            f'<td class="num-cell">{best_price}</td>'
+            f'<td class="num-cell {fair_cls}">{fair_pct:.1f}%</td>'
+            f'<td class="num-cell {edge_cls}">{edge_pct:+.1f}%</td>'
+            f'<td><div class="stake-cell"><span class="{stake_classes}">{stake_value}</span>'
+            f'<span class="d">{stake_detail}</span></div></td>'
+            f'<td>{_methodology_tag(edge_val, is_settled)}</td>'
+            '</tr>'
         )
 
     header = (
         '<thead><tr>'
-        '<th>Sport</th>'
-        '<th>Status</th>'
-        '<th>Matchup</th>'
-        '<th>Market</th>'
-        '<th>Bet on</th>'
-        '<th>Best book</th>'
-        '<th class="num" title="Best price across Kalshi + shop books">Price</th>'
-        '<th class="num">Best IP</th>'
-        '<th class="num" title="Kalshi\'s YES price for comparison (h2h only)">Kalshi ¢</th>'
-        '<th class="num" title="Pinnacle no-vig fair probability">Pinn fair</th>'
-        '<th class="num">Edge (pts)</th>'
-        '<th class="num" title="Stake in units. 1u = your configured unit size.">Stake (u)</th>'
-        '<th>Result</th>'
-        '<th></th>'
+        '<th>#</th>'
+        '<th>Tier</th>'
+        '<th>Matchup · Start</th>'
+        '<th>Side · Market</th>'
+        '<th>Best Book</th>'
+        '<th class="num">Price</th>'
+        '<th class="num">Fair %</th>'
+        '<th class="num">Edge</th>'
+        '<th class="num">Stake</th>'
+        '<th>Methodology</th>'
         '</tr></thead>'
     )
 
@@ -1370,33 +1408,61 @@ def _render_agent_panel(odds_games, kalshi_cash, settings,
         )
         html(f'<div class="hint">{suggestion}</div>')
         return []
-    # Build the body: fresh picks first, then a one-cell divider row saying
-    # "finished today", then the settled picks beneath. Settled rows are
-    # muted via _row() so the eye reads them as record, not actionable.
-    def _render_rows(items):
-        out_parts = []
-        has_fresh = any(not ((e.get("status_state") == "post") or (e.get("grade") in ("win", "loss", "push"))) for e in items)
-        divider_shown = False
-        for e in items:
-            is_settled = (e.get("status_state") == "post") or (e.get("grade") in ("win", "loss", "push"))
-            if is_settled and has_fresh and not divider_shown:
-                out_parts.append(
-                    '<tr><td colspan="14" style="padding:8px 10px; '
-                    'background:var(--card-elev); border-top:1px solid var(--rule); '
-                    'font-family:JetBrains Mono,monospace; font-size:10px; '
-                    'letter-spacing:0.14em; text-transform:uppercase; color:var(--muted);">'
-                    '— finished picks (kept on board as record) —'
-                    '</td></tr>'
-                )
-                divider_shown = True
-            out_parts.append(_row(e))
-        return "".join(out_parts)
+    # Court Side body: a "◆ Positive edge" divider above actionable picks,
+    # a "◇ Watch" divider above non-positive ones, and a "— finished picks —"
+    # divider above any settled rows. Rank numbers reset the moment we hit the
+    # watch group to make the actionable list stand on its own.
+    def _is_pos(e):
+        return float(e.get("edge") or 0) > 0 and not ((e.get("status_state") == "post") or (e.get("grade") in ("win", "loss", "push")))
+    def _is_watch(e):
+        return (not _is_pos(e)) and not ((e.get("status_state") == "post") or (e.get("grade") in ("win", "loss", "push")))
+    def _is_settled(e):
+        return (e.get("status_state") == "post") or (e.get("grade") in ("win", "loss", "push"))
 
+    def _render_rows(items, watch_total: int = 0):
+        pos_items = [e for e in items if _is_pos(e)]
+        watch_items = [e for e in items if _is_watch(e)]
+        settled_items = [e for e in items if _is_settled(e)]
+        parts = []
+        if pos_items:
+            parts.append(
+                f'<tr class="row-divider"><td colspan="10">'
+                f'◆ Positive edge · {len(pos_items)} actionable pick'
+                f'{"s" if len(pos_items) != 1 else ""}'
+                f'</td></tr>'
+            )
+            for i, e in enumerate(pos_items, start=1):
+                parts.append(_row(e, rank=i))
+        if watch_items:
+            total_label = f"{watch_total} games" if watch_total and watch_total > len(watch_items) else f"{len(watch_items)} games"
+            shown_label = f" (showing top {len(watch_items)})" if watch_total and watch_total > len(watch_items) else ""
+            parts.append(
+                f'<tr class="row-divider"><td colspan="10">'
+                f'◇ Watch · neutral or negative edge · {total_label}{shown_label}'
+                f'</td></tr>'
+            )
+            for i, e in enumerate(watch_items, start=len(pos_items) + 1):
+                parts.append(_row(e, rank=i))
+        if settled_items:
+            parts.append(
+                '<tr class="row-divider"><td colspan="10">'
+                '— Finished picks · kept on board as record —'
+                '</td></tr>'
+            )
+            for i, e in enumerate(settled_items, start=len(pos_items) + len(watch_items) + 1):
+                parts.append(_row(e, rank=i))
+        return "".join(parts)
+
+    # overflow_funded is the full watch-list beyond the visible rows — pass
+    # its size so the divider label reads "41 games (showing top 8)" like the mockup.
+    _watch_total_est = sum(1 for e in funded if _is_watch(e))
     html(
-        '<table class="ledger" style="margin-top:4px;">'
+        '<div class="board-wrap">'
+        '<table class="board-table">'
         + header
-        + f'<tbody>{_render_rows(top)}</tbody>'
+        + f'<tbody>{_render_rows(top, watch_total=_watch_total_est)}</tbody>'
         + '</table>'
+        '</div>'
     )
     # One-click "Log pick"
     with st.expander("⚡ One-click log for the top picks", expanded=False):
@@ -1453,12 +1519,20 @@ def _render_agent_panel(odds_games, kalshi_cash, settings,
                 st.toast(f"Logged: {side_label} @ {best_price} · {stake_u:.2f}u ({best_book})", icon="✅")
 
     if overflow_funded:
-        with st.expander(f"➕ {len(overflow_funded)} more funded picks", expanded=False):
+        with st.expander(f"➕ {len(overflow_funded)} more picks on the watch-list", expanded=False):
+            # Overflow picks use the same Court Side table structure so the
+            # style stays consistent when expanded.
+            _start_rank = len(top) + 1
+            _overflow_rows = "".join(
+                _row(e, rank=_start_rank + i) for i, e in enumerate(overflow_funded)
+            )
             html(
-                '<table class="ledger" style="margin-top:4px;">'
+                '<div class="board-wrap">'
+                '<table class="board-table">'
                 + header
-                + f'<tbody>{"".join(_row(e, highlight=True) for e in overflow_funded)}</tbody>'
+                + f'<tbody>{_overflow_rows}</tbody>'
                 + '</table>'
+                '</div>'
             )
 
     if dropped:
