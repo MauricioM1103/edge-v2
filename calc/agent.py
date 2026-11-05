@@ -844,7 +844,7 @@ def scan_offshore_markets_vs_pinnacle(
                 side_label = label_fallback or side_key.upper()
                 pt = best.get("point")
                 if mk in ("totals", "totals_h1") and pt is not None:
-                    side_label = f"{side_label} {pt}"
+                    side_label = f"{side_label} {float(pt):g}"
                 elif mk in ("spreads", "spreads_h1") and pt is not None:
                     side_label = f"{side_label} {pt:+g}"
                 elif mk == "spreads" and pt is not None:

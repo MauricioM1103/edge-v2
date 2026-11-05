@@ -938,9 +938,11 @@ def _render_line_moves_ticker(merged: list, top_picks: list = None) -> str:
     items_html = []
     for m in items_src:
         if m["open"] is not None and m["cur"] is not None:
-            open_s = f"{m['open']:+g}" if m["cls"] in ("up", "dn") and abs(m["open"]) < 15 else f"{m['open']:g}"
-            cur_s = f"{m['cur']:+g}" if m["cls"] in ("up", "dn") and abs(m["cur"]) < 15 else f"{m['cur']:g}"
-            move_str = f"{open_s} → {cur_s}"
+            _signed = abs(m["cur"]) < 15 and not m["matchup"].endswith("O/U")
+            open_s = f"{m['open']:+g}" if _signed else f"{m['open']:g}"
+            cur_s = f"{m['cur']:+g}" if _signed else f"{m['cur']:g}"
+            # Unchanged lines read as one number, not "10 → 10".
+            move_str = cur_s if m["cls"] == "pm" else f"{open_s} → {cur_s}"
         else:
             move_str = "on slate"
         items_html.append(
