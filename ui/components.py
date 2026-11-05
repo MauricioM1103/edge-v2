@@ -31,38 +31,54 @@ def html(s: str):
 
 
 def brand_bar(subtitle: str = ""):
-    # %-d/%-I isn't portable to Windows - use zero-padded codes and strip leading zeros manually.
+    """Court Side brand bar (spec §10). Right side shows a pulsing live dot,
+    'Live · CT H:MM AM/PM', and a formatted date. The credits chip moves
+    to the sidebar, not the brand bar.
+
+    `subtitle` is accepted for callers that still pass a page-specific label,
+    but it is intentionally not rendered in the Court Side layout — the right
+    side is strictly live time + date per the mockup.
+    """
     try:
         dt = datetime.now(CENTRAL)
-        day = str(dt.day)
         hour12 = dt.hour % 12 or 12
-        now_et = f"{dt.strftime('%a %b')} {day} · {hour12}:{dt.strftime('%M %p')} CT"
+        live_time = f"Live · CT {hour12}:{dt.strftime('%M %p')}"
+        day = str(dt.day)  # strip leading zero manually (Windows-safe)
+        date_line = f"{dt.strftime('%a')} · {dt.strftime('%b')} {day}, {dt.strftime('%Y')}"
     except Exception:
-        now_et = ""
-    # Persistent credit chip: shows remaining Odds API credits on every tab.
-    credit_chip = ""
-    try:
-        from apis import odds as odds_api
-        cs = odds_api.get_credit_status() or {}
-        rem = cs.get("remaining")
-        if rem is not None:
-            tone = "good" if rem > 2000 else ("warn" if rem > 500 else "bad")
-            credit_chip = (
-                f'<span class="chip {tone}" style="margin-right:10px; font-size:9.5px;">'
-                f'Odds API: {int(rem):,}</span>'
-            )
-    except Exception:
-        pass
+        live_time = "Live"
+        date_line = ""
     html(f"""
     <div class="brand-bar">
       <div class="brand">
         <span class="dot"></span>
         <span class="name">Edge</span>
-        <span class="ver">v2.0</span>
+        <span class="ver">v2.1 · Court Side</span>
       </div>
-      <div class="brand-right" style="display:flex;align-items:center;">{credit_chip}<span>{subtitle or now_et}</span></div>
+      <div class="brand-right">
+        <span><span class="pulse-dot"></span>{live_time}</span>
+        <span>{date_line}</span>
+      </div>
     </div>
     """)
+
+
+def credits_chip_html() -> str:
+    """Odds API credits chip, for placement in the sidebar (spec §10 moved it
+    off the brand bar). Returns empty string if we can't resolve credits."""
+    try:
+        from apis import odds as odds_api
+        cs = odds_api.get_credit_status() or {}
+        rem = cs.get("remaining")
+        if rem is None:
+            return ""
+        tone = "good" if rem > 2000 else ("warn" if rem > 500 else "bad")
+        return (
+            f'<span class="chip {tone}" style="font-size:9.5px;">'
+            f'Odds API: {int(rem):,}</span>'
+        )
+    except Exception:
+        return ""
 
 
 def metric_card(label: str, value: str, foot: str = "", tone: str = ""):

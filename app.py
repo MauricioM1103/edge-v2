@@ -42,6 +42,17 @@ from ui.pages import (
 def _sidebar_settings() -> dict:
     saved = settings_store.load()
     with st.sidebar:
+        # Odds API credits chip, moved off the brand bar per spec §10. Placed
+        # at the top of the sidebar so it's always visible without competing
+        # with the Court Side brand lockup for real estate.
+        try:
+            from ui.components import credits_chip_html
+            from ui.components import html as _html
+            chip = credits_chip_html()
+            if chip:
+                _html(f'<div style="margin-bottom:10px;">{chip}</div>')
+        except Exception:
+            pass
         st.markdown("### Settings")
 
         # Sports selection moved to the Board itself (the Sports/Markets filter

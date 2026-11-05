@@ -248,6 +248,15 @@ def _relative_time(iso_ts: str) -> str:
 _SEV_ICON = {"out": "✕ Out", "gtd": "◐ Game-Time", "weather": "⚑ Weather", "line": "↑ Sharp Move", "news": "◆ News"}
 
 
+def _sev_label_for(sev: str, size: str) -> str:
+    """Spec §8: severity pill wording. The featured tile uses a longer form
+    for high-impact outages so the hero reads like a dedicated callout."""
+    sev = (sev or "news").lower()
+    if sev == "out" and size == "featured":
+        return "✕ Ruled Out · High Impact"
+    return _SEV_ICON.get(sev, "◆ News")
+
+
 def _esc(s: str) -> str:
     return (s or "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
 
@@ -260,6 +269,133 @@ def _tile_bg_colors(teams: list) -> tuple:
     if primary and len(primary) in (3, 6):
         return (f"#{primary}", f"#{primary}22")
     return ("#131F35", "#0a1220")
+
+
+# Team color lookup for tile gradients + board chips. Hex strings without leading
+# "#". Covers NBA/NFL/MLB/NHL majors plus NCAAF/NCAAB blue-bloods and the top
+# soccer clubs the news feed is likely to surface. Missing teams fall through to
+# LEAGUE_COLOR_FALLBACK below.
+TEAM_COLORS: dict = {
+    # NBA
+    "BOS": "007A33", "LAL": "552583", "GSW": "1D428A", "MIA": "98002E",
+    "CHI": "CE1141", "NYK": "F58426", "PHI": "006BB6", "DAL": "00538C",
+    "DEN": "0E2240", "PHX": "1D1160", "MIL": "00471B", "LAC": "C8102E",
+    "CLE": "6F263D", "ATL": "E03A3E", "TOR": "CE1141", "MEM": "5D76A9",
+    "SAS": "C4CED4", "POR": "E03A3E", "SAC": "5A2D81", "MIN": "0C2340",
+    "OKC": "007AC1", "NOP": "0C2340", "UTA": "002B5C", "HOU": "CE1141",
+    "IND": "FDBB30", "DET": "1D42BA", "BKN": "000000", "ORL": "0077C0",
+    "WAS": "002B5C", "CHA": "1D1160",
+    # NFL
+    "KC": "E31837", "SF": "AA0000", "BUF": "00338D", "DAL_NFL": "003594",
+    "PHI_NFL": "004C54", "GB": "203731", "NE": "002244", "PIT": "FFB612",
+    "BAL": "241773", "MIA_NFL": "008E97", "CIN": "FB4F14", "CLE_NFL": "311D00",
+    "DET_NFL": "0076B6", "LAR": "003594", "LAC_NFL": "0080C6", "LV": "000000",
+    "SEA": "002244", "DEN_NFL": "FB4F14", "MIN_NFL": "4F2683", "TB": "D50A0A",
+    "NO": "D3BC8D", "ATL_NFL": "A71930", "ARI_NFL": "97233F", "JAX": "006778",
+    "TEN": "0C2340", "IND_NFL": "002C5F", "WAS_NFL": "5A1414", "HOU_NFL": "03202F",
+    "NYG": "0B2265", "NYJ": "125740", "CAR_NFL": "0085CA", "CHI_NFL": "0B162A",
+    # MLB
+    "LAD": "005A9C", "NYY": "132448", "HOU_MLB": "EB6E1F", "ATL_MLB": "CE1141",
+    "PHI_MLB": "E81828", "BOS_MLB": "BD3039", "MIL_MLB": "12284B", "CHC": "0E3386",
+    "TOR_MLB": "134A8E", "SD": "2F241D", "SF_MLB": "FD5A1E", "BAL_MLB": "DF4601",
+    "TEX_MLB": "003278", "MIN_MLB": "002B5C", "ARI_MLB": "A71930", "NYM": "002D72",
+    "SEA_MLB": "0C2C56", "STL": "C41E3A", "CLE_MLB": "E31937", "DET_MLB": "0C2340",
+    "CIN_MLB": "C6011F", "PIT_MLB": "FDB827", "KC_MLB": "004687", "CWS": "27251F",
+    "TB_MLB": "092C5C", "COL": "33006F", "OAK": "003831", "WAS_MLB": "AB0003",
+    "MIA_MLB": "00A3E0", "LAA": "BA0021",
+    # NHL
+    "BOS_NHL": "FFB81C", "TOR_NHL": "00205B", "COL_NHL": "6F263D", "EDM": "041E42",
+    "FLA": "041E42", "NYR": "0038A8", "DAL_NHL": "006847", "CAR_NHL": "CC0000",
+    "VGK": "B4975A", "TB_NHL": "002868", "PIT_NHL": "FCB514", "WAS_NHL": "C8102E",
+    "NJD": "CE1126", "NYI": "00539B", "PHI_NHL": "F74902", "WPG": "041E42",
+    "VAN": "00205B", "LAK": "111111", "SJS": "006D75", "MIN_NHL": "154734",
+    "STL_NHL": "002F87", "NSH": "FFB81C", "CBJ": "002654", "SEA_NHL": "001628",
+    "DET_NHL": "CE1126", "OTT": "C52032", "ARI_NHL": "8C2633", "MTL": "AF1E2D",
+    "CHI_NHL": "CF0A2C", "BUF_NHL": "003087", "ANA": "F47A38", "CGY": "D2001C",
+    # NCAA (major brands)
+    "BAMA": "9E1B32", "UGA": "BA0C2F", "OSU": "BB0000", "MICH": "00274C",
+    "ND": "0C2340", "TEX_NCAA": "BF5700", "USC": "990000", "LSU": "461D7C",
+    "MISS": "CE1126", "AUB": "0C2340", "PENN": "041E42", "OREG": "154733",
+    "WASH": "4B2E83", "FSU": "782F40", "CLEM": "F56600", "OU": "841617",
+    "OKST": "FF7300", "KSU": "512888", "KU": "0051BA", "WVU": "002855",
+    # Soccer
+    "BAR": "A50044", "RMA": "FEBE10", "MCI": "6CABDD", "MUN": "DA291C",
+    "LIV": "C8102E", "ARS": "EF0107", "CHE": "034694", "TOT": "132257",
+    "BAY": "DC052D", "DOR": "FDE100", "PSG": "004170", "JUV": "000000",
+    "INT": "0068B4", "MIL_SER": "FB090B", "ATM": "CB3524", "BVB": "FDE100",
+}
+
+LEAGUE_COLOR_FALLBACK: dict = {
+    "nba": "1D428A", "wnba": "002B5C",
+    "nfl": "013369", "ncaaf": "0B2265",
+    "mlb": "002D72",
+    "nhl": "000000",
+    "ncaab": "0B2265", "ncaaw": "0B2265",
+    "mls": "0B3D91", "epl": "3D195B", "la_liga": "EE8707",
+    "bundesliga": "D20515", "serie_a": "008FD7", "ligue_1": "DAE025",
+    "ucl": "0E1E8C", "uel": "F7901F", "nwsl": "C8102E", "liga_mx": "006847",
+    "ufc": "D20A0A", "f1": "E10600", "nascar": "F6E400",
+    "pga": "0D4C3D", "atp": "052E6E", "wta": "7C2855",
+}
+
+# Light-text teams whose primary color is bright enough that the .team-chip's
+# default white glyph vanishes; the .team-chip.light class flips to navy ink.
+_LIGHT_TEAM_CHIPS = {
+    "IND", "GSW", "PIT", "PIT_MLB", "NSH", "BOS_NHL", "TOR_NHL",
+    "KSU", "DOR", "BVB", "MISS",  # Ole Miss / Dortmund yellow
+}
+
+
+def _hex_to_rgb(h: str) -> tuple:
+    h = (h or "").lstrip("#")
+    if len(h) == 3:
+        h = "".join(c * 2 for c in h)
+    if len(h) != 6:
+        return (20, 30, 50)
+    try:
+        return (int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16))
+    except ValueError:
+        return (20, 30, 50)
+
+
+def _darken(hex_color: str, mix_black: float = 0.55) -> str:
+    """Mix `hex_color` toward black by `mix_black` fraction. 0 = unchanged, 1 = black."""
+    r, g, b = _hex_to_rgb(hex_color)
+    mix_black = max(0.0, min(1.0, mix_black))
+    r = int(r * (1 - mix_black))
+    g = int(g * (1 - mix_black))
+    b = int(b * (1 - mix_black))
+    return f"#{r:02X}{g:02X}{b:02X}"
+
+
+def _resolve_team_color(abbr: str, league: str = "") -> str:
+    """Return a #RRGGBB for a team, falling back to the league's house color."""
+    key = (abbr or "").upper().strip()
+    if key and key in TEAM_COLORS:
+        return "#" + TEAM_COLORS[key]
+    lk = (league or "").lower()
+    return "#" + LEAGUE_COLOR_FALLBACK.get(lk, "131F35")
+
+
+def _team_color_pair(teams: list, league_key: str = "") -> tuple:
+    """Return (c1, c2, accent) hex strings for a tile. c2 = team color, c1 = darkened."""
+    accent = ""
+    if teams:
+        for t in teams:
+            abbr = (t.get("abbr") or "").upper()
+            col = TEAM_COLORS.get(abbr)
+            if col:
+                accent = "#" + col
+                break
+            raw = (t.get("color") or "").strip().lstrip("#")
+            if raw and len(raw) in (3, 6):
+                accent = ("#" + raw) if len(raw) == 6 else ("#" + "".join(c * 2 for c in raw))
+                break
+    if not accent:
+        accent = "#" + LEAGUE_COLOR_FALLBACK.get((league_key or "").lower(), "131F35")
+    c1 = _darken(accent, 0.55)
+    c2 = accent
+    return (c1, c2, accent)
 
 
 _ESPN_LEAGUE_LOGO = "https://a.espncdn.com/i/teamlogos/leagues/500/{slug}.png"
@@ -275,18 +411,36 @@ _LEAGUE_LOGO_SLUG = {
 }
 
 
-def _render_news_tile(item: dict, size: str = "mid") -> str:
+def _trunc_words(s: str, limit: int) -> str:
+    """Truncate at word boundary with a trailing ellipsis so the clamp has room."""
+    s = (s or "").strip()
+    if len(s) <= limit:
+        return s
+    cut = s[:limit].rsplit(" ", 1)[0]
+    return (cut or s[:limit]).rstrip(",.;:") + "…"
+
+
+def _render_news_tile(item: dict, size: str = "mid", featured_matrix_html: str = "") -> str:
     """Return the HTML for one bento tile. `size` ∈ {featured, mid, wide}.
     EVERY tile gets an image: headshot → two-team logos → one-team logo →
     league logo. No empty-image tiles reach the UI."""
     sev = (item.get("severity") or "news").lower()
     rel = _relative_time(item.get("published", ""))
     headline = _esc(item.get("headline", ""))
-    snippet = _esc(item.get("snippet", "") or "")[:220]
+    raw_snippet = item.get("snippet", "") or ""
+    snip_limit = 260 if size == "featured" else 140
+    snippet = _esc(_trunc_words(raw_snippet, snip_limit))
     teams = item.get("teams") or []
     athlete = item.get("athlete") or {}
-    c1, c2 = _tile_bg_colors(teams)
-    team_color = c1  # left accent bar
+    league_key = (item.get("sport_key") or "").lower()
+    # Weather and line-move tiles get the mockup's exact palette so they stay
+    # visually distinct from team-colored tiles.
+    if sev == "weather":
+        c1, c2, team_color = ("#001a3a", "#00265f", "#5AB7FF")
+    elif sev == "line":
+        c1, c2, team_color = ("#041E42", "#021022", "#10E0A1")
+    else:
+        c1, c2, team_color = _team_color_pair(teams, league_key)
 
     # Image fallback chain — guaranteed to produce something.
     portrait_html = ""
@@ -315,90 +469,175 @@ def _render_news_tile(item: dict, size: str = "mid") -> str:
             logo = _ESPN_LEAGUE_LOGO.format(slug=slug)
             logos_html = f'<div class="team-logos league"><img src="{logo}" alt="{_esc(item.get("sport_key") or "")}"></div>'
 
-    team_chips = "".join(
-        f'<span class="chip" style="background:{_esc(t.get("color") and "#" + t["color"] or "var(--chip)")}; color:#fff; font-size:10px; padding:2px 7px; font-family:JetBrains Mono,monospace; font-weight:700;">{_esc(t.get("abbr") or "")}</span>'
-        for t in teams[:2]
-    )
-    league_label = (item.get("sport_key") or "").upper()
+    # Build team chip HTML honoring per-team colors + light-text flip. Two chips
+    # with an italic "at"/"vs" joiner, trailing meta line with league + CT time.
+    def _chip_for(t: dict) -> str:
+        abbr = (t.get("abbr") or "").upper()
+        if not abbr:
+            return ""
+        col = _resolve_team_color(abbr, league_key)
+        extra = " light" if abbr in _LIGHT_TEAM_CHIPS else ""
+        return f'<span class="team-chip{extra}" style="--team-color:{col}">{_esc(abbr)}</span>'
+    _chip_a = _chip_for(teams[0]) if len(teams) >= 1 else ""
+    _chip_b = _chip_for(teams[1]) if len(teams) >= 2 else ""
+    _at_or_vs = "at" if len(teams) >= 2 else ""
+    # League label: "LA LIGA" / "NBA" / "NCAAB", never raw enum keys like LA_LIGA.
+    _league_display = (espn.DISPLAY_NAMES.get(league_key) or league_key.upper().replace("_", " ")).strip()
+    # Pull start time + source when available. Item payload may carry a
+    # "game_time_ct" ISO string from the enriched feed; fall back to item.published
+    # which represents the article time (still better than nothing).
+    _start_ct = (item.get("game_time_ct") or "").strip()
+    _source = (item.get("source") or "ESPN").strip()
+    _meta_bits = [f"· {_league_display}" if _league_display else ""]
+    if _start_ct:
+        _meta_bits.append(f"· {_esc(_start_ct)}")
+    _meta_bits.append(f"· {_esc(_source)}")
+    meta_tail = f'<span style="color:#9fb0ce">{" ".join(b for b in _meta_bits if b)}</span>'
+    # team-line used both in featured text-col and mid/wide foot. Composed once
+    # so both placements stay in sync.
+    if _chip_a and _chip_b:
+        team_line_html = f'<div class="team-line">{_chip_a}<span>{_at_or_vs}</span>{_chip_b}{meta_tail}</div>'
+    elif _chip_a:
+        team_line_html = f'<div class="team-line">{_chip_a}{meta_tail}</div>'
+    else:
+        team_line_html = f'<div class="team-line">{meta_tail}</div>'
 
-    link = item.get("url") or ""
-    read_more = f'<a href="{_esc(link)}" target="_blank">Read ESPN ▸</a>' if link else ""
+    # Footer content per spec §6.
+    #  - Featured: source + author + optional EDGE line pulled from board picks.
+    #  - Mid/Wide: team chips + league/time/source (reuses team_line).
+    #  - Line-move tile: no author line, show chips in foot anyway.
+    author = (item.get("author") or "").strip()
+    if size == "featured":
+        edge_line = item.get("edge_foot_html") or ""  # caller may stuff this in
+        source_span = f'<span>▸ {_esc(_source)}{" · " + _esc(author) if author else ""}</span>'
+        foot_html = source_span + (f'<span class="sep">·</span>{edge_line}' if edge_line else "")
+    else:
+        # team-line already carries league + time + source, so just embed it in .foot.
+        foot_html = team_line_html
+
+    # Build body. For featured tiles the team-line lives in .text-col above the
+    # 4-cell matrix; for mid/wide tiles the team-line lives in .foot only.
+    text_col_inner = f'<div class="h3">{headline}</div>'
+    if snippet:
+        text_col_inner += f'<div class="snippet">{snippet}</div>'
+    if size == "featured":
+        text_col_inner += team_line_html
+        if featured_matrix_html:
+            text_col_inner += featured_matrix_html
 
     return (
         f'<div class="news-tile {size}" style="--c1:{c1}; --c2:{c2};">'
-        f'  {portrait_html}{logos_html}'
-        f'  <div class="scrim-left"></div>'
-        f'  <div class="scrim-bottom"></div>'
-        f'  <div class="accent-bar" style="--team-color:{team_color};"></div>'
-        f'  <div class="body">'
-        f'    <div class="head">'
-        f'      <span class="sev {sev}">{_SEV_ICON.get(sev, "◆ News")}</span>'
-        f'      <span class="ts">{_esc(rel) or "—"}</span>'
-        f'    </div>'
-        f'    <div class="text-col">'
-        f'      <h3>{headline}</h3>'
-        f'      {"<p class=snippet>" + snippet + "</p>" if snippet else ""}'
-        f'      <div style="display:flex; gap:7px; align-items:center;">{team_chips}'
-        f'        <span style="color:#9fb0ce; font-family:JetBrains Mono,monospace; font-size:11px;">· {league_label}</span>'
-        f'      </div>'
-        f'    </div>'
-        f'    <div class="foot">{read_more}</div>'
-        f'  </div>'
+        f'{portrait_html}{logos_html}'
+        f'<div class="scrim-left"></div>'
+        f'<div class="scrim-bottom"></div>'
+        f'<div class="accent-bar" style="--team-color:{team_color};"></div>'
+        f'<div class="body">'
+        f'<div class="head">'
+        f'<span class="sev {sev}">{_sev_label_for(sev, size)}</span>'
+        f'<span class="ts">{_esc(rel) or "—"}</span>'
+        f'</div>'
+        f'<div class="text-col">{text_col_inner}</div>'
+        f'<div class="foot">{foot_html}</div>'
+        f'</div>'
         f'</div>'
     )
 
 
 def _render_line_moves_ticker(merged: list, top_picks: list = None) -> str:
-    """Build a horizontally scrolling ticker of real agent signals.
-    Sources, in priority order:
-      1. Top picks' edges (real +EV signal, not a fake LIVE label)
-      2. Fall back to today's matchups when there are no qualifying picks
+    """Spec §9: ticker of REAL line moves pulled from the slate's spreads/totals.
+    Each item is "AWAY–HOME open → current" with dn/up/pm classes based on
+    the move's direction. Falls back to the 8 biggest-edge games tagged 'pm' if
+    nothing on the slate moved yet.
     Returns "" (no ticker) when there's literally nothing to show."""
-    items: list = []
-    picks = top_picks or []
-    # Prefer real agent signal: pick, edge, best price. Up/down arrow by edge sign.
-    for e in picks[:14]:
-        edge_val = float(e.get("edge") or 0)
-        if edge_val == 0:
+    moves: list = []
+    for ev, odds_meta, _exch in (merged or []):
+        om = odds_meta or {}
+        away = (ev.get("away") or {}).get("abbr") or ""
+        home = (ev.get("home") or {}).get("abbr") or ""
+        if not (away and home):
             continue
-        matchup = (e.get("matchup") or "").replace(" at ", "–").replace(" vs ", "–")
-        # Compress long team names to abbr-style (first word of each side).
-        if "–" in matchup:
-            a, b = matchup.split("–", 1)
-            matchup = f"{a.strip().split()[-1][:5]}–{b.strip().split()[-1][:5]}".upper()
+        matchup = f"{away.upper()}–{home.upper()}"
+        # Prefer spreads move (home side), fall back to totals (over side), else moneyline.
+        spr = om.get("spreads") or {}
+        tot = om.get("totals") or {}
+        h2h = om.get("h2h") or {}
+        open_v = cur_v = None
+        tail = ""
+        if spr.get("home_opener") is not None and spr.get("home_price") is not None:
+            # Spread moves are tracked in POINTS (the number hanging off the chip).
+            # Score the move magnitude in points.
+            try:
+                open_v = float(spr.get("home_point_opener") or spr.get("home_opener"))
+                cur_v = float(spr.get("home_point") or spr.get("home_price"))
+                tail = ""
+            except (TypeError, ValueError):
+                open_v = cur_v = None
+        if open_v is None and tot.get("home_opener") is not None and tot.get("home_price") is not None:
+            try:
+                open_v = float(tot.get("home_point_opener") or tot.get("home_opener"))
+                cur_v = float(tot.get("home_point") or tot.get("home_price"))
+                tail = " O/U"
+            except (TypeError, ValueError):
+                open_v = cur_v = None
+        if open_v is None and h2h.get("home_opener") is not None and h2h.get("home_price") is not None:
+            try:
+                open_v = float(h2h.get("home_opener"))
+                cur_v = float(h2h.get("home_price"))
+                tail = ""
+            except (TypeError, ValueError):
+                open_v = cur_v = None
+        if open_v is None or cur_v is None:
+            continue
+        delta = cur_v - open_v
+        cls = "pm" if abs(delta) < 1e-6 else ("up" if delta > 0 else "dn")
+        moves.append({
+            "matchup": matchup + tail,
+            "open": open_v,
+            "cur": cur_v,
+            "delta_abs": abs(delta),
+            "cls": cls,
+        })
+
+    def _fmt(v: float) -> str:
+        return f"{v:g}" if isinstance(v, float) and v == int(v) else f"{v:+g}" if v and v > 0 else f"{v:g}"
+
+    # Keep only real moves, sorted by magnitude desc.
+    moved = sorted([m for m in moves if m["cls"] != "pm"], key=lambda m: -m["delta_abs"])
+    items_src = moved[:18]
+    if not items_src:
+        # Spec fallback: 8 biggest-edge games with pm class.
+        picks = top_picks or []
+        for e in picks[:8]:
+            mp = (e.get("matchup") or "").replace(" at ", "–").replace(" vs ", "–")
+            if "–" in mp:
+                a, b = mp.split("–", 1)
+                mp = f"{a.strip().split()[-1][:4]}–{b.strip().split()[-1][:4]}".upper()
+            else:
+                mp = mp[:10].upper()
+            items_src.append({"matchup": mp, "open": None, "cur": None, "cls": "pm", "delta_abs": 0})
+
+    if not items_src:
+        return ""
+    items_html = []
+    for m in items_src:
+        if m["open"] is not None and m["cur"] is not None:
+            open_s = f"{m['open']:+g}" if m["cls"] in ("up", "dn") and abs(m["open"]) < 15 else f"{m['open']:g}"
+            cur_s = f"{m['cur']:+g}" if m["cls"] in ("up", "dn") and abs(m["cur"]) < 15 else f"{m['cur']:g}"
+            move_str = f"{open_s} → {cur_s}"
         else:
-            matchup = matchup[:12].upper()
-        arrow_cls = "up" if edge_val > 0 else "dn"
-        arrow = "↑" if edge_val > 0 else "↓"
-        items.append(
+            move_str = "on slate"
+        items_html.append(
             f'<span class="item">'
-            f'<span class="matchup">{_esc(matchup)}</span> '
-            f'<span class="{arrow_cls}">{arrow} {edge_val*100:+.1f}%</span>'
+            f'<span class="matchup">{_esc(m["matchup"])}</span> '
+            f'<span class="{m["cls"]}">{_esc(move_str)}</span>'
             f'</span>'
         )
-    # Backfill with today's matchups when the agent returned few/no picks, so
-    # the ticker still carries real information (not empty space).
-    if len(items) < 6:
-        seen = set()
-        for ev, _odds, _exch in (merged or [])[:12]:
-            home = (ev.get("home") or {}).get("abbr") or ""
-            away = (ev.get("away") or {}).get("abbr") or ""
-            if home and away and (away, home) not in seen:
-                seen.add((away, home))
-                items.append(
-                    f'<span class="item"><span class="matchup">{_esc(away)}–{_esc(home)}</span>'
-                    f'<span class="pm">on slate</span></span>'
-                )
-                if len(items) >= 10:
-                    break
-    if not items:
-        return ""
-    # Double the list for the seamless scroll loop.
-    run = "".join(items + items)
+    # Exactly 2 copies for the CSS translateX(-50%) loop.
+    run = "".join(items_html + items_html)
     return (
         '<div class="news-tile ticker">'
-        '  <span class="ticker-label"><span class="bolt">⚡</span> Live Line Moves</span>'
-        f' <div class="ticker-track"><div class="ticker-run">{run}</div></div>'
+        '<span class="ticker-label"><span class="bolt">⚡</span> Live Line Moves</span>'
+        f'<div class="ticker-track"><div class="ticker-run">{run}</div></div>'
         '</div>'
     )
 
@@ -437,6 +676,61 @@ def _news_is_relevant(item: dict, slate_terms: set) -> bool:
     return False
 
 
+def _featured_matrix_for(item: dict, merged: list) -> str:
+    """Spec §7: 4-cell Spread / Total / Away ML / Home ML matrix on the featured
+    tile. Pulls open vs current prices when available; otherwise renders em-dashes
+    so the tile height stays identical to the mockup regardless of data presence."""
+    def _cell(k, v, cls=""):
+        return f'<div class="cell"><div class="k">{_esc(k)}</div><div class="v {cls}">{_esc(v)}</div></div>'
+    # Try to resolve the game this story is about by team abbr intersection.
+    item_abbrs = {(t.get("abbr") or "").upper() for t in (item.get("teams") or [])}
+    item_abbrs.discard("")
+    matched_meta = None
+    away_abbr = home_abbr = "—"
+    if item_abbrs:
+        for ev, odds_meta, _ex in (merged or []):
+            away = (ev.get("away") or {}).get("abbr") or ""
+            home = (ev.get("home") or {}).get("abbr") or ""
+            if away.upper() in item_abbrs or home.upper() in item_abbrs:
+                matched_meta = odds_meta or {}
+                away_abbr = (away or "AWAY").upper()
+                home_abbr = (home or "HOME").upper()
+                break
+    def _move_cell(k, open_v, cur_v, cls_hint=""):
+        if open_v is None and cur_v is None:
+            return _cell(k, "—", cls_hint)
+        if open_v == cur_v or open_v is None:
+            return _cell(k, str(cur_v if cur_v is not None else open_v), cls_hint)
+        return _cell(k, f"{open_v} → {cur_v}", cls_hint)
+    if matched_meta:
+        spr = (matched_meta.get("spreads") or {})
+        tot = (matched_meta.get("totals") or {})
+        h2h = (matched_meta.get("h2h") or {})
+        spread_cell = _move_cell("Spread", spr.get("home_opener"), spr.get("home_price"), "accent")
+        total_cell = _move_cell("Total", tot.get("home_opener"), tot.get("home_price"))
+        # ML: good if PRICE got better for the bettor (more plus / less minus), else bad.
+        def _ml_cls(opener, current):
+            try:
+                if opener is None or current is None:
+                    return ""
+                return "good" if float(current) > float(opener) else ("bad" if float(current) < float(opener) else "")
+            except (TypeError, ValueError):
+                return ""
+        away_cls = _ml_cls(h2h.get("away_opener"), h2h.get("away_price"))
+        home_cls = _ml_cls(h2h.get("home_opener"), h2h.get("home_price"))
+        away_ml = _move_cell(f"{away_abbr} ML", h2h.get("away_opener"), h2h.get("away_price"), away_cls)
+        home_ml = _move_cell(f"{home_abbr} ML", h2h.get("home_opener"), h2h.get("home_price"), home_cls)
+        inner = spread_cell + total_cell + away_ml + home_ml
+    else:
+        inner = (
+            _cell("Spread", "—", "accent")
+            + _cell("Total", "—")
+            + _cell("Away ML", "—")
+            + _cell("Home ML", "—")
+        )
+    return f'<div class="matrix">{inner}</div>'
+
+
 def _render_breaking_news(sports_list: list, merged: list):
     """The Breaking News hero: 1 featured + up to 5 smaller tiles + ticker.
     Filters ESPN news to items relevant to the current slate, falls back
@@ -460,11 +754,14 @@ def _render_breaking_news(sports_list: list, merged: list):
         f'<span class="chip-filter">{(_esc(espn.DISPLAY_NAMES.get(sp, sp.upper()))).split(" ")[0]}</span>'
         for sp in (sports_list or [])[:2]
     )
+    # Count reflects the number of tiles actually rendered below (capped at 6),
+    # not the raw filtered feed, so it reads consistent with what's on screen.
+    tile_cap = min(6, len(news))
     html(
         '<div class="news-head">'
         '<div class="news-title">'
-        '<h2>Breaking · Today\'s Slate</h2>'
-        f'<span class="count-pill"><span class="cdot"></span>{len(news)} live updates</span>'
+        "<div class=\"h1\">Breaking · Today's Slate</div>"
+        f'<span class="count-pill"><span class="cdot"></span>{tile_cap} live updates</span>'
         '</div>'
         '<div class="news-filters">'
         '<span class="chip-filter active">All</span>'
@@ -487,7 +784,8 @@ def _render_breaking_news(sports_list: list, merged: list):
     tiles: list = []
     for i, item in enumerate(ranked[:6]):
         size = "featured" if i == 0 else ("mid" if i in (1, 2) else "wide")
-        tiles.append(_render_news_tile(item, size=size))
+        matrix_html = _featured_matrix_for(item, merged) if size == "featured" else ""
+        tiles.append(_render_news_tile(item, size=size, featured_matrix_html=matrix_html))
     # Ticker pulls the previous render's top_picks from session_state so each
     # rerun shows real agent signals (first page load = matchup fallback until
     # the agent runs, every subsequent load = real edge arrows).
@@ -498,30 +796,27 @@ def _render_breaking_news(sports_list: list, merged: list):
 
 def _render_board_filters_widget(all_available_sports: list, saved_board_sports: list,
                                    saved_board_markets: list, all_markets_opts: list) -> tuple:
-    """Render the Sports + Markets multiselects just above the board.
-    Returns the current (sports, markets) selections for the caller to persist."""
-    html(
-        '<div class="board-filters-head">'
-        '<span class="section-kicker">◆ Filter the board</span>'
-        '</div>'
-    )
-    bf1, bf2 = st.columns(2)
-    with bf1:
+    """Render the Sports + Markets multiselects IN THE SIDEBAR (spec §12).
+    Returns the current (sports, markets) selections for the caller to persist.
+
+    Default-all is intentional for both multiselects so a fresh visit shows the
+    widest slate without hunting for toggles."""
+    with st.sidebar:
+        st.markdown("#### Board filters")
         board_sports = st.multiselect(
             "Sports",
             options=all_available_sports,
-            default=[s for s in saved_board_sports if s in all_available_sports] or all_available_sports[:5],
+            default=[s for s in saved_board_sports if s in all_available_sports] or list(all_available_sports),
             format_func=lambda k: espn.DISPLAY_NAMES.get(k, k.upper()),
             key="board_sports_filter",
-            placeholder="Pick sports…",
+            placeholder="All sports",
             help="Which leagues the agent scans AND which sports feed the news hero. "
                  "Untick any to narrow the board and trim your Odds-API credit burn.",
         )
-    with bf2:
         board_markets = st.multiselect(
             "Markets",
             options=all_markets_opts,
-            default=[m for m in saved_board_markets if m in all_markets_opts] or all_markets_opts,
+            default=[m for m in saved_board_markets if m in all_markets_opts] or list(all_markets_opts),
             format_func=lambda m: {"h2h": "Moneyline", "spreads": "Spread", "totals": "Total"}.get(m, m),
             key="board_markets_filter",
             placeholder="All markets",
@@ -532,7 +827,10 @@ def _render_board_filters_widget(all_available_sports: list, saved_board_sports:
 
 def _render_snapshot_strip(bankroll_display: str, bankroll_source: str, unit_pct: float,
                             slate_count: int, qual_count: int, exposure_usd: float, exposure_pct: float):
+    # Spec §14: adds a "Snapshot" section kicker above the strip. The strip
+    # itself loses its top margin because the kicker carries the spacing.
     html(
+        '<div class="section-title">Snapshot</div>'
         '<div class="snap-strip">'
         f'<div class="cell"><span class="k">Bankroll</span><span class="v accent">{_esc(bankroll_display)}</span></div>'
         f'<div class="cell"><span class="k">Slate</span><span class="v">{slate_count} games</span></div>'
@@ -571,18 +869,16 @@ def render_dashboard(settings: dict):
         s for _g, group_list in espn.SPORT_GROUPS
         for s in group_list
     ))
-    # Default to the "US majors" group if nothing is saved, so first-time
-    # loads don't scan every league and flood the news hero with off-topic items.
-    _us_majors = ["nfl", "nba", "mlb", "nhl", "ncaaf", "ncaab", "wnba"]
-    _default_sports = [s for s in _us_majors if s in all_available_sports] or all_available_sports[:5]
-    saved_board_sports = saved_cfg_board.get("board_sports") or _default_sports
+    # Spec: default filter = ALL sports and ALL markets on a fresh visit so
+    # users see the widest slate before narrowing. Saved selections still win.
+    saved_board_sports = saved_cfg_board.get("board_sports") or list(all_available_sports)
     saved_board_markets = saved_cfg_board.get("board_markets") or ["h2h", "spreads", "totals"]
 
     # Prefer a live widget value (set earlier this session) over the saved one
     # so the news hero sees the CURRENT selection on rerun.
     board_sports = st.session_state.get("board_sports_filter") or [
         s for s in saved_board_sports if s in all_available_sports
-    ] or _default_sports
+    ] or list(all_available_sports)
     all_markets_opts = ["h2h", "spreads", "totals"]
     board_markets = st.session_state.get("board_markets_filter") or [
         m for m in saved_board_markets if m in all_markets_opts
@@ -600,31 +896,33 @@ def render_dashboard(settings: dict):
     bankroll_units = settings.get("bankroll_units") or 100.0
     kalshi_cash = settings.get("kalshi_cash") or 0.0
 
-    # Date picker (Central US). Picks will apply to this date.
+    # Spec §12: date picker + filters moved into the sidebar so nothing competes
+    # with the Breaking News hero + ticker for the top-of-page real estate.
     from datetime import date, timedelta
     from zoneinfo import ZoneInfo
     central_today = datetime.now(ZoneInfo("America/Chicago")).date()
-    dc1, dc2, dc3, dc4, dc5 = st.columns([1, 2, 1, 1, 5])
-    with dc1:
-        if st.button("← Prev"):
-            cur = st.session_state.get("dash_date") or central_today
-            st.session_state["dash_date"] = cur - timedelta(days=1)
-            st.rerun()
-    with dc2:
-        picked_date = st.date_input(
-            "Date", value=st.session_state.get("dash_date") or central_today,
-            min_value=central_today - timedelta(days=180),
-            max_value=central_today + timedelta(days=30),
-            key="dash_date", label_visibility="collapsed",
-        )
-    with dc3:
-        if st.button("Next →"):
-            cur = st.session_state.get("dash_date") or central_today
-            st.session_state["dash_date"] = cur + timedelta(days=1)
-            st.rerun()
-    with dc4:
+    with st.sidebar:
+        st.markdown("#### Board date")
+        dc1, dc2, dc3 = st.columns([1, 2, 1])
+        with dc1:
+            if st.button("←", key="sb_prev_date", use_container_width=True):
+                cur = st.session_state.get("dash_date") or central_today
+                st.session_state["dash_date"] = cur - timedelta(days=1)
+                st.rerun()
+        with dc2:
+            picked_date = st.date_input(
+                "Date", value=st.session_state.get("dash_date") or central_today,
+                min_value=central_today - timedelta(days=180),
+                max_value=central_today + timedelta(days=30),
+                key="dash_date", label_visibility="collapsed",
+            )
+        with dc3:
+            if st.button("→", key="sb_next_date", use_container_width=True):
+                cur = st.session_state.get("dash_date") or central_today
+                st.session_state["dash_date"] = cur + timedelta(days=1)
+                st.rerun()
         if picked_date != central_today:
-            if st.button("Today", key="go_today"):
+            if st.button("Today", key="go_today_sb", use_container_width=True):
                 st.session_state["dash_date"] = central_today
                 st.rerun()
 
@@ -781,41 +1079,14 @@ def render_dashboard(settings: dict):
             '</div></div>'
         )
 
-    # Date-mode banner + live-refresh chip + Odds API credit meter.
-    live_chip = ""
-    if _refresh_running:
-        live_chip = (
-            f' · <span class="chip live" style="padding:1px 7px; font-size:10px;">'
-            f'● LIVE auto-refresh · {_refresh_sec}s</span>'
-        )
-    elif st_autorefresh is None and _refresh_sec > 0 and is_today:
-        live_chip = (
-            ' · <span class="chip warn" style="padding:1px 7px; font-size:10px;">'
-            'auto-refresh unavailable (install streamlit-autorefresh)</span>'
-        )
-    # Credit chip — surfaces budget state next to the slate so the user can
-    # see at a glance whether a long session is safe before the Settings tab
-    # even opens.
-    credit_chip = ""
-    try:
-        _cs = odds_api.get_credit_status()
-        _rem = _cs.get("remaining")
-        if _rem is not None:
-            _pct_used = max(0.0, min(1.0, 1.0 - (int(_rem) / 20_000)))
-            _tone = "good" if _rem > 5000 else ("warn" if _rem > 1500 else "bad")
-            credit_chip = (
-                f' · <span class="chip {_tone}" style="padding:1px 7px; font-size:10px;" '
-                f'title="Odds API credits — 20k monthly budget">'
-                f'credits: {int(_rem):,} ({_pct_used*100:.0f}% used)</span>'
-            )
-    except Exception:
-        pass
-    if is_today:
-        html(f'<div class="hint" style="margin-bottom:6px;"><strong>{date_str_pretty}</strong> (today, Central US) — live odds & agent active{live_chip}{credit_chip}</div>')
-    elif picked_date < central_today:
-        html(f'<div class="hint warn" style="margin-bottom:6px;"><strong>{date_str_pretty}</strong> — past date. Showing ESPN finals only; the agent needs the Backtest tab for historical plays.</div>')
-    else:
-        html(f'<div class="hint" style="margin-bottom:6px;"><strong>{date_str_pretty}</strong> — upcoming. Live odds appear closer to game time.</div>')
+    # Spec §12: date banner + live-refresh chip + credit meter moved to sidebar
+    # so the ticker leads directly into the board header. A past / upcoming
+    # notice still appears inline because that's genuinely action-relevant.
+    if not is_today:
+        if picked_date < central_today:
+            html(f'<div class="hint warn" style="margin-bottom:6px;"><strong>{date_str_pretty}</strong> — past date. Showing ESPN finals only.</div>')
+        else:
+            html(f'<div class="hint" style="margin-bottom:6px;"><strong>{date_str_pretty}</strong> — upcoming. Live odds appear closer to game time.</div>')
 
     # Agent recommendations panel.
     # BUG FIX: previously we passed a flat dict across all sports to the scanner,
@@ -1038,15 +1309,19 @@ def _render_agent_panel(odds_games, kalshi_cash, settings,
     # the Court Side mockup. The <select> is decorative for now — the agent
     # sorts internally by Pinnacle fair prob with positive-edge picks on top.
     _total_games = sum(len(v) for v in (pinnacle_games_by_sport or {}).values())
+    # Spec §13: count pill = "{total} games · <b>{qualifying}</b> qualifying picks · {watch} watch".
+    # The scan runs below; we re-render the header with the real numbers once we
+    # know them. For the first render we use a placeholder so the layout height
+    # stays identical when the header gets replaced.
     html(
         '<div class="board-hero-head">'
         '<div class="board-title">'
-        '<h2>The Board · Full Slate</h2>'
+        '<div class="h1">The Board · Full Slate</div>'
         f'<span class="board-count">{_total_games} games · '
-        'ranked by Pinnacle fair prob</span>'
+        '<b>…</b> qualifying picks · watch</span>'
         '</div>'
         '<select class="sort-select" disabled title="Agent sorts by positive-edge then Pinnacle fair prob">'
-        '<option>Rank by: Edge % descending (default)</option>'
+        '<option>Rank by: Edge % descending (recommended)</option>'
         '<option>Rank by: Stake descending</option>'
         '<option>Rank by: Tier then edge</option>'
         '<option>Rank by: Kickoff time</option>'
@@ -1356,20 +1631,42 @@ def _render_agent_panel(odds_games, kalshi_cash, settings,
             return '<span class="method-tag model">Model Edge</span>'
         return '<span class="method-tag watch">Market</span>'
 
+    def _abbr(name: str) -> str:
+        """Compress a team name into a 3-4 letter abbr: uses last capitalized
+        word, truncated. Good enough for display — downstream _resolve_team_color
+        will fall back to the league color on misses."""
+        if not name:
+            return ""
+        parts = [p for p in name.strip().split() if p]
+        if not parts:
+            return ""
+        last = parts[-1]
+        return last[:4].upper() if len(last) <= 4 else last[:3].upper()
+
     def _matchup_chips(e: dict) -> str:
-        """Split "Away at Home" or "Away vs Home" into two team chips.
-        Falls back to a single chip with the whole matchup string if the
-        split doesn't land (international soccer, odd punctuation, etc.)."""
+        """Spec §13: two team chips carrying team colors, with an italic Fraunces
+        'at'/'vs' between. Falls back to a single chip with the raw matchup for
+        edges that don't parse cleanly (international soccer, odd punctuation)."""
+        sport_key = (e.get("_sport") or "").lower()
+        # Prefer explicit away/home abbrs the scanner carries; fall back to
+        # splitting the matchup string.
+        away_abbr = (e.get("away_abbr") or "").upper()
+        home_abbr = (e.get("home_abbr") or "").upper()
         m = e.get("matchup", "") or ""
         joiner = " at " if " at " in m else (" vs " if " vs " in m else None)
-        if joiner:
+        if joiner and not (away_abbr and home_abbr):
             away, home = m.split(joiner, 1)
-            away_chip = _esc_row(away.strip()[:14])
-            home_chip = _esc_row(home.strip()[:14])
+            away_abbr = away_abbr or _abbr(away.strip())
+            home_abbr = home_abbr or _abbr(home.strip())
+        if away_abbr and home_abbr:
+            def _chip(abbr: str) -> str:
+                col = _resolve_team_color(abbr, sport_key)
+                extra = " light" if abbr in _LIGHT_TEAM_CHIPS else ""
+                return f'<span class="team-chip{extra}" style="--team-color:{col}">{_esc_row(abbr)}</span>'
             return (
-                f'<span class="team-chip">{away_chip}</span>'
-                f'<span class="at">{joiner.strip()}</span>'
-                f'<span class="team-chip">{home_chip}</span>'
+                f'{_chip(away_abbr)}'
+                f'<span class="at">{joiner.strip() if joiner else "at"}</span>'
+                f'{_chip(home_abbr)}'
             )
         return f'<span class="team-chip">{_esc_row(m[:28])}</span>'
 
@@ -1460,7 +1757,10 @@ def _render_agent_panel(odds_games, kalshi_cash, settings,
             '</tr>'
         )
 
-    _book_col_label = "Kalshi Book" if board_book_mode == "kalshi" else "Best Book"
+    # Spec §13: header reads "Best Book" regardless of mode. The agent already
+    # picks the best price across Kalshi + offshore shop books, and the cell
+    # labels the source inline — the header stays stable.
+    _book_col_label = "Best Book"
     header = (
         '<thead><tr>'
         '<th>#</th>'

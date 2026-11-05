@@ -8,6 +8,10 @@ up like a trading screen.
 
 CUSTOM_CSS = r"""
 <style>
+/* Font import MUST be the first rule in the stylesheet - CSS silently ignores
+   @import that follows any other rule. Includes Inter (body), Fraunces (serifs),
+   JetBrains Mono 400/500/600/700 (team chips need 700), Material Symbols. */
+@import url('https://fonts.googleapis.com/css2?family=Fraunces:ital,wght@0,400;0,500;1,400&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&family=Material+Symbols+Rounded:opsz,wght,FILL,GRAD@24,400,0,0&display=swap');
 :root {
   /* Court Side v2.1 — deep navy canvas, electric emerald accent, magenta for live.
      Reads as a premium sports analytics product; distinct from the red/green
@@ -36,35 +40,16 @@ CUSTOM_CSS = r"""
   --card-shadow: 0 1px 2px rgba(0,0,0,.4), 0 18px 40px rgba(6,16,32,.45);
 }
 
-@media (prefers-color-scheme: light) {
-  :root:not([data-theme="dark"]) {
-    --bg: #F8FAFC;
-    --surface: #FFFFFF;
-    --card: #FFFFFF;
-    --card-elev: #F1F5F9;
-    --rule: #E2E8F0;
-    --rule-strong: #CBD5E1;
-    --ink: #0F172A;
-    --ink-dim: #334155;
-    --muted: #64748B;
-    --muted-dim: #94A3B8;
-    --accent: #0A8F6A;
-    --accent-ink: #FFFFFF;
-    --good: #0A8F6A;
-    --warn: #B45309;
-    --bad: #B91C1C;
-    --info: #0369A1;
-    --live: #BE123C;
-    --chip: #F1F5F9;
-    --card-shadow: 0 1px 2px rgba(0,0,0,.04), 0 2px 10px rgba(15,23,42,.06);
-  }
-}
+/* Court Side is dark-only. Light-mode prefers-color-scheme override was swapping
+   the emerald accent for a dull teal and the deep navy for off-white on anyone
+   with a light OS theme; removed per the spec. */
 
 /* ===== Streamlit chrome overrides ===== */
 .stApp { background: var(--bg); }
-section.main > div.block-container { padding-top: 1.2rem; padding-bottom: 3rem; max-width: 1320px; }
-.stApp, .stMarkdown, .stText, .stCaption, p, div, label, li {
-  font-family: "Public Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+section.main > div.block-container { padding-top: 22px; padding-bottom: 60px; padding-left: 28px; padding-right: 28px; max-width: 1360px; }
+body, .stApp, [data-testid="stAppViewContainer"],
+.stMarkdown, .stText, .stCaption, p, div, label, li {
+  font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   color: var(--ink);
 }
 /* Hand Streamlit's icon spans back to the Material Symbols font.
@@ -121,7 +106,7 @@ h3 { font-size: 17px; }
   color: var(--muted); font-weight: 500;
   border-radius: 8px;
   border: 1px solid transparent;
-  font-family: "Public Sans", -apple-system, sans-serif;
+  font-family: "Inter", -apple-system, sans-serif;
   font-size: 13.5px; letter-spacing: 0.005em;
   transition: color 160ms ease, background 160ms ease;
 }
@@ -133,14 +118,14 @@ h3 { font-size: 17px; }
   box-shadow: inset 0 -2px 0 var(--accent);
 }
 
-/* ===== brand header ===== */
+/* ===== brand header (spec §10 — Court Side) ===== */
 .brand-bar {
-  display: flex; align-items: baseline; justify-content: space-between;
-  gap: 16px; margin: 0 0 18px;
-  padding-bottom: 14px; border-bottom: 1px solid var(--rule);
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 16px; margin: 0 0 22px;
+  padding-bottom: 16px; border-bottom: 1px solid var(--rule);
 }
 .brand {
-  display: flex; align-items: baseline; gap: 12px;
+  display: flex; align-items: center; gap: 12px;
 }
 .brand .dot {
   width: 10px; height: 10px; border-radius: 50%;
@@ -161,9 +146,20 @@ h3 { font-size: 17px; }
   background: var(--chip);
 }
 .brand-right {
+  display: flex; align-items: center; gap: 14px;
   font-family: "JetBrains Mono", monospace;
-  font-size: 11px; letter-spacing: 0.1em;
+  font-size: 11px; letter-spacing: 0.12em;
   color: var(--muted); text-transform: uppercase;
+}
+.brand-right > span { display: inline-flex; align-items: center; gap: 7px; }
+.pulse-dot {
+  display: inline-block; width: 7px; height: 7px; border-radius: 50%;
+  background: var(--live); box-shadow: 0 0 10px var(--live);
+  animation: pulse 1.4s ease-in-out infinite;
+}
+@keyframes pulse {
+  0%, 100% { transform: scale(1); opacity: 1; }
+  50% { transform: scale(0.85); opacity: 0.6; }
 }
 
 /* ===== metric row ===== */
@@ -312,7 +308,7 @@ table.ledger tbody tr:last-child td { border-bottom: none; }
 .stButton>button, .stDownloadButton>button {
   background: var(--card-elev); color: var(--ink);
   border: 1px solid var(--rule); border-radius: 8px;
-  font-family: "Public Sans", sans-serif; font-weight: 500;
+  font-family: "Inter", sans-serif; font-weight: 500;
   padding: 8px 14px;
   transition: background 160ms ease, border-color 160ms ease, color 160ms ease;
 }
@@ -404,7 +400,7 @@ button[aria-label="Expand sidebar"] svg {
 [data-testid="stSidebarCollapsedControl"]::after,
 button[aria-label="Expand sidebar"]::after {
   content: "Open Settings/Tools" !important;
-  font-family: "Public Sans", -apple-system, sans-serif !important;
+  font-family: "Inter", -apple-system, sans-serif !important;
   font-size: 13px !important;
   font-weight: 600 !important;
   letter-spacing: 0.02em !important;
@@ -439,12 +435,12 @@ button[kind="headerDeploy"] { display: none !important; }
    ============================================================= */
 .news-head{
   display:flex; justify-content:space-between; align-items:center;
-  margin: 2px 0 12px; gap:12px; flex-wrap:wrap;
+  margin: 4px 0 14px; gap:12px; flex-wrap:wrap;
 }
 .news-head .news-title{display:flex; align-items:center; gap:12px}
-.news-head .news-title h2{
-  font-family:"Fraunces", serif; font-weight:500; font-size:24px;
-  margin:0; letter-spacing:-0.015em;
+.news-head .news-title .h1{
+  font-family:"Fraunces", serif; font-weight:500; font-size:26px;
+  margin:0; padding:0; letter-spacing:-0.015em; color:var(--ink);
 }
 .news-head .news-title .count-pill{
   font-family:"JetBrains Mono", monospace; font-size:10.5px;
@@ -475,12 +471,12 @@ button[kind="headerDeploy"] { display: none !important; }
 /* Board header (The Board · Full Slate) */
 .board-hero-head{
   display:flex; justify-content:space-between; align-items:center;
-  margin: 24px 0 14px; gap:12px; flex-wrap:wrap;
+  margin: 32px 0 14px; gap:12px; flex-wrap:wrap;
 }
 .board-hero-head .board-title{display:flex; align-items:center; gap:12px}
-.board-hero-head .board-title h2{
-  font-family:"Fraunces", serif; font-weight:500; font-size:24px;
-  margin:0; letter-spacing:-0.015em;
+.board-hero-head .board-title .h1{
+  font-family:"Fraunces", serif; font-weight:500; font-size:26px;
+  margin:0; padding:0; letter-spacing:-0.015em; color:var(--ink);
 }
 .board-hero-head .board-title .board-count{
   font-family:"JetBrains Mono", monospace; font-size:10.5px;
@@ -510,7 +506,7 @@ button[kind="headerDeploy"] { display: none !important; }
   border-radius:14px; border:1px solid var(--rule);
   box-shadow: var(--card-shadow);
   transition: border-color 200ms, transform 200ms;
-  min-height:180px;
+  min-height:150px;
   isolation:isolate;
   background: linear-gradient(135deg, var(--c1, #131F35) 0%, var(--c2, #0a1220) 100%);
 }
@@ -523,13 +519,13 @@ button[kind="headerDeploy"] { display: none !important; }
   -webkit-mask-image: linear-gradient(90deg, transparent 0%, rgba(0,0,0,.4) 8%, #000 18%, #000 100%);
           mask-image: linear-gradient(90deg, transparent 0%, rgba(0,0,0,.4) 8%, #000 18%, #000 100%);
 }
-.news-tile.featured{grid-column: span 3; grid-row: span 2; min-height:380px}
+.news-tile.featured{grid-column: span 3; grid-row: span 2; min-height:420px}
 .news-tile.featured .portrait{
   width:80%; max-width:900px;
   background-position: top right; background-size: contain;
 }
-.news-tile.mid{grid-column: span 2; min-height:220px}
-.news-tile.wide{grid-column: span 2; min-height:220px}
+.news-tile.mid{grid-column: span 2; min-height:230px}
+.news-tile.wide{grid-column: span 2; min-height:230px}
 .news-tile .scrim-left{
   position:absolute; inset:0; z-index:0;
   background: linear-gradient(90deg,
@@ -574,6 +570,45 @@ button[kind="headerDeploy"] { display: none !important; }
 }
 .news-tile.featured .body{padding:20px 22px}
 .news-tile .head{display:flex; justify-content:space-between; align-items:flex-start; gap:10px;}
+/* Global team-chip + team-line (spec §5). Previously only scoped to the board
+   table's matchup-cell; promoted so news tiles can use them too. */
+.team-chip{
+  display:inline-block; padding:2px 7px; border-radius:4px;
+  font-family:"JetBrains Mono", monospace; font-size:10px; font-weight:700;
+  color:#fff; background: var(--team-color, #334);
+  letter-spacing:0.04em; box-shadow: 0 2px 6px rgba(0,0,0,.4);
+}
+.team-chip.light{color:#002D62}
+.team-line{
+  display:flex; align-items:center; gap:8px;
+  color:#dbe3f1; font-size:12.5px;
+}
+
+/* Featured tile 4-cell line-movement matrix (spec §7). */
+.news-tile.featured .matrix{
+  display:grid; grid-template-columns:repeat(4,1fr); gap:8px;
+  margin-top:auto; padding-top:14px;
+  border-top:1px solid rgba(255,255,255,.1);
+  max-width:100%;
+}
+.news-tile.featured .matrix .cell{
+  background: rgba(10,18,32,.6);
+  border:1px solid rgba(255,255,255,.08);
+  border-radius:8px; padding:8px 10px;
+  backdrop-filter: blur(10px);
+}
+.news-tile.featured .matrix .k{
+  font-family:"JetBrains Mono", monospace; font-size:9px;
+  letter-spacing:0.16em; text-transform:uppercase; color:#8fa0c2;
+}
+.news-tile.featured .matrix .v{
+  font-family:"JetBrains Mono", monospace; font-size:13.5px; color:#fff;
+  font-variant-numeric: tabular-nums; margin-top:2px; letter-spacing:-0.01em;
+}
+.news-tile.featured .matrix .v.good{color:#67f0c7}
+.news-tile.featured .matrix .v.bad{color:#ff8aad}
+.news-tile.featured .matrix .v.accent{color:var(--accent)}
+
 .news-tile .sev{
   display:inline-flex; align-items:center; gap:7px;
   padding:4px 10px; border-radius:999px;
@@ -592,24 +627,52 @@ button[kind="headerDeploy"] { display: none !important; }
   background: rgba(10,18,32,.55); padding:2px 8px; border-radius:4px;
   backdrop-filter: blur(8px);
 }
-.news-tile .text-col{max-width:52%; display:flex; flex-direction:column; gap:10px; flex:1;}
+.news-tile .text-col{max-width:52%; display:flex; flex-direction:column; gap:10px; flex:1; min-height:0;}
 .news-tile.featured .text-col{max-width:50%}
-.news-tile h3{
+.news-tile.mid .text-col, .news-tile.wide .text-col{max-width:54%}
+.news-tile .body{min-height:0}
+/* Spec §2: .news-tile uses div.h3 (not <h3>) because Streamlit's markdown
+   renderer wraps real <h3> tags in stHeadingWithActionElements and adds anchor
+   icons + extra padding. The headline shows as a styled div instead. */
+.news-tile .h3{
   font-family:"Fraunces", serif; font-weight:500;
   letter-spacing:-0.01em; color:#fff;
-  margin:0; line-height:1.18;
+  margin:0; padding:0; line-height:1.18;
   text-shadow: 0 2px 12px rgba(0,0,0,.6);
 }
-.news-tile.featured h3{font-size:28px; line-height:1.1}
-.news-tile.mid h3, .news-tile.wide h3{font-size:16.5px}
-.news-tile .snippet{color:#dbe3f1; font-size:13px; line-height:1.5; text-shadow: 0 1px 6px rgba(0,0,0,.5);}
+.news-tile.featured .h3{
+  font-size:30px; line-height:1.1;
+  display:-webkit-box; -webkit-line-clamp:3; -webkit-box-orient:vertical; overflow:hidden;
+}
+.news-tile.mid .h3, .news-tile.wide .h3{
+  font-size:16px;
+  display:-webkit-box; -webkit-line-clamp:3; -webkit-box-orient:vertical; overflow:hidden;
+}
+.news-tile.wide .h3{font-size:17px}
+.news-tile .snippet{
+  color:#dbe3f1; font-size:13.5px; line-height:1.5;
+  text-shadow: 0 1px 6px rgba(0,0,0,.5);
+  margin:0; padding:0;
+}
+.news-tile.featured .snippet{
+  display:-webkit-box; -webkit-line-clamp:4; -webkit-box-orient:vertical; overflow:hidden;
+}
+.news-tile.mid .snippet, .news-tile.wide .snippet{
+  display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden;
+}
 .news-tile .foot{
-  margin-top:auto; display:flex; gap:12px; flex-wrap:wrap;
+  margin-top:auto; display:flex; gap:12px; flex-wrap:wrap; align-items:center;
   padding-top:8px; border-top:1px solid rgba(255,255,255,.08);
   font-family:"JetBrains Mono", monospace; font-size:10.5px;
   color:#aab7d2; letter-spacing:0.06em;
 }
+.news-tile .foot .sep{color:var(--muted-dim)}
 .news-tile .foot a{color: var(--accent); text-decoration:none;}
+/* Suppress any stray Streamlit heading-anchor icons inside the bento / board
+   headers in case something downstream re-renders a real <h2>/<h3>. */
+.news-tile [data-testid="stHeaderActionElements"],
+.news-head [data-testid="stHeaderActionElements"],
+.board-hero-head [data-testid="stHeaderActionElements"] { display:none !important; }
 
 /* Line Moves ticker */
 .news-tile.ticker{
@@ -679,10 +742,15 @@ button[kind="headerDeploy"] { display: none !important; }
   font-size:13px; text-align:center; margin-bottom:14px;
 }
 
-/* bottom snapshot strip (demoted bankroll/slate/picks/exposure) */
+/* bottom snapshot strip (spec §14: sits under a "Snapshot" kicker). */
+.section-title{
+  font-family:"JetBrains Mono", monospace; font-size:11px;
+  letter-spacing:0.18em; text-transform:uppercase; color: var(--muted);
+  margin: 30px 0 10px;
+}
 .snap-strip{
   display:grid; grid-template-columns: repeat(4, 1fr); gap:10px;
-  margin: 20px 0 10px;
+  margin: 0 0 10px;
 }
 .snap-strip .cell{
   background: var(--card); border:1px solid var(--rule);
@@ -759,7 +827,7 @@ table.board-table tbody tr.row-divider td{
 }
 table.board-table .rank-cell{
   font-family:"JetBrains Mono", monospace; color: var(--muted-dim);
-  font-size:11px; width:40px;
+  font-size:11px; width:36px;
 }
 table.board-table .tier-cell{width:52px;}
 .tier-badge{
@@ -785,7 +853,7 @@ table.board-table .tier-cell{width:52px;}
 .matchup-cell .chip-row .at{color: var(--muted); font-family:"Fraunces", serif; font-style:italic; font-size:11px;}
 .matchup-cell .time{
   font-family:"JetBrains Mono", monospace; font-size:10.5px;
-  color: var(--muted); letter-spacing:0.05em; display:block; margin-top:4px;
+  color: var(--muted); letter-spacing:0.05em; display:block; margin-top:3px;
 }
 .side-cell{display:flex; flex-direction:column; gap:2px;}
 .side-cell .mkt{font-family:"JetBrains Mono", monospace; font-size:9.5px; letter-spacing:0.14em; text-transform:uppercase; color: var(--muted);}
@@ -802,7 +870,7 @@ td.num-cell.muted{color: var(--muted);}
 .stake-cell .d{font-family:"JetBrains Mono", monospace; font-size:10.5px; color: var(--muted); font-variant-numeric: tabular-nums;}
 .stake-cell .u.watch{color: var(--muted);}
 .method-tag{
-  display:inline-block; padding:3px 9px; border-radius:4px;
+  display:inline-block; padding:2px 8px; border-radius:4px;
   font-family:"JetBrains Mono", monospace; font-size:9.5px;
   letter-spacing:0.1em; text-transform:uppercase; font-weight:600;
 }
@@ -881,8 +949,7 @@ td.num-cell.muted{color: var(--muted);}
   .news-tile .text-col, .news-tile.featured .text-col{max-width: 100%;}
 }
 
-/* fonts (incl. Material Symbols so Streamlit's icon ligatures resolve to glyphs) */
-@import url('https://fonts.googleapis.com/css2?family=Fraunces:ital,wght@0,400;0,500;1,400&family=Public+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&family=Material+Symbols+Rounded:opsz,wght,FILL,GRAD@24,400,0,0&display=swap');
+/* (Font @import lives at the top of this stylesheet - see note there.) */
 </style>
 """
 
@@ -934,9 +1001,24 @@ LIGHT_THEME_CSS = r"""
 """
 
 
+FONT_LINK = (
+    '<link rel="preconnect" href="https://fonts.googleapis.com">'
+    '<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>'
+    '<link href="https://fonts.googleapis.com/css2?'
+    'family=Fraunces:ital,wght@0,400;0,500;1,400&'
+    'family=Inter:wght@400;500;600;700&'
+    'family=JetBrains+Mono:wght@400;500;600;700&'
+    'family=Material+Symbols+Rounded:opsz,wght,FILL,GRAD@24,400,0,0&'
+    'display=swap" rel="stylesheet">'
+)
+
+
 def inject(theme: str = "dark"):
     import streamlit as st
+    # Emit the Google Fonts <link> BEFORE the stylesheet so the browser starts
+    # font fetches early and the @import in CUSTOM_CSS has a warm connection.
+    st.markdown(FONT_LINK, unsafe_allow_html=True)
     st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
-    if (theme or "dark").lower() == "light":
-        st.markdown(LIGHT_THEME_CSS, unsafe_allow_html=True)
+    # Light theme override is intentionally no longer applied — Court Side is
+    # dark-only; keeping LIGHT_THEME_CSS as reference in case the user re-enables.
     st.markdown(RESPONSIVE_CSS, unsafe_allow_html=True)
