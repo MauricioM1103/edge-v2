@@ -926,6 +926,12 @@ def _render_line_moves_ticker(merged: list, top_picks: list = None) -> str:
             else:
                 mp = mp[:10].upper()
             items_src.append({"matchup": mp, "open": None, "cur": None, "cls": "pm", "delta_abs": 0})
+    if not items_src:
+        # Cold load: no moves yet and no picks from a previous scan. Show the
+        # current spread/total of up to 8 slate games as unchanged (pm) items
+        # so the strip still carries real numbers instead of disappearing.
+        for m in moves[:8]:
+            items_src.append({**m, "open": m["cur"], "cls": "pm"})
 
     if not items_src:
         return ""
@@ -1974,7 +1980,8 @@ def _render_agent_panel(odds_games, kalshi_cash, settings,
         away_abbr = (e.get("away_abbr") or "").upper()
         home_abbr = (e.get("home_abbr") or "").upper()
         m = e.get("matchup", "") or ""
-        joiner = " at " if " at " in m else (" vs " if " vs " in m else None)
+        # The scanner writes "Away @ Home"; ESPN-derived strings use "at"/"vs".
+        joiner = next((j for j in (" @ ", " at ", " vs ") if j in m), None)
         if joiner and not (away_abbr and home_abbr):
             away, home = m.split(joiner, 1)
             away_abbr = away_abbr or _abbr(away.strip())
@@ -1986,7 +1993,7 @@ def _render_agent_panel(odds_games, kalshi_cash, settings,
                 return f'<span class="team-chip{extra}" style="--team-color:{col}">{_esc_row(abbr)}</span>'
             return (
                 f'{_chip(away_abbr)}'
-                f'<span class="at">{joiner.strip() if joiner else "at"}</span>'
+                f'<span class="at">{"vs" if joiner == " vs " else "at"}</span>'
                 f'{_chip(home_abbr)}'
             )
         return f'<span class="team-chip">{_esc_row(m[:28])}</span>'
@@ -2046,7 +2053,13 @@ def _render_agent_panel(odds_games, kalshi_cash, settings,
         edge_val = float(e.get("edge") or 0)
         edge_pct = edge_val * 100.0
         fair_pct = float(e.get("fair_prob") or 0) * 100.0
-        side_label = _esc_row(e.get("side_label", ""))
+        # Spec §13: picks read "PIT -1.5" / "BOS ML", not full team names.
+        raw_side = e.get("side_label", "") or ""
+        for full, ab in ((e.get("home_team"), e.get("home_abbr")), (e.get("away_team"), e.get("away_abbr"))):
+            if full and ab and raw_side.startswith(full):
+                raw_side = ab + raw_side[len(full):]
+                break
+        side_label = _esc_row(raw_side)
         book_cell_html, price_disp = _book_cell_for(e)
         stake_u = _to_units(e.get("stake_dollars") or 0)
         stake_d = float(e.get("stake_dollars") or 0)

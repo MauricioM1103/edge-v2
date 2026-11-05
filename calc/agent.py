@@ -662,6 +662,8 @@ def scan_kalshi_vs_pinnacle(
                 # column alive for sports we don't pull ESPN scores for).
                 "start_utc": espn_ev.get("start_utc"),
                 "commence_time": pin_game.get("commence_time"),
+                "home_abbr": ((espn_ev.get("home") or {}).get("abbr") or "").upper(),
+                "away_abbr": ((espn_ev.get("away") or {}).get("abbr") or "").upper(),
                 "status_state": espn_ev.get("status_state"),  # pre | in | post
                 "status_detail": espn_ev.get("status_detail"),
                 "home_score": home_score,
@@ -888,6 +890,8 @@ def scan_offshore_markets_vs_pinnacle(
                     # ESPN state, with Odds-API commence_time as a fallback.
                     "start_utc": espn_ev.get("start_utc"),
                     "commence_time": g.get("commence_time"),
+                    "home_abbr": ((espn_ev.get("home") or {}).get("abbr") or "").upper(),
+                    "away_abbr": ((espn_ev.get("away") or {}).get("abbr") or "").upper(),
                     "status_state": espn_ev.get("status_state"),
                     "status_detail": espn_ev.get("status_detail"),
                     "home_score": hs_i,
