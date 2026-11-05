@@ -434,13 +434,24 @@ button[kind="headerDeploy"] { display: none !important; }
    Breaking News hero (bento grid with player portraits + ticker)
    ============================================================= */
 .news-head{
-  display:flex; justify-content:space-between; align-items:center;
-  margin: 4px 0 14px; gap:12px; flex-wrap:wrap;
+  display:flex; justify-content:space-between; align-items:flex-end;
+  margin: 8px 0 20px; gap:12px; flex-wrap:wrap;
+  position:relative; padding-bottom:12px;
 }
-.news-head .news-title{display:flex; align-items:center; gap:12px}
+/* 1px gradient underline fading accent → transparent, pinned to the baseline
+   of the headline so the title visually "lifts" off the page. */
+.news-head::after{
+  content:""; position:absolute; left:0; right:0; bottom:0; height:1px;
+  background: linear-gradient(90deg,
+    color-mix(in oklab, var(--accent) 65%, transparent) 0%,
+    color-mix(in oklab, var(--accent) 25%, transparent) 40%,
+    transparent 100%);
+}
+.news-head .news-title{display:flex; align-items:center; gap:14px}
 .news-head .news-title .h1{
-  font-family:"Fraunces", serif; font-weight:500; font-size:26px;
-  margin:0; padding:0; letter-spacing:-0.015em; color:var(--ink);
+  font-family:"Fraunces", serif; font-weight:500; font-size:34px;
+  margin:0; padding:0; letter-spacing:-0.02em; color:var(--ink);
+  line-height:1.05;
 }
 .news-head .news-title .count-pill{
   font-family:"JetBrains Mono", monospace; font-size:10.5px;
@@ -825,6 +836,29 @@ table.board-table tbody tr.row-divider td{
   letter-spacing:0.16em; text-transform:uppercase; color: var(--muted);
   border-bottom:1px solid var(--rule-strong);
 }
+/* Spec §6: two-way divider — accent-teal above actionable, muted-grey above full-slate.
+   The top border is thicker (2px) to create a visually strong split between the groups. */
+table.board-table tbody tr.row-divider.divider-good td{
+  color: var(--accent);
+  border-top:2px solid color-mix(in oklab, var(--accent) 55%, transparent);
+  background: color-mix(in oklab, var(--accent) 7%, var(--surface));
+}
+table.board-table tbody tr.row-divider.divider-neutral td{
+  color: var(--muted-dim);
+  border-top:2px solid var(--rule-strong);
+  background: var(--surface);
+}
+/* Auto-log confirmation caption (where the one-click expander used to live) */
+.auto-log-caption{
+  font-family:"JetBrains Mono", monospace; font-size:11px;
+  letter-spacing:0.12em; text-transform:uppercase; color: var(--accent);
+  margin: 10px 0 2px; padding: 6px 12px;
+  display:inline-flex; align-items:center; gap:7px;
+  background: color-mix(in oklab, var(--accent) 8%, transparent);
+  border:1px solid color-mix(in oklab, var(--accent) 30%, transparent);
+  border-radius:6px;
+}
+.auto-log-caption .check{color: var(--good);}
 table.board-table .rank-cell{
   font-family:"JetBrains Mono", monospace; color: var(--muted-dim);
   font-size:11px; width:36px;
@@ -973,34 +1007,6 @@ RESPONSIVE_CSS = r"""
 </style>
 """
 
-LIGHT_THEME_CSS = r"""
-<style>
-:root { color-scheme: light; }
-:root {
-  --bg: #F8FAFC;
-  --surface: #FFFFFF;
-  --card: #FFFFFF;
-  --card-elev: #F1F5F9;
-  --rule: #E2E8F0;
-  --rule-strong: #CBD5E1;
-  --ink: #0F172A;
-  --ink-dim: #334155;
-  --muted: #64748B;
-  --muted-dim: #94A3B8;
-  --accent: #0A8F6A;
-  --accent-ink: #FFFFFF;
-  --good: #0A8F6A;
-  --warn: #B45309;
-  --bad: #B91C1C;
-  --info: #0369A1;
-  --live: #BE123C;
-  --chip: #F1F5F9;
-  --card-shadow: 0 1px 2px rgba(0,0,0,.04), 0 2px 10px rgba(15,23,42,.06);
-}
-</style>
-"""
-
-
 FONT_LINK = (
     '<link rel="preconnect" href="https://fonts.googleapis.com">'
     '<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>'
@@ -1019,6 +1025,4 @@ def inject(theme: str = "dark"):
     # font fetches early and the @import in CUSTOM_CSS has a warm connection.
     st.markdown(FONT_LINK, unsafe_allow_html=True)
     st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
-    # Light theme override is intentionally no longer applied — Court Side is
-    # dark-only; keeping LIGHT_THEME_CSS as reference in case the user re-enables.
     st.markdown(RESPONSIVE_CSS, unsafe_allow_html=True)

@@ -420,10 +420,222 @@ def _trunc_words(s: str, limit: int) -> str:
     return (cut or s[:limit]).rstrip(",.;:") + "…"
 
 
-def _render_news_tile(item: dict, size: str = "mid", featured_matrix_html: str = "") -> str:
+# ----------------------------------------------------------------------------
+# Spec §1-4a: tile validation helpers. Every tile that reaches the UI must
+# pass this validator or get dropped and replaced from the ranked queue.
+# ----------------------------------------------------------------------------
+
+def _resolve_tile_image(item: dict) -> tuple:
+    """Return ('portrait'|'duo'|'solo'|'league', data_dict) or (None, None)
+    when nothing on the item can supply a renderable image.
+
+    The fallback chain mirrors the mockup: athlete headshot (best), two-team
+    logo composite (next), one-team logo, league logo (last resort). Each
+    rung requires a non-empty URL — we don't HEAD-check (too slow), we trust
+    ESPN's CDN. Image onerror handlers on the rendered <img> swap in the
+    ESPN league fallback so a cold CDN miss still paints something."""
+    athlete = item.get("athlete") or {}
+    headshot = (athlete.get("headshot") or "").strip()
+    if headshot:
+        return ("portrait", {"src": headshot})
+    teams = item.get("teams") or []
+    if len(teams) >= 2:
+        l1 = (teams[0].get("logo") or "").strip()
+        l2 = (teams[1].get("logo") or "").strip()
+        if l1 and l2:
+            return ("duo", {
+                "l1": l1, "l2": l2,
+                "a1": (teams[0].get("abbr") or "").upper(),
+                "a2": (teams[1].get("abbr") or "").upper(),
+            })
+    if len(teams) == 1:
+        l1 = (teams[0].get("logo") or "").strip()
+        if l1:
+            return ("solo", {"l1": l1, "a1": (teams[0].get("abbr") or "").upper()})
+    slug = _LEAGUE_LOGO_SLUG.get((item.get("sport_key") or "").lower())
+    if slug:
+        return ("league", {
+            "src": _ESPN_LEAGUE_LOGO.format(slug=slug),
+            "alt": item.get("sport_key") or "",
+        })
+    return (None, None)
+
+
+def _match_item_to_slate(item: dict, merged: list) -> tuple:
+    """Return (ev, odds_meta) for the slate game this news story is about,
+    or (None, None) when there's no match. Finished games (ESPN status_state
+    == 'post', or an 'is_final' flag) count as no-match so the tile rotates
+    out per spec §3."""
+    item_abbrs = {(t.get("abbr") or "").upper() for t in (item.get("teams") or [])}
+    item_abbrs.discard("")
+    if not item_abbrs:
+        return (None, None)
+    for ev, odds_meta, _ex in (merged or []):
+        away_abbr = ((ev.get("away") or {}).get("abbr") or "").upper()
+        home_abbr = ((ev.get("home") or {}).get("abbr") or "").upper()
+        if not (away_abbr in item_abbrs or home_abbr in item_abbrs):
+            continue
+        # Spec §3: finished games bump the tile.
+        status = (ev.get("status_state") or "").lower()
+        if status == "post" or ev.get("is_final"):
+            continue
+        return (ev, odds_meta or {})
+    return (None, None)
+
+
+def _ct_time_label(ev: dict) -> str:
+    """Render ev['start_utc'] / 'commence_time' as '7:40 PM CT' (Central).
+    Returns '' when nothing resolves — the validator then drops the tile."""
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    raw = ev.get("start_utc") or ev.get("commence_time") or ""
+    if not raw:
+        return ""
+    try:
+        if isinstance(raw, datetime):
+            dt = raw
+        else:
+            dt = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+        ct = dt.astimezone(ZoneInfo("America/Chicago"))
+        return ct.strftime("%-I:%M %p CT") if hasattr(ct, "strftime") else ""
+    except Exception:
+        try:
+            return dt.astimezone(ZoneInfo("America/Chicago")).strftime("%#I:%M %p CT")
+        except Exception:
+            return ""
+
+
+def _build_featured_matrix(item: dict, merged: list) -> str:
+    """Spec §4: 4-cell matrix with REAL open→current numbers. Returns the HTML
+    when all 4 cells can be filled with real data, else '' so the caller drops
+    the tile per spec (no more em-dash fallback)."""
+    ev, meta = _match_item_to_slate(item, merged)
+    if not meta:
+        return ""
+    spr = meta.get("spreads") or {}
+    tot = meta.get("totals") or {}
+    h2h = meta.get("h2h") or {}
+    away_abbr = ((ev.get("away") or {}).get("abbr") or "AWAY").upper()
+    home_abbr = ((ev.get("home") or {}).get("abbr") or "HOME").upper()
+
+    def _pair(cur_v, open_v=None):
+        """Format as 'open → current' when both exist and differ, else the single value."""
+        if cur_v is None:
+            return None
+        if open_v is None or open_v == cur_v:
+            return f"{cur_v}"
+        return f"{open_v} → {cur_v}"
+
+    cells = [
+        ("Spread", _pair(spr.get("home_price"), spr.get("home_opener")), "accent"),
+        ("Total",  _pair(tot.get("home_price"), tot.get("home_opener")), ""),
+        (f"{away_abbr} ML", _pair(h2h.get("away_price"), h2h.get("away_opener")), ""),
+        (f"{home_abbr} ML", _pair(h2h.get("home_price"), h2h.get("home_opener")), ""),
+    ]
+    # Spec §4: every cell must have real data; else drop the tile.
+    if any(v is None for _k, v, _c in cells):
+        return ""
+    # ML classes: price got better for bettor (more plus) = good, worse = bad.
+    def _ml_cls(opener, current):
+        try:
+            if opener is None or current is None:
+                return ""
+            return "good" if float(current) > float(opener) else ("bad" if float(current) < float(opener) else "")
+        except (TypeError, ValueError):
+            return ""
+    away_cls = _ml_cls(h2h.get("away_opener"), h2h.get("away_price"))
+    home_cls = _ml_cls(h2h.get("home_opener"), h2h.get("home_price"))
+    cells[2] = (cells[2][0], cells[2][1], away_cls)
+    cells[3] = (cells[3][0], cells[3][1], home_cls)
+    inner = "".join(
+        f'<div class="cell"><div class="k">{_esc(k)}</div>'
+        f'<div class="v {cls}">{_esc(v)}</div></div>'
+        for k, v, cls in cells
+    )
+    return f'<div class="matrix">{inner}</div>'
+
+
+def _market_tail_for(ev: dict, meta: dict) -> str:
+    """Compact market-lines tail for mid/wide tile foot (spec §4). Format:
+    '· HOME -2.5 · O 44.5 · ML -140' — pulls whatever the odds cache has.
+    Returns '' when nothing numeric is available (validator then drops the
+    tile per spec: no em-dashes in rendered tiles)."""
+    if not meta:
+        return ""
+    home_abbr = ((ev.get("home") or {}).get("abbr") or "HOME").upper()
+    spr = meta.get("spreads") or {}
+    tot = meta.get("totals") or {}
+    h2h = meta.get("h2h") or {}
+    parts = []
+    # Spread: show the HANDICAP (point), not the juice price. "ATL -2.5"
+    # reads instantly; "ATL -115" would be confusing in a foot line.
+    sp_pt = spr.get("home_point")
+    if isinstance(sp_pt, (int, float)):
+        parts.append(f"· {home_abbr} {sp_pt:+g}")
+    # Total: show the O/U line (point), not price.
+    tot_pt = tot.get("home_point")
+    if isinstance(tot_pt, (int, float)):
+        parts.append(f"· O {tot_pt:g}")
+    # Moneyline: show the American price on the home side as a bonus signal.
+    h2h_price = h2h.get("home_price")
+    if isinstance(h2h_price, (int, float)):
+        parts.append(f"· ML {h2h_price:+g}")
+    return " ".join(parts)
+
+
+def _validate_tile(item: dict, merged: list, size: str) -> dict:
+    """Spec §4a: single validation pass. Returns a dict with pre-built pieces
+    the renderer can drop in, OR {} when the tile can't be rendered cleanly.
+    Rejection reason is attached to the empty dict as ['_drop_reason'] for
+    the server-side drop log."""
+    # Image — hard requirement.
+    image_kind, image_data = _resolve_tile_image(item)
+    if image_kind is None:
+        return {"_drop_reason": "no_image"}
+    # Teams on the ITEM (we'll still render tiles for non-team news only if
+    # they're not sized mid/wide; featured/mid/wide all need teams).
+    teams = item.get("teams") or []
+    if not teams:
+        return {"_drop_reason": "no_teams"}
+    # League (sport_key) — required for the meta line and team-chip color map.
+    if not (item.get("sport_key") or "").strip():
+        return {"_drop_reason": "no_league"}
+    # Matched slate game — needed for start-time, status check, and market lines.
+    matched_ev, matched_meta = _match_item_to_slate(item, merged)
+    if matched_ev is None:
+        return {"_drop_reason": "no_slate_match_or_finished"}
+    start_ct = _ct_time_label(matched_ev)
+    if not start_ct:
+        return {"_drop_reason": "no_start_time"}
+    # Featured needs the full 4-cell matrix; mid/wide need market-tail numbers.
+    matrix_html = ""
+    market_tail = ""
+    if size == "featured":
+        matrix_html = _build_featured_matrix(item, merged)
+        if not matrix_html:
+            return {"_drop_reason": "no_matrix_data"}
+    else:
+        market_tail = _market_tail_for(matched_ev, matched_meta)
+        if not market_tail:
+            return {"_drop_reason": "no_market_tail"}
+    return {
+        "image_kind": image_kind,
+        "image_data": image_data,
+        "matched_ev": matched_ev,
+        "matched_meta": matched_meta,
+        "start_ct": start_ct,
+        "matrix_html": matrix_html,
+        "market_tail": market_tail,
+    }
+
+
+def _render_news_tile(item: dict, size: str = "mid", validated: dict = None) -> str:
     """Return the HTML for one bento tile. `size` ∈ {featured, mid, wide}.
-    EVERY tile gets an image: headshot → two-team logos → one-team logo →
-    league logo. No empty-image tiles reach the UI."""
+    `validated` is the dict returned by _validate_tile() and MUST be passed —
+    callers get it from _validate_tile and skip the render on empty dicts.
+    No tile ever reaches this function missing an image, teams, league,
+    start-time, or (for featured) the full matrix data."""
+    v = validated or {}
     sev = (item.get("severity") or "news").lower()
     rel = _relative_time(item.get("published", ""))
     headline = _esc(item.get("headline", ""))
@@ -431,10 +643,9 @@ def _render_news_tile(item: dict, size: str = "mid", featured_matrix_html: str =
     snip_limit = 260 if size == "featured" else 140
     snippet = _esc(_trunc_words(raw_snippet, snip_limit))
     teams = item.get("teams") or []
-    athlete = item.get("athlete") or {}
     league_key = (item.get("sport_key") or "").lower()
-    # Weather and line-move tiles get the mockup's exact palette so they stay
-    # visually distinct from team-colored tiles.
+    # Weather / line-move tiles get the mockup's exact palette. Team-colored
+    # tiles derive c1/c2 from the primary team.
     if sev == "weather":
         c1, c2, team_color = ("#001a3a", "#00265f", "#5AB7FF")
     elif sev == "line":
@@ -442,32 +653,40 @@ def _render_news_tile(item: dict, size: str = "mid", featured_matrix_html: str =
     else:
         c1, c2, team_color = _team_color_pair(teams, league_key)
 
-    # Image fallback chain — guaranteed to produce something.
+    # Image — pre-resolved by _validate_tile. Fallback league-logo substitute
+    # fires via onerror if the CDN hiccups on a cold cache.
+    image_kind = v.get("image_kind")
+    image_data = v.get("image_data") or {}
+    league_slug = _LEAGUE_LOGO_SLUG.get(league_key, "")
+    fallback_logo = _ESPN_LEAGUE_LOGO.format(slug=league_slug) if league_slug else ""
+    _onerr = f"this.onerror=null;this.src='{fallback_logo}';" if fallback_logo else ""
     portrait_html = ""
     logos_html = ""
-    if athlete.get("headshot"):
-        portrait_html = f'<div class="portrait" style="background-image:url(\'{_esc(athlete["headshot"])}\');"></div>'
-    elif len(teams) >= 2:
-        l1 = _esc(teams[0].get("logo") or "")
-        l2 = _esc(teams[1].get("logo") or "")
+    if image_kind == "portrait":
+        # Portraits set background-image, so onerror can't swap. Pre-trusted
+        # ESPN-headshot templates are stable; the duo-fallback path handles the
+        # rare case where the CDN serves a 404.
+        portrait_html = f'<div class="portrait" style="background-image:url(\'{_esc(image_data["src"])}\');"></div>'
+    elif image_kind == "duo":
         logos_html = (
             f'<div class="team-logos">'
-            f'<img src="{l1}" alt="{_esc(teams[0].get("abbr") or "")}">'
+            f'<img src="{_esc(image_data["l1"])}" alt="{_esc(image_data["a1"])}" onerror="{_onerr}">'
             f'<span class="vs">vs</span>'
-            f'<img src="{l2}" alt="{_esc(teams[1].get("abbr") or "")}">'
+            f'<img src="{_esc(image_data["l2"])}" alt="{_esc(image_data["a2"])}" onerror="{_onerr}">'
             f'</div>'
         )
-    elif len(teams) == 1:
-        l1 = _esc(teams[0].get("logo") or "")
-        logos_html = f'<div class="team-logos"><img src="{l1}" alt="{_esc(teams[0].get("abbr") or "")}"></div>'
-    else:
-        # Final fallback: ESPN's league logo at the sport level so the tile
-        # NEVER renders without an image. Sized smaller than a team-logo
-        # composition since it's a single symbolic mark.
-        slug = _LEAGUE_LOGO_SLUG.get((item.get("sport_key") or "").lower())
-        if slug:
-            logo = _ESPN_LEAGUE_LOGO.format(slug=slug)
-            logos_html = f'<div class="team-logos league"><img src="{logo}" alt="{_esc(item.get("sport_key") or "")}"></div>'
+    elif image_kind == "solo":
+        logos_html = (
+            f'<div class="team-logos">'
+            f'<img src="{_esc(image_data["l1"])}" alt="{_esc(image_data["a1"])}" onerror="{_onerr}">'
+            f'</div>'
+        )
+    elif image_kind == "league":
+        logos_html = (
+            f'<div class="team-logos league">'
+            f'<img src="{_esc(image_data["src"])}" alt="{_esc(image_data["alt"])}">'
+            f'</div>'
+        )
 
     # Build team chip HTML honoring per-team colors + light-text flip. Two chips
     # with an italic "at"/"vs" joiner, trailing meta line with league + CT time.
@@ -483,15 +702,17 @@ def _render_news_tile(item: dict, size: str = "mid", featured_matrix_html: str =
     _at_or_vs = "at" if len(teams) >= 2 else ""
     # League label: "LA LIGA" / "NBA" / "NCAAB", never raw enum keys like LA_LIGA.
     _league_display = (espn.DISPLAY_NAMES.get(league_key) or league_key.upper().replace("_", " ")).strip()
-    # Pull start time + source when available. Item payload may carry a
-    # "game_time_ct" ISO string from the enriched feed; fall back to item.published
-    # which represents the article time (still better than nothing).
-    _start_ct = (item.get("game_time_ct") or "").strip()
+    # Validator guarantees a real CT start time from the matched slate game
+    # (spec §4a). Market-tail (spec §4) carries live spread/total numbers on
+    # mid/wide tiles so the foot line is never information-free.
+    _start_ct = (v.get("start_ct") or "").strip()
     _source = (item.get("source") or "ESPN").strip()
+    _market_tail = (v.get("market_tail") or "").strip() if size != "featured" else ""
     _meta_bits = [f"· {_league_display}" if _league_display else ""]
-    if _start_ct:
-        _meta_bits.append(f"· {_esc(_start_ct)}")
+    _meta_bits.append(f"· {_esc(_start_ct)}")
     _meta_bits.append(f"· {_esc(_source)}")
+    if _market_tail:
+        _meta_bits.append(_esc(_market_tail))
     meta_tail = f'<span style="color:#9fb0ce">{" ".join(b for b in _meta_bits if b)}</span>'
     # team-line used both in featured text-col and mid/wide foot. Composed once
     # so both placements stay in sync.
@@ -522,8 +743,9 @@ def _render_news_tile(item: dict, size: str = "mid", featured_matrix_html: str =
         text_col_inner += f'<div class="snippet">{snippet}</div>'
     if size == "featured":
         text_col_inner += team_line_html
-        if featured_matrix_html:
-            text_col_inner += featured_matrix_html
+        _mx = v.get("matrix_html") or ""
+        if _mx:
+            text_col_inner += _mx
 
     return (
         f'<div class="news-tile {size}" style="--c1:{c1}; --c2:{c2};">'
@@ -676,87 +898,98 @@ def _news_is_relevant(item: dict, slate_terms: set) -> bool:
     return False
 
 
-def _featured_matrix_for(item: dict, merged: list) -> str:
-    """Spec §7: 4-cell Spread / Total / Away ML / Home ML matrix on the featured
-    tile. Pulls open vs current prices when available; otherwise renders em-dashes
-    so the tile height stays identical to the mockup regardless of data presence."""
-    def _cell(k, v, cls=""):
-        return f'<div class="cell"><div class="k">{_esc(k)}</div><div class="v {cls}">{_esc(v)}</div></div>'
-    # Try to resolve the game this story is about by team abbr intersection.
-    item_abbrs = {(t.get("abbr") or "").upper() for t in (item.get("teams") or [])}
-    item_abbrs.discard("")
-    matched_meta = None
-    away_abbr = home_abbr = "—"
-    if item_abbrs:
-        for ev, odds_meta, _ex in (merged or []):
-            away = (ev.get("away") or {}).get("abbr") or ""
-            home = (ev.get("home") or {}).get("abbr") or ""
-            if away.upper() in item_abbrs or home.upper() in item_abbrs:
-                matched_meta = odds_meta or {}
-                away_abbr = (away or "AWAY").upper()
-                home_abbr = (home or "HOME").upper()
-                break
-    def _move_cell(k, open_v, cur_v, cls_hint=""):
-        if open_v is None and cur_v is None:
-            return _cell(k, "—", cls_hint)
-        if open_v == cur_v or open_v is None:
-            return _cell(k, str(cur_v if cur_v is not None else open_v), cls_hint)
-        return _cell(k, f"{open_v} → {cur_v}", cls_hint)
-    if matched_meta:
-        spr = (matched_meta.get("spreads") or {})
-        tot = (matched_meta.get("totals") or {})
-        h2h = (matched_meta.get("h2h") or {})
-        spread_cell = _move_cell("Spread", spr.get("home_opener"), spr.get("home_price"), "accent")
-        total_cell = _move_cell("Total", tot.get("home_opener"), tot.get("home_price"))
-        # ML: good if PRICE got better for the bettor (more plus / less minus), else bad.
-        def _ml_cls(opener, current):
-            try:
-                if opener is None or current is None:
-                    return ""
-                return "good" if float(current) > float(opener) else ("bad" if float(current) < float(opener) else "")
-            except (TypeError, ValueError):
-                return ""
-        away_cls = _ml_cls(h2h.get("away_opener"), h2h.get("away_price"))
-        home_cls = _ml_cls(h2h.get("home_opener"), h2h.get("home_price"))
-        away_ml = _move_cell(f"{away_abbr} ML", h2h.get("away_opener"), h2h.get("away_price"), away_cls)
-        home_ml = _move_cell(f"{home_abbr} ML", h2h.get("home_opener"), h2h.get("home_price"), home_cls)
-        inner = spread_cell + total_cell + away_ml + home_ml
-    else:
-        inner = (
-            _cell("Spread", "—", "accent")
-            + _cell("Total", "—")
-            + _cell("Away ML", "—")
-            + _cell("Home ML", "—")
-        )
-    return f'<div class="matrix">{inner}</div>'
+def _slate_relevance_score(item: dict, slate_terms: set, slate_sports: set) -> int:
+    """Spec §2: higher = more relevant to today's slate.
+      3 = team metadata on the item names a team on the slate
+      2 = headline/snippet mentions a slate team name (≥3 chars)
+      1 = the item's sport_key is one of the slate sports
+      0 = otherwise (sorted to the back; usually dropped by relevance filter)"""
+    # Direct team metadata match — strongest signal.
+    for t in item.get("teams") or []:
+        for key in ("abbr", "name"):
+            v = (t.get(key) or "").strip().lower()
+            if v and v in slate_terms:
+                return 3
+    text = f"{item.get('headline') or ''} {item.get('snippet') or ''}".lower()
+    for term in slate_terms:
+        if len(term) >= 3 and term in text:
+            return 2
+    if (item.get("sport_key") or "").lower() in slate_sports:
+        return 1
+    return 0
 
 
 def _render_breaking_news(sports_list: list, merged: list):
     """The Breaking News hero: 1 featured + up to 5 smaller tiles + ticker.
-    Filters ESPN news to items relevant to the current slate, falls back
-    to a compact empty-state card when nothing qualifies."""
+
+    Spec §1-4a pipeline:
+      1. Fetch ESPN news for the current sports list.
+      2. Score every item by slate relevance (team > league > neither).
+      3. Build a ranked queue sorted by (relevance desc, severity, recency).
+      4. Walk the queue; validate each candidate with _validate_tile. Dropped
+         items (image missing / finished game / matrix data missing / etc.)
+         get replaced from the queue so the hero always paints with 6
+         complete tiles OR runs the queue dry with a visible empty-state.
+    """
+    import sys  # for drop-reason logging
     raw_news = load_news_for_sports(tuple(sports_list), per_sport=10) or []
     slate_terms = _teams_in_slate(merged)
-    # Severity first (injuries/weather/line > plain news), then recency.
-    filtered = [n for n in raw_news if _news_is_relevant(n, slate_terms)] if slate_terms else raw_news
-    # Dedupe by headline — ESPN sometimes returns the same story across
+    slate_sports = {(sp or "").lower() for sp in (sports_list or [])}
+    # Dedupe by headline first — ESPN sometimes returns the same story across
     # multiple league endpoints (shared soccer feeds, cross-posted wires).
     _seen_titles = set()
-    news = []
-    for n in filtered:
+    deduped = []
+    for n in raw_news:
         key = (n.get("headline") or "").strip().lower()
         if key and key not in _seen_titles:
             _seen_titles.add(key)
-            news.append(n)
+            deduped.append(n)
+    # Spec §2: relevance score drives ordering, severity breaks ties, recency
+    # last. priority inversely ranks so lower = earlier.
+    priority = {"out": 0, "gtd": 1, "weather": 2, "line": 3, "news": 4}
+    ranked = sorted(
+        deduped,
+        key=lambda x: (
+            -_slate_relevance_score(x, slate_terms, slate_sports),
+            priority.get((x.get("severity") or "news"), 5),
+            -(len(x.get("published") or "")),
+        ),
+    )
+    # Spec §1+3+4a: validator + replace loop. Walk ranked queue, keep good
+    # tiles in slot order (featured, mid, mid, wide, wide, wide).
+    slot_sizes = ["featured", "mid", "mid", "wide", "wide", "wide"]
+    accepted: list = []
+    queue_iter = iter(ranked)
+    drop_log: list = []
+    for size in slot_sizes:
+        picked = None
+        picked_bundle = None
+        for item in queue_iter:
+            v = _validate_tile(item, merged, size)
+            if v and not v.get("_drop_reason"):
+                picked = item
+                picked_bundle = v
+                break
+            if v and v.get("_drop_reason"):
+                drop_log.append((size, v.get("_drop_reason"), (item.get("headline") or "")[:60]))
+        if picked is None:
+            break  # queue dry — render whatever we accepted so far
+        accepted.append((size, picked, picked_bundle))
+    # Server-side drop log (stderr; Streamlit Cloud captures it).
+    if drop_log:
+        try:
+            print(f"[breaking-news] dropped {len(drop_log)} candidate(s): "
+                  + "; ".join(f"[{s}]{r}:'{h}'" for s, r, h in drop_log[:8]),
+                  file=sys.stderr)
+        except Exception:
+            pass
     # Filter chips — All / Injuries / Weather / Line Moves + up to 2 league chips
     # sourced from the current board filter so they reflect what's on screen.
     league_chips = "".join(
         f'<span class="chip-filter">{(_esc(espn.DISPLAY_NAMES.get(sp, sp.upper()))).split(" ")[0]}</span>'
         for sp in (sports_list or [])[:2]
     )
-    # Count reflects the number of tiles actually rendered below (capped at 6),
-    # not the raw filtered feed, so it reads consistent with what's on screen.
-    tile_cap = min(6, len(news))
+    tile_cap = len(accepted)
     html(
         '<div class="news-head">'
         '<div class="news-title">'
@@ -772,20 +1005,13 @@ def _render_breaking_news(sports_list: list, merged: list):
         '</div>'
         '</div>'
     )
-    if not news:
+    if not accepted:
         html(
-            '<div class="news-empty">No breaking news from ESPN for your selected sports right now. '
-            'The feed refreshes every 5 minutes.</div>'
+            '<div class="news-empty">No breaking news from ESPN matches tonight\'s slate right now. '
+            'The feed refreshes every 5 minutes, and tiles rotate out once a matched game finishes.</div>'
         )
         return
-    # Rank: injuries/weather/line first, then plain news; within each, newest first (already sorted).
-    priority = {"out": 0, "gtd": 1, "weather": 2, "line": 3, "news": 4}
-    ranked = sorted(news, key=lambda x: priority.get(x.get("severity", "news"), 5))
-    tiles: list = []
-    for i, item in enumerate(ranked[:6]):
-        size = "featured" if i == 0 else ("mid" if i in (1, 2) else "wide")
-        matrix_html = _featured_matrix_for(item, merged) if size == "featured" else ""
-        tiles.append(_render_news_tile(item, size=size, featured_matrix_html=matrix_html))
+    tiles = [_render_news_tile(item, size=size, validated=v) for size, item, v in accepted]
     # Ticker pulls the previous render's top_picks from session_state so each
     # rerun shows real agent signals (first page load = matchup fallback until
     # the agent runs, every subsequent load = real edge arrows).
@@ -1305,30 +1531,29 @@ def _render_agent_panel(odds_games, kalshi_cash, settings,
                         espn_events_by_sport=None, pinnacle_games_by_sport=None):
     """Agent edge-scanner — Kalshi (free) as the book, Pinnacle no-vig as fair."""
     saved_cfg = settings_store.load()
-    # "The Board · Full Slate" header with count pill + sort dropdown, matching
-    # the Court Side mockup. The <select> is decorative for now — the agent
-    # sorts internally by Pinnacle fair prob with positive-edge picks on top.
+    # "The Board · Full Slate" header gets rendered AFTER the scan completes
+    # so the count pill can show real numbers instead of a placeholder. The
+    # header render is deferred to the _render_board_header call below.
     _total_games = sum(len(v) for v in (pinnacle_games_by_sport or {}).values())
-    # Spec §13: count pill = "{total} games · <b>{qualifying}</b> qualifying picks · {watch} watch".
-    # The scan runs below; we re-render the header with the real numbers once we
-    # know them. For the first render we use a placeholder so the layout height
-    # stays identical when the header gets replaced.
-    html(
-        '<div class="board-hero-head">'
-        '<div class="board-title">'
-        '<div class="h1">The Board · Full Slate</div>'
-        f'<span class="board-count">{_total_games} games · '
-        '<b>…</b> qualifying picks · watch</span>'
-        '</div>'
-        '<select class="sort-select" disabled title="Agent sorts by positive-edge then Pinnacle fair prob">'
-        '<option>Rank by: Edge % descending (recommended)</option>'
-        '<option>Rank by: Stake descending</option>'
-        '<option>Rank by: Tier then edge</option>'
-        '<option>Rank by: Kickoff time</option>'
-        '<option>Rank by: Pinnacle fair prob</option>'
-        '</select>'
-        '</div>'
-    )
+
+    def _render_board_header(total_games: int, actionable: int, watch: int):
+        """Spec §6: count pill shows real actionable + watch numbers directly."""
+        html(
+            '<div class="board-hero-head">'
+            '<div class="board-title">'
+            '<div class="h1">The Board · Full Slate</div>'
+            f'<span class="board-count">{total_games} games · '
+            f'<b>{actionable}</b> actionable · {watch} watch</span>'
+            '</div>'
+            '<select class="sort-select" disabled title="Agent sorts by edge % with actionable on top">'
+            '<option>Rank by: Edge % descending (recommended)</option>'
+            '<option>Rank by: Stake descending</option>'
+            '<option>Rank by: Tier then edge</option>'
+            '<option>Rank by: Kickoff time</option>'
+            '<option>Rank by: Pinnacle fair prob</option>'
+            '</select>'
+            '</div>'
+        )
     kelly_mult = settings.get("agent_kelly") or 0.25
     # Historic agent_min_edge is the AUTO-LOG threshold (picks need to be
     # +EV before they hit the ledger). For the BOARD we show every candidate
@@ -1793,34 +2018,28 @@ def _render_agent_panel(odds_games, kalshi_cash, settings,
     settled_rows.sort(key=_rank_key)
     funded = fresh + settled_rows
 
-    picks_shown = int(settings.get("agent_picks_shown") or saved_cfg.get("agent_picks_shown") or 15)
-    # Fresh picks fill the top N slots; the first few settled picks fill the
-    # remainder so the board stays at ~picks_shown rows. Extra settled rows
-    # drop into the overflow expander below.
-    if len(fresh) >= picks_shown:
-        top = fresh[:picks_shown]
-    else:
-        top = fresh + settled_rows[:picks_shown - len(fresh)]
-    overflow_funded = funded[len(top):]
+    # Spec §6: no top-N cap. The full slate is now one table with two internal
+    # dividers (Actionable + Full slate). The agent_picks_shown setting is kept
+    # only to drive the analysis-card count below, which is still per-pick heavy.
+    top = list(funded)
+    overflow_funded: list = []  # kept for compatibility with downstream references
     # Attach stable anchor ids so the analysis boards can scroll-nav back and forth.
     for i, e in enumerate(top):
         e["_anchor"] = f"pick-{i+1}"
 
-    # Auto-log every funded pick the agent surfaces so the Picks Ledger is a
-    # complete record of what it recommended. Dedup handles re-render churn.
-    # Then run a full-ledger auto-settle: this grades previous days' picks
-    # using the dated ESPN scoreboard (today's board rolls off historical
-    # games, so without this they'd never settle).
+    # Spec §7: auto-log every actionable (edge > 0, stake > 0) pick to the ledger
+    # as soon as the agent scan completes. auto_log_agent_edges internally skips
+    # rows with stake_dollars <= 0, so handing it `top` logs only the positive-
+    # edge rows that the daily cap funded. Dedup is keyed on
+    # (sport, event_id, market, selection) inside storage.picks.upsert_agent_pick,
+    # so a Streamlit rerun never double-logs. The "✓ N picks logged" caption
+    # below replaces the one-click expander per spec.
+    inserted = 0
     if saved_cfg.get("agent_auto_log", True):
-        # Only log the picks the agent is actually surfacing on the board
-        # (top-N by Pinnacle fair prob). Overflow / cap-dropped edges never
-        # hit the ledger — they aren't recommendations, just scan residue.
         try:
             inserted = picks_store.auto_log_agent_edges(top, settings)
         except Exception:
             inserted = 0
-        if inserted:
-            st.toast(f"Logged {inserted} new agent pick(s) to the ledger.", icon="📝")
     # Full-ledger sweep (hits historical dates via the pick's created_at
     # hint). Cheap when nothing is open; `auto_settle` only inserts if
     # the game is final.
@@ -1855,120 +2074,65 @@ def _render_agent_panel(odds_games, kalshi_cash, settings,
         return (e.get("status_state") == "post") or (e.get("grade") in ("win", "loss", "push"))
 
     def _render_rows(items, watch_total: int = 0):
-        pos_items = [e for e in items if _is_pos(e)]
-        watch_items = [e for e in items if _is_watch(e)]
-        settled_items = [e for e in items if _is_settled(e)]
+        # Spec §6: sort each group by edge % descending, actionable on top.
+        def _edge_key(e):
+            return -float(e.get("edge") or 0)
+        pos_items = sorted([e for e in items if _is_pos(e)], key=_edge_key)
+        watch_items = sorted([e for e in items if _is_watch(e)], key=_edge_key)
+        settled_items = sorted([e for e in items if _is_settled(e)], key=_edge_key)
         parts = []
         if pos_items:
             parts.append(
-                f'<tr class="row-divider"><td colspan="10">'
-                f'◆ Positive edge · {len(pos_items)} actionable pick'
-                f'{"s" if len(pos_items) != 1 else ""}'
+                f'<tr class="row-divider divider-good"><td colspan="10">'
+                f'◆ Actionable picks · {len(pos_items)}'
                 f'</td></tr>'
             )
             for i, e in enumerate(pos_items, start=1):
                 parts.append(_row(e, rank=i))
         if watch_items:
-            total_label = f"{watch_total} games" if watch_total and watch_total > len(watch_items) else f"{len(watch_items)} games"
-            shown_label = f" (showing top {len(watch_items)})" if watch_total and watch_total > len(watch_items) else ""
             parts.append(
-                f'<tr class="row-divider"><td colspan="10">'
-                f'◇ Watch · neutral or negative edge · {total_label}{shown_label}'
+                f'<tr class="row-divider divider-neutral"><td colspan="10">'
+                f'◇ Full slate · {len(watch_items)}'
                 f'</td></tr>'
             )
             for i, e in enumerate(watch_items, start=len(pos_items) + 1):
                 parts.append(_row(e, rank=i))
         if settled_items:
             parts.append(
-                '<tr class="row-divider"><td colspan="10">'
-                '— Finished picks · kept on board as record —'
+                '<tr class="row-divider divider-neutral"><td colspan="10">'
+                f'— Finished picks · {len(settled_items)} on the board as record —'
                 '</td></tr>'
             )
             for i, e in enumerate(settled_items, start=len(pos_items) + len(watch_items) + 1):
                 parts.append(_row(e, rank=i))
         return "".join(parts)
 
-    # overflow_funded is the full watch-list beyond the visible rows — pass
-    # its size so the divider label reads "41 games (showing top 8)" like the mockup.
-    _watch_total_est = sum(1 for e in funded if _is_watch(e))
+    # Spec §6: board header now shows real actionable vs watch counts (no
+    # placeholder). Count runs over the full `funded` list since there's no
+    # top-N cap anymore.
+    _actionable_total = sum(1 for e in funded if _is_pos(e))
+    _watch_total = sum(1 for e in funded if _is_watch(e))
+    _render_board_header(_total_games, _actionable_total, _watch_total)
     html(
         '<div class="board-wrap">'
         '<table class="board-table">'
         + header
-        + f'<tbody>{_render_rows(top, watch_total=_watch_total_est)}</tbody>'
+        + f'<tbody>{_render_rows(top, watch_total=_watch_total)}</tbody>'
         + '</table>'
         '</div>'
     )
-    # One-click "Log pick"
-    with st.expander("⚡ One-click log for the top picks", expanded=False):
-        for i, e in enumerate(top):
-            edge_pct = e["edge"] * 100
-            matchup = e.get("matchup", "?")
-            side_label = e.get("side_label", "")
-            best_book = e.get("book", "?")
-            best_price = format_american(e.get("price"))
-            kurl = e.get("kalshi_url") or "https://kalshi.com/markets"
-            cols = st.columns([5, 1, 1, 1, 1])
-            stake_u = _to_units(e.get("stake_dollars") or 0)
-            with cols[0]:
-                st.markdown(
-                    f"**{matchup}** — {side_label}  "
-                    f"<span style='color:var(--muted);font-size:12px;'>· {best_book} @ **{best_price}** · "
-                    f"<span style='color:var(--good);'>+{edge_pct:.2f}pts</span> · "
-                    f"**{stake_u:.2f}u**</span>",
-                    unsafe_allow_html=True,
-                )
-            cols[1].markdown(f"**{best_price}**")
-            cols[2].markdown(f"{e.get('_sport', '').upper()}")
-            if best_book.lower() == "kalshi":
-                cols[3].markdown(f"[Open ↗]({kurl})")
-            else:
-                cols[3].markdown(f"_{best_book}_")
-            if cols[4].button("Log", key=f"agent_log_{i}_{e.get('event_id','?')}_{side_label[:6]}"):
-                # auto_settle resolves finals by sport + ESPN event id, so we
-                # store the ESPN id (not the Kalshi ticker) as event_id. The
-                # Kalshi ticker rides along in `kalshi_ticker` for the deep link.
-                espn_eid = e.get("espn_event_id") or e.get("event_id")
-                picks_store.add_pick({
-                    "sport": (e.get("_sport") or "").lower(),
-                    "event_id": espn_eid,
-                    "kalshi_ticker": e.get("kalshi_ticker"),
-                    "event_name": matchup,
-                    "market": e.get("market") or "h2h",
-                    "selection": side_label,
-                    "point": e.get("point"),
-                    "price_american": e.get("price"),
-                    "projected_prob": e.get("fair_prob"),
-                    "implied_prob": e.get("book_implied"),
-                    "risk_units": round(e.get("stake_dollars", 0) / max(1e-6, kalshi_cash * (settings.get("unit_pct") or 0.01)), 2),
-                    "win_units": None,
-                    "methodology": "Model Edge",
-                    "notes": f"{best_book} @ {best_price} vs Pinnacle · edge {edge_pct:+.2f}pts · Kalshi {int(e.get('kalshi_price_cents') or 0)}¢",
-                })
-                # Attempt an immediate settle in case the game is already final.
-                try:
-                    picks_store.auto_settle()
-                except Exception:
-                    pass
-                st.cache_data.clear()
-                st.toast(f"Logged: {side_label} @ {best_price} · {stake_u:.2f}u ({best_book})", icon="✅")
-
-    if overflow_funded:
-        with st.expander(f"➕ {len(overflow_funded)} more picks on the watch-list", expanded=False):
-            # Overflow picks use the same Court Side table structure so the
-            # style stays consistent when expanded.
-            _start_rank = len(top) + 1
-            _overflow_rows = "".join(
-                _row(e, rank=_start_rank + i) for i, e in enumerate(overflow_funded)
-            )
-            html(
-                '<div class="board-wrap">'
-                '<table class="board-table">'
-                + header
-                + f'<tbody>{_overflow_rows}</tbody>'
-                + '</table>'
-                '</div>'
-            )
+    # Spec §7: the one-click "Log pick" expander is gone. The agent auto-logs
+    # every actionable pick on every scan via picks_store.auto_log_agent_edges
+    # above, and the caption below shows how many new rows this scan added.
+    # Dedup lives in storage.picks.upsert_agent_pick keyed on
+    # (sport, event_id, market, selection) so reruns never double-log.
+    _actionable_count = sum(1 for e in top if _is_pos(e))
+    _caption_line = (
+        f"<span class='check'>✓</span> {_actionable_count} actionable pick"
+        f"{'s' if _actionable_count != 1 else ''} auto-logged to the ledger"
+        + (f" · {inserted} new this scan" if inserted else " · no new rows this scan")
+    )
+    html(f'<div class="auto-log-caption">{_caption_line}</div>')
 
     if dropped:
         # Dropped picks hit the daily cap - show them separately with $0 stake so
