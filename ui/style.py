@@ -805,7 +805,43 @@ button[kind="headerDeploy"] { display: none !important; }
 /* ============================================================
    The Board — full-slate table, Court Side look
    ============================================================ */
+/* ===== Refresh state: no dimming, a light travels the Board's border ===== */
+/* Streamlit fades stale elements to ~33% while a rerun is in flight. Keep
+   everything at full strength; the border beam below is the refresh signal. */
+[data-stale="true"], [data-stale="true"] *{opacity:1 !important;}
+@property --beam-angle{syntax:"<angle>"; inherits:false; initial-value:0deg;}
+.board-wrap::after{
+  content:""; position:absolute; inset:0; border-radius:inherit; padding:2px;
+  background: conic-gradient(from var(--beam-angle),
+    transparent 0deg, transparent 250deg,
+    color-mix(in oklab, var(--accent) 35%, transparent) 300deg,
+    var(--accent) 340deg, #ffffff 352deg, transparent 360deg);
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor; mask-composite: exclude;
+  opacity:0; pointer-events:none; z-index:5;
+  transition: opacity .25s ease;
+}
+.stApp[data-test-script-state="running"] .board-wrap::after{
+  opacity:1;
+  animation: beam-spin 1.4s linear infinite;
+  filter: drop-shadow(0 0 6px var(--accent)) drop-shadow(0 0 14px color-mix(in oklab, var(--accent) 60%, transparent));
+}
+@keyframes beam-spin{to{--beam-angle:360deg;}}
+/* Header pill that only shows while the script is running. */
+.board-hero-head .refresh-pill{
+  display:none; align-items:center; gap:6px;
+  font-family:"JetBrains Mono", monospace; font-size:10px; letter-spacing:0.14em; text-transform:uppercase;
+  color: var(--accent); padding:4px 10px; border-radius:999px;
+  border:1px solid color-mix(in oklab, var(--accent) 45%, transparent);
+  background: color-mix(in oklab, var(--accent) 10%, transparent);
+}
+.board-hero-head .refresh-pill .dot{
+  width:6px; height:6px; border-radius:50%; background: var(--accent);
+  box-shadow:0 0 8px var(--accent); animation: pulse 1s ease-in-out infinite;
+}
+.stApp[data-test-script-state="running"] .board-hero-head .refresh-pill{display:inline-flex;}
 .board-wrap{
+  position:relative;
   background: var(--card); border:1px solid var(--rule);
   border-radius:14px; overflow:hidden;
   box-shadow: var(--card-shadow);

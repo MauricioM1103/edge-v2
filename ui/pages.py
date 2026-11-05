@@ -1652,6 +1652,7 @@ def _render_agent_panel(odds_games, kalshi_cash, settings,
             '<div class="h1">The Board · Full Slate</div>'
             f'<span class="board-count">{total_games} games · '
             f'<b>{actionable}</b> actionable · {watch} watch</span>'
+            '<span class="refresh-pill"><span class="dot"></span>Refreshing</span>'
             '</div>'
             '<select class="sort-select" disabled title="Agent sorts by edge % with actionable on top">'
             '<option>Rank by: Edge % descending (recommended)</option>'
