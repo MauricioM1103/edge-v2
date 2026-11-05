@@ -443,7 +443,16 @@ def _render_breaking_news(sports_list: list, merged: list):
     raw_news = load_news_for_sports(tuple(sports_list), per_sport=10) or []
     slate_terms = _teams_in_slate(merged)
     # Severity first (injuries/weather/line > plain news), then recency.
-    news = [n for n in raw_news if _news_is_relevant(n, slate_terms)] if slate_terms else raw_news
+    filtered = [n for n in raw_news if _news_is_relevant(n, slate_terms)] if slate_terms else raw_news
+    # Dedupe by headline — ESPN sometimes returns the same story across
+    # multiple league endpoints (shared soccer feeds, cross-posted wires).
+    _seen_titles = set()
+    news = []
+    for n in filtered:
+        key = (n.get("headline") or "").strip().lower()
+        if key and key not in _seen_titles:
+            _seen_titles.add(key)
+            news.append(n)
     # Filter chips — All / Injuries / Weather / Line Moves + up to 2 league chips
     # sourced from the current board filter so they reflect what's on screen.
     league_chips = "".join(
