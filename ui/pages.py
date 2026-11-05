@@ -2011,7 +2011,9 @@ def _render_agent_panel(odds_games, kalshi_cash, settings,
             return f"FINAL · {score}" if score else "FINAL"
         if state == "in":
             detail = (e.get("status_detail") or "LIVE")[:18]
-            return f"● {detail}"
+            hs = e.get("home_score"); as_ = e.get("away_score")
+            score = f" · {as_}–{hs}" if hs is not None and as_ is not None else ""
+            return f"● {detail}{score}"
         start = e.get("start_utc") or e.get("commence_time")
         if start:
             try:
@@ -2080,7 +2082,8 @@ def _render_agent_panel(odds_games, kalshi_cash, settings,
             f'<td class="tier-cell"><span class="tier-badge {tier}">{tier.upper()}</span></td>'
             f'<td class="matchup-cell">'
             f'  <div class="chip-row">{_matchup_chips(e)}</div>'
-            f'  <span class="time">{_esc_row(_start_time_ct(e))}</span>'
+            f'  <span class="time">{_esc_row(_start_time_ct(e))}'
+            f'{(" " + _grade_cell(e)) if e.get("grade") in ("winning", "losing", "tied", "win", "loss", "push") else ""}</span>'
             f'</td>'
             f'<td><div class="side-cell"><span class="mkt">{_esc_row(market_label)}</span>'
             f'<span class="pick">{side_label}</span></div></td>'
