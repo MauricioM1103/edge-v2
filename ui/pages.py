@@ -465,12 +465,22 @@ def _match_item_to_slate(item: dict, merged: list) -> tuple:
     """Return (ev, odds_meta) for the slate game this news story is about,
     or (None, None) when there's no match. Finished games (ESPN status_state
     == 'post', or an 'is_final' flag) count as no-match so the tile rotates
-    out per spec §3."""
+    out per spec §3.
+
+    Sport-gated: an MLB news item ('TEX' = Rangers) must NOT match an NCAAF
+    game ('TEX' = Longhorns). We require the matched slate game's sport to
+    equal the news item's sport_key before accepting the match."""
     item_abbrs = {(t.get("abbr") or "").upper() for t in (item.get("teams") or [])}
     item_abbrs.discard("")
     if not item_abbrs:
         return (None, None)
+    item_sport = (item.get("sport_key") or "").lower()
     for ev, odds_meta, _ex in (merged or []):
+        # Sport gate — prevents cross-sport abbr collisions (TEX = Rangers
+        # vs Longhorns, NYG = Giants NFL vs SF Giants MLB, etc).
+        ev_sport = (ev.get("sport") or ev.get("sport_key") or "").lower()
+        if item_sport and ev_sport and item_sport != ev_sport:
+            continue
         away_abbr = ((ev.get("away") or {}).get("abbr") or "").upper()
         home_abbr = ((ev.get("home") or {}).get("abbr") or "").upper()
         if not (away_abbr in item_abbrs or home_abbr in item_abbrs):
