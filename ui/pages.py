@@ -349,11 +349,26 @@ def _render_breaking_news(sports_list: list, merged: list):
     """The Breaking News hero: 1 featured + up to 5 smaller tiles + ticker.
     Renders a compact empty-state card if ESPN returns nothing."""
     news = load_news_for_sports(tuple(sports_list), per_sport=6) or []
+    # Filter chips — All / Injuries / Weather / Line Moves + up to 2 league chips
+    # sourced from the current board filter so they reflect what's on screen.
+    league_chips = "".join(
+        f'<span class="chip-filter">{(_esc(espn.DISPLAY_NAMES.get(sp, sp.upper()))).split(" ")[0]}</span>'
+        for sp in (sports_list or [])[:2]
+    )
     html(
-        '<div class="news-head"><div class="news-title">'
+        '<div class="news-head">'
+        '<div class="news-title">'
         '<h2>Breaking · Today\'s Slate</h2>'
         f'<span class="count-pill"><span class="cdot"></span>{len(news)} live updates</span>'
-        '</div></div>'
+        '</div>'
+        '<div class="news-filters">'
+        '<span class="chip-filter active">All</span>'
+        '<span class="chip-filter">Injuries</span>'
+        '<span class="chip-filter">Weather</span>'
+        '<span class="chip-filter">Line Moves</span>'
+        f'{league_chips}'
+        '</div>'
+        '</div>'
     )
     if not news:
         html(
@@ -910,7 +925,26 @@ def _render_agent_panel(odds_games, kalshi_cash, settings,
                         espn_events_by_sport=None, pinnacle_games_by_sport=None):
     """Agent edge-scanner — Kalshi (free) as the book, Pinnacle no-vig as fair."""
     saved_cfg = settings_store.load()
-    st.markdown("### Agent · ranked by Pinnacle fair prob")
+    # "The Board · Full Slate" header with count pill + sort dropdown, matching
+    # the Court Side mockup. The <select> is decorative for now — the agent
+    # sorts internally by Pinnacle fair prob with positive-edge picks on top.
+    _total_games = sum(len(v) for v in (pinnacle_games_by_sport or {}).values())
+    html(
+        '<div class="board-hero-head">'
+        '<div class="board-title">'
+        '<h2>The Board · Full Slate</h2>'
+        f'<span class="board-count">{_total_games} games · '
+        'ranked by Pinnacle fair prob</span>'
+        '</div>'
+        '<select class="sort-select" disabled title="Agent sorts by positive-edge then Pinnacle fair prob">'
+        '<option>Rank by: Edge % descending (default)</option>'
+        '<option>Rank by: Stake descending</option>'
+        '<option>Rank by: Tier then edge</option>'
+        '<option>Rank by: Kickoff time</option>'
+        '<option>Rank by: Pinnacle fair prob</option>'
+        '</select>'
+        '</div>'
+    )
     kelly_mult = settings.get("agent_kelly") or 0.25
     # Historic agent_min_edge is the AUTO-LOG threshold (picks need to be
     # +EV before they hit the ledger). For the BOARD we show every candidate

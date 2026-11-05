@@ -439,7 +439,7 @@ button[kind="headerDeploy"] { display: none !important; }
    ============================================================= */
 .news-head{
   display:flex; justify-content:space-between; align-items:center;
-  margin: 2px 0 12px;
+  margin: 2px 0 12px; gap:12px; flex-wrap:wrap;
 }
 .news-head .news-title{display:flex; align-items:center; gap:12px}
 .news-head .news-title h2{
@@ -457,6 +457,47 @@ button[kind="headerDeploy"] { display: none !important; }
 .news-head .news-title .count-pill .cdot{
   width:6px; height:6px; border-radius:50%;
   background: var(--accent); box-shadow: 0 0 8px var(--accent);
+}
+.news-head .news-filters{display:flex; gap:6px; flex-wrap:wrap;}
+.news-head .chip-filter{
+  font-family:"JetBrains Mono", monospace; font-size:10.5px;
+  letter-spacing:0.08em; text-transform:uppercase;
+  color: var(--muted); background: var(--chip);
+  border:1px solid var(--rule); border-radius:8px;
+  padding:6px 11px; transition: all 180ms;
+  display:inline-block; white-space:nowrap;
+}
+.news-head .chip-filter.active{
+  color: var(--accent-ink); background: var(--accent);
+  border-color: var(--accent); font-weight:600;
+}
+
+/* Board header (The Board · Full Slate) */
+.board-hero-head{
+  display:flex; justify-content:space-between; align-items:center;
+  margin: 24px 0 14px; gap:12px; flex-wrap:wrap;
+}
+.board-hero-head .board-title{display:flex; align-items:center; gap:12px}
+.board-hero-head .board-title h2{
+  font-family:"Fraunces", serif; font-weight:500; font-size:24px;
+  margin:0; letter-spacing:-0.015em;
+}
+.board-hero-head .board-title .board-count{
+  font-family:"JetBrains Mono", monospace; font-size:10.5px;
+  letter-spacing:0.16em; text-transform:uppercase;
+  color: var(--ink-dim); background: var(--chip);
+  border:1px solid var(--rule-strong);
+  padding:4px 10px; border-radius:999px;
+}
+.board-hero-head .board-title .board-count b{color: var(--accent); font-weight:600;}
+.board-hero-head .sort-select{
+  font-family:"JetBrains Mono", monospace; font-size:11px;
+  letter-spacing:0.06em; color: var(--ink-dim); background: var(--card);
+  border:1px solid var(--rule); border-radius:8px;
+  padding:7px 32px 7px 11px; cursor:pointer; appearance:none;
+  background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'><path d='M1 1l4 4 4-4' stroke='%2310E0A1' stroke-width='1.5' fill='none' stroke-linecap='round'/></svg>");
+  background-repeat:no-repeat; background-position:right 11px center;
+  min-width:220px;
 }
 .bento{
   display:grid; gap:12px;
