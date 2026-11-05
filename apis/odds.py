@@ -315,20 +315,78 @@ def get_scores(sport: str, days_from: int = 1) -> List[dict]:
     return data
 
 
-def consensus_market(game: dict, market_key: str) -> Optional[dict]:
-    """Average odds across bookmakers for one market.
+def _american_to_prob(price: float) -> Optional[float]:
+    try:
+        p = float(price)
+    except (TypeError, ValueError):
+        return None
+    if p >= 100:
+        return 100.0 / (p + 100.0)
+    if p <= -100:
+        return -p / (-p + 100.0)
+    return None
 
-    Returns a dict:
+
+def _prob_to_american(q: float) -> Optional[float]:
+    if q is None or q <= 0 or q >= 1:
+        return None
+    if q >= 0.5:
+        return -round(q / (1 - q) * 100)
+    return round((1 - q) / q * 100)
+
+
+# "Opening line" store: the Odds API plan has no line history, so the honest
+# opener is the first price we saw today for each (game, market). Lives next to
+# the response cache; on Streamlit Cloud it resets with the container, which
+# still gives a correct "since boot" move signal.
+_OPENERS_FILE = os.path.join(_CACHE_DIR, "openers.json")
+_openers_mem: Optional[dict] = None
+
+
+def _openers() -> dict:
+    global _openers_mem
+    if _openers_mem is None:
+        try:
+            with open(_OPENERS_FILE, "r", encoding="utf-8") as f:
+                _openers_mem = json.load(f) or {}
+        except (OSError, json.JSONDecodeError, ValueError):
+            _openers_mem = {}
+        today = time.strftime("%Y-%m-%d")
+        _openers_mem = {k: v for k, v in _openers_mem.items() if k.startswith(today)}
+    return _openers_mem
+
+
+def _record_opener(game_id: str, market_key: str, snap: dict) -> dict:
+    store = _openers()
+    key = f"{time.strftime('%Y-%m-%d')}|{game_id}|{market_key}"
+    if key not in store:
+        store[key] = snap
+        try:
+            os.makedirs(_CACHE_DIR, exist_ok=True)
+            with open(_OPENERS_FILE, "w", encoding="utf-8") as f:
+                json.dump(store, f)
+        except (OSError, TypeError):
+            pass
+    return store[key]
+
+
+def consensus_market(game: dict, market_key: str) -> Optional[dict]:
+    """Price summary for one market of one game.
+
+    Pinnacle is the app's fair reference, so its quote is used when present;
+    otherwise prices are averaged in implied-probability space (averaging
+    American odds arithmetically produces nonsense like -2.5). Points use the
+    same preference. Openers come from the first-seen-today store.
+
+    Returns:
         {
-          "home_price": -115,  # average American price for home side
-          "away_price": +105,
-          "home_point": -3.5,  # (for spreads/totals; None for h2h)
-          "away_point": +3.5,
+          "home_price": -115, "away_price": +105,          # American, |p| >= 100
+          "home_point": -3.5, "away_point": +3.5,          # None for h2h
           "book_count": 7,
-          "home_opener": -108,  # best approximation of opening line
-          "away_opener": +100,
-          "best_home": (-105, "DraftKings"),  # best shop for home
-          "best_away": (+112, "FanDuel"),
+          "home_opener": -108, "away_opener": +100,        # first seen today
+          "home_point_opener": -3.0, "away_point_opener": +3.0,
+          "best_home": (-105, "DraftKings"), "best_away": (+112, "FanDuel"),
+          "source": "pinnacle" | "consensus",
         }
     """
     if not game or not isinstance(game, dict):
@@ -342,58 +400,79 @@ def consensus_market(game: dict, market_key: str) -> Optional[dict]:
     home_prices, away_prices = [], []
     home_points, away_points = [], []
     best_home, best_away = None, None
-    openers_home, openers_away = [], []  # first-seen per book, best proxy for opener
+    pin = {}
 
     for b in books:
         bname = b.get("title") or b.get("key") or ""
+        is_pin = (b.get("key") or "").lower() == "pinnacle"
         for m in (b.get("markets") or []):
             if m.get("key") != market_key:
                 continue
-            outcomes = m.get("outcomes") or []
-            for o in outcomes:
+            for o in (m.get("outcomes") or []):
                 name = o.get("name")
-                price = o.get("price")
-                point = o.get("point")
-                if price is None:
-                    continue
                 try:
-                    price = float(price)
+                    price = float(o.get("price"))
                 except (TypeError, ValueError):
                     continue
-                is_home = name == home_team
-                is_away = name == away_team
-                if is_home:
+                if abs(price) < 100:
+                    continue
+                point = o.get("point")
+                try:
+                    point = float(point) if point is not None else None
+                except (TypeError, ValueError):
+                    point = None
+                # Totals outcomes are "Over"/"Under", not team names: Over rides
+                # the home slot, Under the away slot (tiles print home_point as
+                # the O/U line).
+                if market_key == "totals":
+                    nm = (name or "").lower()
+                    name = home_team if nm == "over" else (away_team if nm == "under" else name)
+                if name == home_team:
+                    side = "home"
                     home_prices.append(price)
                     if point is not None:
-                        home_points.append(float(point))
-                    openers_home.append(price)
+                        home_points.append(point)
                     if best_home is None or price > best_home[0]:
                         best_home = (price, bname)
-                elif is_away:
+                elif name == away_team:
+                    side = "away"
                     away_prices.append(price)
                     if point is not None:
-                        away_points.append(float(point))
-                    openers_away.append(price)
+                        away_points.append(point)
                     if best_away is None or price > best_away[0]:
                         best_away = (price, bname)
+                else:
+                    continue
+                if is_pin:
+                    pin[f"{side}_price"] = price
+                    pin[f"{side}_point"] = point
 
     if not home_prices and not away_prices:
         return None
 
-    def _avg(xs):
+    def _avg_price(xs):
+        probs = [q for q in (_american_to_prob(x) for x in xs) if q is not None]
+        return _prob_to_american(sum(probs) / len(probs)) if probs else None
+
+    def _avg_point(xs):
         return (sum(xs) / len(xs)) if xs else None
 
-    return {
-        "home_price": _avg(home_prices),
-        "away_price": _avg(away_prices),
-        "home_point": _avg(home_points),
-        "away_point": _avg(away_points),
+    out = {
+        "home_price": pin.get("home_price") if pin.get("home_price") is not None else _avg_price(home_prices),
+        "away_price": pin.get("away_price") if pin.get("away_price") is not None else _avg_price(away_prices),
+        "home_point": pin.get("home_point") if pin.get("home_point") is not None else _avg_point(home_points),
+        "away_point": pin.get("away_point") if pin.get("away_point") is not None else _avg_point(away_points),
         "book_count": max(len(home_prices), len(away_prices)),
-        # Opening line = median of first-listed-per-book is a rough proxy;
-        # Odds API free tier doesn't expose true opener - we use min(home_prices)
-        # for favorites, which captures the direction most books moved from.
-        "home_opener": min(openers_home) if openers_home else None,
-        "away_opener": min(openers_away) if openers_away else None,
         "best_home": best_home,
         "best_away": best_away,
+        "source": "pinnacle" if pin else "consensus",
     }
+    opener = _record_opener(str(game.get("id") or f"{away_team}@{home_team}"), market_key, {
+        "home_price": out["home_price"], "away_price": out["away_price"],
+        "home_point": out["home_point"], "away_point": out["away_point"],
+    })
+    out["home_opener"] = opener.get("home_price")
+    out["away_opener"] = opener.get("away_price")
+    out["home_point_opener"] = opener.get("home_point")
+    out["away_point_opener"] = opener.get("away_point")
+    return out

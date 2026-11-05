@@ -613,8 +613,10 @@ def _fmt_point(v) -> str:
 
 
 def _fmt_price(v) -> str:
-    """American price → whole number with explicit sign, e.g. +130, -140."""
-    if not isinstance(v, (int, float)):
+    """American price → whole number with explicit sign, e.g. +130, -140.
+    Anything inside (-100, 100) is not a valid American price; refuse it so a
+    bad upstream average can never reach a tile."""
+    if not isinstance(v, (int, float)) or abs(float(v)) < 100:
         return ""
     return f"{int(round(float(v))):+d}"
 
@@ -652,25 +654,44 @@ def _validate_tile(item: dict, merged: list, size: str) -> dict:
     the renderer can drop in, OR {} when the tile can't be rendered cleanly.
     Rejection reason is attached to the empty dict as ['_drop_reason'] for
     the server-side drop log."""
-    # Image — hard requirement.
-    image_kind, image_data = _resolve_tile_image(item)
-    if image_kind is None:
-        return {"_drop_reason": "no_image"}
-    # Teams on the ITEM (we'll still render tiles for non-team news only if
-    # they're not sized mid/wide; featured/mid/wide all need teams).
-    teams = item.get("teams") or []
-    if not teams:
+    # Team tags on the item are only used to find the slate game.
+    if not (item.get("teams") or []):
         return {"_drop_reason": "no_teams"}
-    # League (sport_key) — required for the meta line and team-chip color map.
     if not (item.get("sport_key") or "").strip():
         return {"_drop_reason": "no_league"}
-    # Matched slate game — needed for start-time, status check, and market lines.
+    # Matched slate game — the source of truth for teams, logos, start time,
+    # status and market lines. Rendering from the item's own tags is what
+    # produced "DUKE at DUKE" chips next to another game's lines.
     matched_ev, matched_meta = _match_item_to_slate(item, merged)
     if matched_ev is None:
         return {"_drop_reason": "no_slate_match_or_finished"}
+    away = matched_ev.get("away") or {}
+    home = matched_ev.get("home") or {}
+    away_abbr = (away.get("abbr") or "").upper()
+    home_abbr = (home.get("abbr") or "").upper()
+    if not away_abbr or not home_abbr or away_abbr == home_abbr:
+        return {"_drop_reason": "bad_game_teams"}
+    game_teams = [
+        {"abbr": away_abbr, "name": away.get("name") or "", "logo": (away.get("logo") or "").strip()},
+        {"abbr": home_abbr, "name": home.get("name") or "", "logo": (home.get("logo") or "").strip()},
+    ]
     start_ct = _ct_time_label(matched_ev)
     if not start_ct:
         return {"_drop_reason": "no_start_time"}
+    # Image: athlete headshot first, else the matched game's two ESPN logos
+    # (scoreboard logo URLs are real for every league, college included).
+    headshot = ((item.get("athlete") or {}).get("headshot") or "").strip()
+    if headshot:
+        image_kind, image_data = "portrait", {"src": headshot}
+    elif game_teams[0]["logo"] and game_teams[1]["logo"]:
+        image_kind, image_data = "duo", {
+            "l1": game_teams[0]["logo"], "l2": game_teams[1]["logo"],
+            "a1": away_abbr, "a2": home_abbr,
+        }
+    else:
+        image_kind, image_data = _resolve_tile_image(item)
+        if image_kind is None:
+            return {"_drop_reason": "no_image"}
     # Featured needs the full 4-cell matrix; mid/wide need market-tail numbers.
     matrix_html = ""
     market_tail = ""
@@ -687,6 +708,8 @@ def _validate_tile(item: dict, merged: list, size: str) -> dict:
         "image_data": image_data,
         "matched_ev": matched_ev,
         "matched_meta": matched_meta,
+        "teams": game_teams,
+        "sport_key": (matched_ev.get("sport") or matched_ev.get("sport_key") or item.get("sport_key") or ""),
         "start_ct": start_ct,
         "matrix_html": matrix_html,
         "market_tail": market_tail,
@@ -706,8 +729,10 @@ def _render_news_tile(item: dict, size: str = "mid", validated: dict = None) -> 
     raw_snippet = item.get("snippet", "") or ""
     snip_limit = 260 if size == "featured" else 140
     snippet = _esc(_trunc_words(raw_snippet, snip_limit))
-    teams = item.get("teams") or []
-    league_key = (item.get("sport_key") or "").lower()
+    # Teams and league come from the matched slate game (validator), never
+    # from the story's own tags, so chips, colors and lines describe one game.
+    teams = v.get("teams") or item.get("teams") or []
+    league_key = (v.get("sport_key") or item.get("sport_key") or "").lower()
     # Weather / line-move tiles get the mockup's exact palette. Team-colored
     # tiles derive c1/c2 from the primary team.
     if sev == "weather":
@@ -849,19 +874,19 @@ def _render_line_moves_ticker(merged: list, top_picks: list = None) -> str:
         h2h = om.get("h2h") or {}
         open_v = cur_v = None
         tail = ""
-        if spr.get("home_opener") is not None and spr.get("home_price") is not None:
-            # Spread moves are tracked in POINTS (the number hanging off the chip).
-            # Score the move magnitude in points.
+        # Spread and total moves are measured in POINTS only; a price opener
+        # must never be paired with a point (that printed "-175 → -1.94").
+        if spr.get("home_point_opener") is not None and spr.get("home_point") is not None:
             try:
-                open_v = float(spr.get("home_point_opener") or spr.get("home_opener"))
-                cur_v = float(spr.get("home_point") or spr.get("home_price"))
+                open_v = float(spr.get("home_point_opener"))
+                cur_v = float(spr.get("home_point"))
                 tail = ""
             except (TypeError, ValueError):
                 open_v = cur_v = None
-        if open_v is None and tot.get("home_opener") is not None and tot.get("home_price") is not None:
+        if open_v is None and tot.get("home_point_opener") is not None and tot.get("home_point") is not None:
             try:
-                open_v = float(tot.get("home_point_opener") or tot.get("home_opener"))
-                cur_v = float(tot.get("home_point") or tot.get("home_price"))
+                open_v = float(tot.get("home_point_opener"))
+                cur_v = float(tot.get("home_point"))
                 tail = " O/U"
             except (TypeError, ValueError):
                 open_v = cur_v = None
@@ -968,12 +993,16 @@ def _slate_relevance_score(item: dict, slate_terms: set, slate_sports: set) -> i
       2 = headline/snippet mentions a slate team name (≥3 chars)
       1 = the item's sport_key is one of the slate sports
       0 = otherwise (sorted to the back; usually dropped by relevance filter)"""
-    # Direct team metadata match — strongest signal.
+    # Direct team metadata match — strongest signal. A story tagged with both
+    # teams of a slate game (a true preview) outranks a single-team mention.
+    hits = 0
     for t in item.get("teams") or []:
-        for key in ("abbr", "name"):
-            v = (t.get(key) or "").strip().lower()
-            if v and v in slate_terms:
-                return 3
+        if any((t.get(k) or "").strip().lower() in slate_terms for k in ("abbr", "name") if t.get(k)):
+            hits += 1
+    if hits >= 2:
+        return 4
+    if hits == 1:
+        return 3
     text = f"{item.get('headline') or ''} {item.get('snippet') or ''}".lower()
     for term in slate_terms:
         if len(term) >= 3 and term in text:
