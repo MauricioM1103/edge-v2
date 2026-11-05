@@ -814,26 +814,34 @@ button[kind="headerDeploy"] { display: none !important; }
    Motion path is used on purpose: @property registration does not take
    effect inside Streamlit's injected <style>, so a custom-angle conic
    animation never runs there. */
+/* The Board is thousands of px tall, so the ring the light travels is the
+   VISIBLE part of the Board: a sticky, zero-height carrier holds a
+   viewport-tall frame that follows the scroll. (.board-wrap uses
+   overflow:clip rather than hidden so sticky still tracks the window.) */
 .board-wrap .beam{
-  position:absolute; inset:0; border-radius:inherit; overflow:hidden;
+  position:sticky; top:0; height:0; display:block;
   opacity:0; pointer-events:none; z-index:5;
   transition: opacity .25s ease;
 }
-.board-wrap .beam::before{
+.board-wrap .beam i{
+  position:absolute; left:0; right:0; top:0; height:100vh;
+  border-radius:14px; overflow:hidden; display:block;
+}
+.board-wrap .beam i::before{
   content:""; position:absolute; top:0; left:0;
-  width:220px; height:3px; border-radius:3px;
+  width:240px; height:4px; border-radius:4px;
   background: linear-gradient(90deg,
     transparent 0%,
     color-mix(in oklab, var(--accent) 55%, transparent) 45%,
     var(--accent) 80%, #ffffff 100%);
-  box-shadow: 0 0 8px var(--accent), 0 0 20px color-mix(in oklab, var(--accent) 70%, transparent);
+  box-shadow: 0 0 8px var(--accent), 0 0 22px color-mix(in oklab, var(--accent) 70%, transparent);
   offset-path: inset(1px round 14px);
   offset-rotate: auto;
   offset-distance: 0%;
 }
 .stApp[data-test-script-state="running"] .board-wrap .beam{opacity:1;}
-.stApp[data-test-script-state="running"] .board-wrap .beam::before{
-  animation: beam-travel 3s linear infinite;
+.stApp[data-test-script-state="running"] .board-wrap .beam i::before{
+  animation: beam-travel 2.6s linear infinite;
 }
 @keyframes beam-travel{to{offset-distance:100%;}}
 /* Header pill that only shows while the script is running. */
@@ -852,7 +860,7 @@ button[kind="headerDeploy"] { display: none !important; }
 .board-wrap{
   position:relative;
   background: var(--card); border:1px solid var(--rule);
-  border-radius:14px; overflow:hidden;
+  border-radius:14px; overflow:clip;
   box-shadow: var(--card-shadow);
   margin-top: 6px;
 }
