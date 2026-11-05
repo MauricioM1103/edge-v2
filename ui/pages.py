@@ -518,32 +518,54 @@ def _build_featured_matrix(item: dict, merged: list) -> str:
     away_abbr = ((ev.get("away") or {}).get("abbr") or "AWAY").upper()
     home_abbr = ((ev.get("home") or {}).get("abbr") or "HOME").upper()
 
-    def _pair(cur_v, open_v=None, is_price=False):
-        """Format as 'open → current' when both exist and differ, single value
-        otherwise. is_price=True adds the '+' sign to positive American prices
-        so '+185' reads right next to '-110'."""
+    def _pair_point(cur_v, open_v=None):
+        """Format spread/total points with sign and 0.5 snap."""
         if cur_v is None:
             return None
-        fmt = (lambda x: f"{x:+g}") if is_price else (lambda x: f"{x:g}")
-        if isinstance(cur_v, (int, float)):
-            cur_s = fmt(cur_v)
-        else:
-            cur_s = str(cur_v)
-        if open_v is None or open_v == cur_v:
+        cur_s = _fmt_point(cur_v)
+        if not cur_s:
+            return None
+        if open_v is None:
             return cur_s
-        if isinstance(open_v, (int, float)):
-            open_s = fmt(open_v)
-        else:
-            open_s = str(open_v)
+        open_s = _fmt_point(open_v)
+        if not open_s or open_s == cur_s:
+            return cur_s
+        return f"{open_s} → {cur_s}"
+
+    def _pair_total(cur_v, open_v=None):
+        """Totals never carry signs — "45.5" not "+45.5"."""
+        if not isinstance(cur_v, (int, float)):
+            return None
+        snapped = round(float(cur_v) * 2) / 2
+        cur_s = f"{snapped:g}"
+        if open_v is None:
+            return cur_s
+        if not isinstance(open_v, (int, float)):
+            return cur_s
+        open_snapped = round(float(open_v) * 2) / 2
+        if open_snapped == snapped:
+            return cur_s
+        return f"{open_snapped:g} → {cur_s}"
+
+    def _pair_price(cur_v, open_v=None):
+        """American moneyline as whole-number integer with sign."""
+        cur_s = _fmt_price(cur_v)
+        if not cur_s:
+            return None
+        if open_v is None:
+            return cur_s
+        open_s = _fmt_price(open_v)
+        if not open_s or open_s == cur_s:
+            return cur_s
         return f"{open_s} → {cur_s}"
 
     # Spread/Total cells show the POINT (handicap/line), not the juice price.
     # ML cells show the American moneyline price on each side.
     cells = [
-        ("Spread", _pair(spr.get("home_point"), is_price=True), "accent"),
-        ("Total",  _pair(tot.get("home_point")), ""),
-        (f"{away_abbr} ML", _pair(h2h.get("away_price"), h2h.get("away_opener"), is_price=True), ""),
-        (f"{home_abbr} ML", _pair(h2h.get("home_price"), h2h.get("home_opener"), is_price=True), ""),
+        ("Spread", _pair_point(spr.get("home_point")), "accent"),
+        ("Total",  _pair_total(tot.get("home_point")), ""),
+        (f"{away_abbr} ML", _pair_price(h2h.get("away_price"), h2h.get("away_opener")), ""),
+        (f"{home_abbr} ML", _pair_price(h2h.get("home_price"), h2h.get("home_opener")), ""),
     ]
     # Spec §4: every cell must have real data; else drop the tile.
     if any(v is None for _k, v, _c in cells):
@@ -568,6 +590,25 @@ def _build_featured_matrix(item: dict, merged: list) -> str:
     return f'<div class="matrix">{inner}</div>'
 
 
+def _fmt_point(v) -> str:
+    """Format a spread/total point as a 1-decimal number, e.g. -2.5, 224.5.
+    Averages from consensus_market can be ugly floats like -1.38462; rounding
+    to a half-point is the right level of precision for how bettors read a line."""
+    if not isinstance(v, (int, float)):
+        return ""
+    # Snap to the nearest 0.5 (standard betting line granularity) then strip
+    # trailing zeros for whole-number lines like "45" vs "45.0".
+    snapped = round(float(v) * 2) / 2
+    return f"{snapped:+g}" if snapped != 0 else "0"
+
+
+def _fmt_price(v) -> str:
+    """American price → whole number with explicit sign, e.g. +130, -140."""
+    if not isinstance(v, (int, float)):
+        return ""
+    return f"{int(round(float(v))):+d}"
+
+
 def _market_tail_for(ev: dict, meta: dict) -> str:
     """Compact market-lines tail for mid/wide tile foot (spec §4). Format:
     '· HOME -2.5 · O 44.5 · ML -140' — pulls whatever the odds cache has.
@@ -580,19 +621,19 @@ def _market_tail_for(ev: dict, meta: dict) -> str:
     tot = meta.get("totals") or {}
     h2h = meta.get("h2h") or {}
     parts = []
-    # Spread: show the HANDICAP (point), not the juice price. "ATL -2.5"
-    # reads instantly; "ATL -115" would be confusing in a foot line.
-    sp_pt = spr.get("home_point")
-    if isinstance(sp_pt, (int, float)):
-        parts.append(f"· {home_abbr} {sp_pt:+g}")
-    # Total: show the O/U line (point), not price.
+    # Spread: show the HANDICAP (point), not the juice price.
+    sp_pt_s = _fmt_point(spr.get("home_point"))
+    if sp_pt_s:
+        parts.append(f"· {home_abbr} {sp_pt_s}")
+    # Total: show the O/U line (point), always positive.
     tot_pt = tot.get("home_point")
     if isinstance(tot_pt, (int, float)):
-        parts.append(f"· O {tot_pt:g}")
-    # Moneyline: show the American price on the home side as a bonus signal.
-    h2h_price = h2h.get("home_price")
-    if isinstance(h2h_price, (int, float)):
-        parts.append(f"· ML {h2h_price:+g}")
+        _rt = round(float(tot_pt) * 2) / 2
+        parts.append(f"· O {_rt:g}")
+    # Moneyline: whole-number American price on the home side.
+    ml_s = _fmt_price(h2h.get("home_price"))
+    if ml_s:
+        parts.append(f"· ML {ml_s}")
     return " ".join(parts)
 
 
