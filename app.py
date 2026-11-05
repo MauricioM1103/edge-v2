@@ -139,6 +139,21 @@ def _sidebar_settings() -> dict:
             index=0,
             key="sb_primary_book",
         )
+        # ----- BOARD BOOK FILTER (sets what the "Best Book" column shows) -----
+        # Default: Kalshi. Picks that don't have a Kalshi market fall back to the
+        # shop-best price so no row shows an empty cell. "Best book" is the
+        # legacy behavior (whichever offshore book has the longest price).
+        board_book_mode = st.radio(
+            "Board · Best Book column",
+            options=["kalshi", "best"],
+            format_func=lambda v: {"kalshi": "Kalshi (default)", "best": "Best Book (shop)"}[v],
+            index=["kalshi", "best"].index(saved.get("board_book_mode", "kalshi")),
+            horizontal=True, key="sb_board_book_mode",
+            help="'Kalshi' shows the Kalshi price on every row, with a shop fallback for "
+                 "markets Kalshi doesn't have. 'Best Book' shows whichever book had the longest price.",
+        )
+        if board_book_mode != saved.get("board_book_mode", "kalshi"):
+            settings_store.save({"board_book_mode": board_book_mode})
         # Default: show ONLY Kalshi in the prob-strip. Toggle others on explicitly.
         extra_sources = st.multiselect(
             "Also show in implied-prob strip",
@@ -250,6 +265,7 @@ def _sidebar_settings() -> dict:
         "kalshi_cash": kalshi_cash,
         "kalshi_source": kalshi_source,
         "primary_book": primary_book,
+        "board_book_mode": board_book_mode,
         "extra_sources": extra_sources,
         "fallback_book": saved.get("fallback_book", "DraftKings"),
         "agent_kelly": agent_kelly,

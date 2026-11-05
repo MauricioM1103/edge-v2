@@ -261,8 +261,23 @@ def _tile_bg_colors(teams: list) -> tuple:
     return ("#131F35", "#0a1220")
 
 
+_ESPN_LEAGUE_LOGO = "https://a.espncdn.com/i/teamlogos/leagues/500/{slug}.png"
+# Sport_key → ESPN's league-logo slug. Falls back to the sport_key itself for
+# soccer regions (ESPN keeps those in /soccer/ assets).
+_LEAGUE_LOGO_SLUG = {
+    "nfl": "nfl", "nba": "nba", "mlb": "mlb", "nhl": "nhl",
+    "ncaaf": "ncaa", "ncaab": "ncaa", "ncaaw": "ncaa", "wnba": "wnba",
+    "mls": "mls", "epl": "eng.1", "la_liga": "esp.1",
+    "bundesliga": "ger.1", "serie_a": "ita.1", "ligue_1": "fra.1",
+    "ucl": "uefa.champions", "uel": "uefa.europa", "nwsl": "nwsl",
+    "liga_mx": "mex.1", "ufc": "ufc", "pga": "pga", "atp": "atp", "wta": "wta",
+}
+
+
 def _render_news_tile(item: dict, size: str = "mid") -> str:
-    """Return the HTML for one bento tile. `size` ∈ {featured, mid, wide}."""
+    """Return the HTML for one bento tile. `size` ∈ {featured, mid, wide}.
+    EVERY tile gets an image: headshot → two-team logos → one-team logo →
+    league logo. No empty-image tiles reach the UI."""
     sev = (item.get("severity") or "news").lower()
     rel = _relative_time(item.get("published", ""))
     headline = _esc(item.get("headline", ""))
@@ -272,7 +287,7 @@ def _render_news_tile(item: dict, size: str = "mid") -> str:
     c1, c2 = _tile_bg_colors(teams)
     team_color = c1  # left accent bar
 
-    # Portrait: prefer athlete headshot; else fall back to the two team logos composition.
+    # Image fallback chain — guaranteed to produce something.
     portrait_html = ""
     logos_html = ""
     if athlete.get("headshot"):
@@ -290,6 +305,14 @@ def _render_news_tile(item: dict, size: str = "mid") -> str:
     elif len(teams) == 1:
         l1 = _esc(teams[0].get("logo") or "")
         logos_html = f'<div class="team-logos"><img src="{l1}" alt="{_esc(teams[0].get("abbr") or "")}"></div>'
+    else:
+        # Final fallback: ESPN's league logo at the sport level so the tile
+        # NEVER renders without an image. Sized smaller than a team-logo
+        # composition since it's a single symbolic mark.
+        slug = _LEAGUE_LOGO_SLUG.get((item.get("sport_key") or "").lower())
+        if slug:
+            logo = _ESPN_LEAGUE_LOGO.format(slug=slug)
+            logos_html = f'<div class="team-logos league"><img src="{logo}" alt="{_esc(item.get("sport_key") or "")}"></div>'
 
     team_chips = "".join(
         f'<span class="chip" style="background:{_esc(t.get("color") and "#" + t["color"] or "var(--chip)")}; color:#fff; font-size:10px; padding:2px 7px; font-family:JetBrains Mono,monospace; font-weight:700;">{_esc(t.get("abbr") or "")}</span>'
@@ -324,15 +347,49 @@ def _render_news_tile(item: dict, size: str = "mid") -> str:
     )
 
 
-def _render_line_moves_ticker(merged: list) -> str:
-    """Build a horizontally scrolling ticker of recent line movers.
-    Falls back to a static set of today's matchups if no movement data is loaded."""
+def _render_line_moves_ticker(merged: list, top_picks: list = None) -> str:
+    """Build a horizontally scrolling ticker of real agent signals.
+    Sources, in priority order:
+      1. Top picks' edges (real +EV signal, not a fake LIVE label)
+      2. Fall back to today's matchups when there are no qualifying picks
+    Returns "" (no ticker) when there's literally nothing to show."""
     items: list = []
-    for ev, _odds, _exch in (merged or [])[:12]:
-        home = (ev.get("home") or {}).get("abbr") or (ev.get("home") or {}).get("name") or ""
-        away = (ev.get("away") or {}).get("abbr") or (ev.get("away") or {}).get("name") or ""
-        if home and away:
-            items.append(f'<span class="item"><span class="matchup">{_esc(away)}–{_esc(home)}</span> <span class="pm">LIVE</span></span>')
+    picks = top_picks or []
+    # Prefer real agent signal: pick, edge, best price. Up/down arrow by edge sign.
+    for e in picks[:14]:
+        edge_val = float(e.get("edge") or 0)
+        if edge_val == 0:
+            continue
+        matchup = (e.get("matchup") or "").replace(" at ", "–").replace(" vs ", "–")
+        # Compress long team names to abbr-style (first word of each side).
+        if "–" in matchup:
+            a, b = matchup.split("–", 1)
+            matchup = f"{a.strip().split()[-1][:5]}–{b.strip().split()[-1][:5]}".upper()
+        else:
+            matchup = matchup[:12].upper()
+        arrow_cls = "up" if edge_val > 0 else "dn"
+        arrow = "↑" if edge_val > 0 else "↓"
+        items.append(
+            f'<span class="item">'
+            f'<span class="matchup">{_esc(matchup)}</span> '
+            f'<span class="{arrow_cls}">{arrow} {edge_val*100:+.1f}%</span>'
+            f'</span>'
+        )
+    # Backfill with today's matchups when the agent returned few/no picks, so
+    # the ticker still carries real information (not empty space).
+    if len(items) < 6:
+        seen = set()
+        for ev, _odds, _exch in (merged or [])[:12]:
+            home = (ev.get("home") or {}).get("abbr") or ""
+            away = (ev.get("away") or {}).get("abbr") or ""
+            if home and away and (away, home) not in seen:
+                seen.add((away, home))
+                items.append(
+                    f'<span class="item"><span class="matchup">{_esc(away)}–{_esc(home)}</span>'
+                    f'<span class="pm">on slate</span></span>'
+                )
+                if len(items) >= 10:
+                    break
     if not items:
         return ""
     # Double the list for the seamless scroll loop.
@@ -345,10 +402,48 @@ def _render_line_moves_ticker(merged: list) -> str:
     )
 
 
+def _teams_in_slate(merged: list) -> set:
+    """Extract every team name/abbr involved in today's slate so we can filter
+    the ESPN news feed to items that touch at least one of them."""
+    out = set()
+    for ev, _odds, _exch in (merged or []):
+        for side in ("home", "away"):
+            info = ev.get(side) or {}
+            for key in ("name", "abbr", "shortDisplayName", "displayName"):
+                v = info.get(key)
+                if v:
+                    out.add(str(v).strip().lower())
+    return out
+
+
+def _news_is_relevant(item: dict, slate_terms: set) -> bool:
+    """True when the news headline/snippet mentions any team on tonight's slate,
+    OR the news item itself carries a team.abbr that's on the slate."""
+    # 1. Team metadata on the item
+    for t in item.get("teams") or []:
+        for key in ("abbr", "name"):
+            v = (t.get(key) or "").strip().lower()
+            if v and v in slate_terms:
+                return True
+    # 2. Term match in the headline (cheap and effective — team names are the
+    # highest-signal tokens in sports headlines).
+    text = f"{item.get('headline') or ''} {item.get('snippet') or ''}".lower()
+    for term in slate_terms:
+        # Require at least 3 chars to avoid matching generic 2-letter abbrs
+        # in words like "at" or "vs".
+        if len(term) >= 3 and term in text:
+            return True
+    return False
+
+
 def _render_breaking_news(sports_list: list, merged: list):
     """The Breaking News hero: 1 featured + up to 5 smaller tiles + ticker.
-    Renders a compact empty-state card if ESPN returns nothing."""
-    news = load_news_for_sports(tuple(sports_list), per_sport=6) or []
+    Filters ESPN news to items relevant to the current slate, falls back
+    to a compact empty-state card when nothing qualifies."""
+    raw_news = load_news_for_sports(tuple(sports_list), per_sport=10) or []
+    slate_terms = _teams_in_slate(merged)
+    # Severity first (injuries/weather/line > plain news), then recency.
+    news = [n for n in raw_news if _news_is_relevant(n, slate_terms)] if slate_terms else raw_news
     # Filter chips — All / Injuries / Weather / Line Moves + up to 2 league chips
     # sourced from the current board filter so they reflect what's on screen.
     league_chips = "".join(
@@ -383,7 +478,11 @@ def _render_breaking_news(sports_list: list, merged: list):
     for i, item in enumerate(ranked[:6]):
         size = "featured" if i == 0 else ("mid" if i in (1, 2) else "wide")
         tiles.append(_render_news_tile(item, size=size))
-    tiles.append(_render_line_moves_ticker(merged))
+    # Ticker pulls the previous render's top_picks from session_state so each
+    # rerun shows real agent signals (first page load = matchup fallback until
+    # the agent runs, every subsequent load = real edge arrows).
+    _prev_top = st.session_state.get("_board_top_picks") or []
+    tiles.append(_render_line_moves_ticker(merged, top_picks=_prev_top))
     html(f'<section class="bento">{"".join(tiles)}</section>')
 
 
@@ -1285,13 +1384,42 @@ def _render_agent_panel(odds_games, kalshi_cash, settings,
                 pass
         return (e.get("_sport") or "").upper() or "—"
 
+    # Book-column mode: "kalshi" shows the Kalshi price everywhere (with a
+    # shop fallback for markets Kalshi doesn't list), "best" shows whichever
+    # shop book had the longest price. Chosen in the sidebar.
+    board_book_mode = (settings.get("board_book_mode") or "kalshi")
+
+    def _kalshi_cents_to_american(cents) -> str:
+        """Convert a Kalshi YES price (0–100 cents) to American odds notation."""
+        try:
+            p = max(0.01, min(0.99, float(cents) / 100.0))
+        except (TypeError, ValueError):
+            return "—"
+        if p >= 0.5:
+            return f"-{round(100 * p / (1 - p))}"
+        return f"+{round(100 * (1 - p) / p)}"
+
+    def _book_cell_for(e: dict) -> tuple:
+        """Return (book_cell_html, price_display, price_american_or_none)
+        honoring the sidebar book-mode choice. Falls back to shop book when
+        Kalshi has no market for this edge."""
+        kcents = e.get("kalshi_price_cents")
+        if board_book_mode == "kalshi" and kcents is not None:
+            price_disp = _kalshi_cents_to_american(kcents)
+            cell = f'<span style="color:var(--accent); font-weight:600;">Kalshi</span> <span class="n">{price_disp}</span> <span style="color:var(--muted); font-size:10.5px;">({int(kcents)}¢)</span>'
+            return (cell, price_disp)
+        # best-book fallback (always used in "best" mode, and in "kalshi" mode
+        # whenever Kalshi doesn't have the market)
+        best_book = _esc_row(e.get("book", "?"))
+        best_price = format_american(e.get("price"))
+        return (f'{best_book} <span class="n">{best_price}</span>', best_price)
+
     def _row(e, highlight: bool = False, rank: int = 0):
         edge_val = float(e.get("edge") or 0)
         edge_pct = edge_val * 100.0
         fair_pct = float(e.get("fair_prob") or 0) * 100.0
         side_label = _esc_row(e.get("side_label", ""))
-        best_book = _esc_row(e.get("book", "?"))
-        best_price = format_american(e.get("price"))
+        book_cell_html, price_disp = _book_cell_for(e)
         stake_u = _to_units(e.get("stake_dollars") or 0)
         stake_d = float(e.get("stake_dollars") or 0)
         is_settled = (e.get("status_state") == "post") or (e.get("grade") in ("win", "loss", "push"))
@@ -1312,8 +1440,8 @@ def _render_agent_panel(odds_games, kalshi_cash, settings,
             f'</td>'
             f'<td><div class="side-cell"><span class="mkt">{_esc_row(market_label)}</span>'
             f'<span class="pick">{side_label}</span></div></td>'
-            f'<td class="book-cell">{best_book} <span class="n">{best_price}</span></td>'
-            f'<td class="num-cell">{best_price}</td>'
+            f'<td class="book-cell">{book_cell_html}</td>'
+            f'<td class="num-cell">{price_disp}</td>'
             f'<td class="num-cell {fair_cls}">{fair_pct:.1f}%</td>'
             f'<td class="num-cell {edge_cls}">{edge_pct:+.1f}%</td>'
             f'<td><div class="stake-cell"><span class="{stake_classes}">{stake_value}</span>'
@@ -1322,13 +1450,14 @@ def _render_agent_panel(odds_games, kalshi_cash, settings,
             '</tr>'
         )
 
+    _book_col_label = "Kalshi Book" if board_book_mode == "kalshi" else "Best Book"
     header = (
         '<thead><tr>'
         '<th>#</th>'
         '<th>Tier</th>'
         '<th>Matchup · Start</th>'
         '<th>Side · Market</th>'
-        '<th>Best Book</th>'
+        f'<th>{_book_col_label}</th>'
         '<th class="num">Price</th>'
         '<th class="num">Fair %</th>'
         '<th class="num">Edge</th>'

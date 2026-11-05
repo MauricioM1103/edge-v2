@@ -561,6 +561,7 @@ button[kind="headerDeploy"] { display: none !important; }
   filter: drop-shadow(0 4px 14px rgba(0,0,0,.5));
 }
 .news-tile .team-logos img{width:92px; height:92px; object-fit:contain;}
+.news-tile .team-logos.league img{width:120px; height:120px; opacity:.85;}
 .news-tile .team-logos .vs{
   font-family:"Fraunces", serif; font-style:italic;
   font-size:22px; color: rgba(255,255,255,.4);
