@@ -350,14 +350,20 @@ import re as _re
 _SEV_PATTERNS = {
     "out": _re.compile(
         r"\b("
-        r"ruled\s+out|out\s+(?:for\s+(?:the\s+)?(?:season|year|game|week|month)|indefinitely|tonight)|"
-        r"out\s+\d+\s+(?:weeks|games|months)|"
-        r"sidelined|placed\s+on\s+(?:ir|injured\s+reserve|il)|carted\s+off|"
-        r"will\s+miss\s+(?:the\s+)?(?:game|start|season|year|match|rest|remainder|week)|"
-        r"won'?t\s+play|"
-        r"season-?ending|tears?\s+(?:his\s+)?acl|torn\s+(?:acl|mcl|achilles)|"
-        r"suspended\s+\d+\s+(?:games|weeks|matches)"
-        r")\b",
+        # Explicit injury/availability phrasing only — no bare "season-ending",
+        # no bare "benched", no bare "will miss" (ceremonies/retirements/birth-of-baby
+        # kept firing the old regex).
+        r"ruled\s+out\s+(?:of\s+|for\s+|with\s+|tonight|today|against)|"
+        r"ruled\s+out,"
+        r"|out\s+(?:for\s+(?:the\s+)?(?:season|year|game|week|month|rest)|indefinitely|tonight\s+with|today\s+with)"
+        r"|placed\s+on\s+(?:ir|injured\s+reserve|il)"
+        r"|carted\s+off|sidelined\s+with"
+        r"|will\s+miss\s+(?:the\s+)?(?:game|start|season|year|match|rest|remainder|week|tonight|opener)"
+        r"|won'?t\s+play\s+(?:tonight|today|against|vs|this\s+week)"
+        r"|tears?\s+(?:his\s+)?(?:acl|mcl|achilles)"
+        r"|torn\s+(?:acl|mcl|achilles)"
+        r"|suspended\s+\d+\s+(?:games|weeks|matches)"
+        r")",
         _re.I,
     ),
     "gtd": _re.compile(

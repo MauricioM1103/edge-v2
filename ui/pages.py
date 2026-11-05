@@ -215,9 +215,10 @@ def _merge_events_with_odds(
 # Breaking News hero — bento-grid of ESPN news/injuries scoped to today's sports.
 # ============================================================================
 
-@st.cache_data(ttl=300, show_spinner=False)
+@st.cache_data(ttl=90, show_spinner=False)
 def load_news_for_sports(sports_tuple: tuple, per_sport: int = 6):
-    """Cached ESPN news fetch. 5-min TTL; aggregated newest-first."""
+    """Cached ESPN news fetch. 90s TTL so classifier changes propagate fast
+    and severity badges stay fresh across short live-refresh ticks."""
     try:
         return espn.get_news_for_sports(list(sports_tuple), per_sport=per_sport)
     except Exception:
