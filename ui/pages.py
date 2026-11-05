@@ -1513,8 +1513,8 @@ def _render_agent_panel(odds_games, kalshi_cash, settings,
         return (dollars / unit_dollars) if unit_dollars > 0 else 0.0
     def _to_units(dollars):
         return round(_to_units_raw(dollars) * 2) / 2
-    total_stake_units = _to_units(summary['total_stake'])
-    cap_units = _to_units(kalshi_cash * daily_cap_pct)
+    # Snapshot strip (rendered by render_dashboard after this returns) shows
+    # total exposure in dollars; per-pick unit math stays inside _row.
     # Hide picks whose Kelly recommendation rounds to 0u (too small to be actionable).
     funded_pre = [e for e in edges if (e.get("stake_dollars") or 0) > 0]
     for e in funded_pre:
@@ -1522,14 +1522,10 @@ def _render_agent_panel(odds_games, kalshi_cash, settings,
             e["stake_dollars"] = 0.0
             e["rounded_to_zero"] = True
     exposure_pct = (summary['total_stake'] / kalshi_cash) * 100 if kalshi_cash else 0
-    exposure_tone = "warn" if exposure_pct > daily_cap_pct * 100 * 0.9 else ("good" if exposure_pct > 0 else "")
-    metric_row([
-        {"label": "Picks shown", "value": str(summary["count"]), "foot": "ranked by Pinn fair prob", "tone": "good" if summary["count"] else ""},
-        {"label": "Best", "value": f"{(summary['best_edge'] or 0)*100:+.1f}pts" if summary["best_edge"] else "—"},
-        {"label": "Total stake", "value": f"{total_stake_units:.1f}u", "foot": f"of {cap_units:.1f}u cap", "tone": exposure_tone},
-        {"label": "Exposure", "value": f"{exposure_pct:.1f}%", "foot": f"{daily_cap_pct*100:.0f}% cap today", "tone": exposure_tone},
-        {"label": "Avg edge", "value": f"{(summary['avg_edge'] or 0)*100:+.1f}pts" if summary["avg_edge"] else "—"},
-    ])
+    # Spec §12: the 5-card metric row that used to sit here (Picks shown / Best /
+    # Total stake / Exposure / Avg edge) is removed. Those numbers are demoted
+    # to the bottom .snap-strip; the mockup leads ticker → board with no
+    # metric interruption in between.
 
     if not edges:
         html('<div class="hint">No edges meet the threshold right now. Lower the edge requirement in the Settings tab to see thinner opportunities.</div>')
