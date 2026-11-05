@@ -341,17 +341,68 @@ _LEAGUE_FROM_SPORT: Dict[str, str] = {
 }
 
 
+import re as _re
+
+# Word-boundary patterns only: substring matching was flagging "Windy
+# Amateur Championship" as a weather-impacting item and "Red Bulls" (NY Red
+# Bulls MLS) as a line move. We use raw \b word boundaries and multi-word
+# phrases are matched verbatim (not individually).
+_SEV_PATTERNS = {
+    "out": _re.compile(
+        r"\b("
+        r"ruled out|ruled\s+out|out\s+(?:for|indefinitely)|out\s+\d+\s+(?:weeks|games)|"
+        r"sidelined|placed\s+on\s+(?:ir|injured\s+reserve)|carted\s+off|"
+        r"will\s+miss|won'?t\s+play|out\s+tonight|out\s+for\s+season|"
+        r"season-ending|season\s+ending|tears?\s+acl|torn\s+(?:acl|mcl|achilles)|"
+        r"suspended|benched"
+        r")\b",
+        _re.I,
+    ),
+    "gtd": _re.compile(
+        r"\b("
+        r"game-?time\s+decision|game\s+time\s+decision|questionable|doubtful|"
+        r"day-to-day|day\s+to\s+day|probable|limited\s+practice"
+        r")\b",
+        _re.I,
+    ),
+    "weather": _re.compile(
+        # Weather context only when combined with a venue/game indicator — avoids
+        # matching "windy course" or "stormy debut".
+        r"\b("
+        r"(?:high\s+)?winds?\s+(?:expected|forecast|at)|"
+        r"heavy\s+rain|downpour|thunderstorm(?:s)?|snow\s+game|"
+        r"weather\s+(?:delay|forecast|concern|impact)|"
+        r"temperatures?\s+(?:drop|in\s+the)|forecast\s+(?:calls|shows)"
+        r")\b",
+        _re.I,
+    ),
+    "line": _re.compile(
+        r"\b("
+        r"line\s+(?:move|movement|moves)|sharp\s+(?:money|action|side)|"
+        r"steam\s+move|reverse\s+line\s+movement|rlm|"
+        r"total\s+(?:drops?|climbs?|rises?)|spread\s+(?:moves?|shifts?)|"
+        r"odds?\s+shift|closing\s+line"
+        r")\b",
+        _re.I,
+    ),
+}
+
+
 def _classify_news(headline: str, description: str) -> str:
-    """Rough severity bucket from the headline — out / gtd / weather / line / news."""
-    text = f"{headline or ''} {description or ''}".lower()
-    if any(k in text for k in ("ruled out", "out for", "sidelined", "placed on ir", "will miss", "won't play", "won’t play")):
-        return "out"
-    if any(k in text for k in ("game-time decision", "questionable", "game time decision", "doubtful", "day-to-day", "day to day")):
-        return "gtd"
-    if any(k in text for k in ("weather", "wind", "rain", "snow", "storm", "forecast")):
-        return "weather"
-    if any(k in text for k in ("line move", "sharp money", "steam", "total drops", "spread moves", "odds shift")):
-        return "line"
+    """Severity bucket — out / gtd / weather / line / news.
+    Checks the HEADLINE first (strongest signal), then the description.
+    Word-boundary matching only — no substring hits that misclassify
+    general stories as weather or injury."""
+    hd = headline or ""
+    desc = description or ""
+    for sev in ("out", "gtd", "line", "weather"):
+        pat = _SEV_PATTERNS[sev]
+        if pat.search(hd):
+            return sev
+    # Description is a weaker signal — only check "out" / "gtd" there.
+    for sev in ("out", "gtd"):
+        if _SEV_PATTERNS[sev].search(desc):
+            return sev
     return "news"
 
 

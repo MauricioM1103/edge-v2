@@ -269,40 +269,50 @@ def main():
     )
     saved_theme = settings_store.load().get("theme", "dark")
     inject_style(theme=saved_theme)
+
+    # Navigation moved out of the top tab bar into the sidebar: on a laptop it
+    # saves vertical space (the news hero + board now reach higher on the
+    # viewport), and on phone it collapses into the hamburger menu so the
+    # board is the only thing on screen. Board stays the default view.
+    with st.sidebar:
+        st.markdown(
+            '<div class="nav-head">'
+            '<span class="nav-kicker">◆ View</span>'
+            '<h3 style="margin:2px 0 8px;">Pages</h3>'
+            '</div>',
+            unsafe_allow_html=True,
+        )
+        page = st.radio(
+            "Page", options=[
+                "Board", "Results", "Analysis", "Tools", "Ledger",
+                "Performance", "Calibration", "Backtest", "Settings",
+            ],
+            index=0, key="nav_page", label_visibility="collapsed",
+        )
+        st.markdown("---")
+
     settings = _sidebar_settings()
 
-    # Tab order follows the user's journey: the Board is what they look at
-    # every day; everything else is one click away but out of sight so the
-    # main view stays uncluttered for first-timers.
-    (tab_board, tab_results, tab_analysis, tab_tools, tab_ledger,
-     tab_perf, tab_calib, tab_backtest, tab_settings) = st.tabs([
-        "Board",
-        "Results",
-        "Analysis",
-        "Tools",
-        "Ledger",
-        "Performance",
-        "Calibration",
-        "Backtest",
-        "Settings",
-    ])
-    with tab_board:
+    # Only the selected page renders. Board is the default and the only view
+    # with a "tab" in the top chrome (via a styled brand bar inside its
+    # renderer); everything else shows only when picked from the sidebar.
+    if page == "Board":
         render_dashboard(settings)
-    with tab_results:
+    elif page == "Results":
         render_results(settings)
-    with tab_analysis:
+    elif page == "Analysis":
         render_analysis(settings)
-    with tab_tools:
+    elif page == "Tools":
         render_pro_tools(settings)
-    with tab_ledger:
+    elif page == "Ledger":
         render_picks(settings)
-    with tab_perf:
+    elif page == "Performance":
         render_performance(settings)
-    with tab_calib:
+    elif page == "Calibration":
         render_calibration(settings)
-    with tab_backtest:
+    elif page == "Backtest":
         render_backtest(settings)
-    with tab_settings:
+    elif page == "Settings":
         render_settings(settings)
 
 

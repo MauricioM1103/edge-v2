@@ -372,6 +372,40 @@ def _render_breaking_news(sports_list: list, merged: list):
     html(f'<section class="bento">{"".join(tiles)}</section>')
 
 
+def _render_board_filters_widget(all_available_sports: list, saved_board_sports: list,
+                                   saved_board_markets: list, all_markets_opts: list) -> tuple:
+    """Render the Sports + Markets multiselects just above the board.
+    Returns the current (sports, markets) selections for the caller to persist."""
+    html(
+        '<div class="board-filters-head">'
+        '<span class="section-kicker">◆ Filter the board</span>'
+        '</div>'
+    )
+    bf1, bf2 = st.columns(2)
+    with bf1:
+        board_sports = st.multiselect(
+            "Sports",
+            options=all_available_sports,
+            default=[s for s in saved_board_sports if s in all_available_sports] or all_available_sports[:5],
+            format_func=lambda k: espn.DISPLAY_NAMES.get(k, k.upper()),
+            key="board_sports_filter",
+            placeholder="Pick sports…",
+            help="Which leagues the agent scans AND which sports feed the news hero. "
+                 "Untick any to narrow the board and trim your Odds-API credit burn.",
+        )
+    with bf2:
+        board_markets = st.multiselect(
+            "Markets",
+            options=all_markets_opts,
+            default=[m for m in saved_board_markets if m in all_markets_opts] or all_markets_opts,
+            format_func=lambda m: {"h2h": "Moneyline", "spreads": "Spread", "totals": "Total"}.get(m, m),
+            key="board_markets_filter",
+            placeholder="All markets",
+            help="Which bet markets the agent considers.",
+        )
+    return (list(board_sports), list(board_markets))
+
+
 def _render_snapshot_strip(bankroll_display: str, bankroll_source: str, unit_pct: float,
                             slate_count: int, qual_count: int, exposure_usd: float, exposure_pct: float):
     html(
@@ -404,49 +438,39 @@ def render_dashboard(settings: dict):
     _refresh_sec = int(_saved_cfg_tmp.get("live_refresh_sec", 30) or 0)
     _refresh_running = False
 
-    # ===== Board filters: Sports + Markets (replaces sidebar sport picker + 4-column agent filter row) =====
+    # ===== Board filters: resolve early so the news hero + board use the same
+    # selection. The actual Sports + Markets widgets render just above the
+    # agent board (below, after the news hero + date picker) via
+    # _render_board_filters_widget() — that keeps the top of the page clean. =====
     saved_cfg_board = settings_store.load()
     all_available_sports = list(dict.fromkeys(
         s for _g, group_list in espn.SPORT_GROUPS
         for s in group_list
     ))
-    saved_board_sports = saved_cfg_board.get("board_sports") or all_available_sports
+    # Default to the "US majors" group if nothing is saved, so first-time
+    # loads don't scan every league and flood the news hero with off-topic items.
+    _us_majors = ["nfl", "nba", "mlb", "nhl", "ncaaf", "ncaab", "wnba"]
+    _default_sports = [s for s in _us_majors if s in all_available_sports] or all_available_sports[:5]
+    saved_board_sports = saved_cfg_board.get("board_sports") or _default_sports
     saved_board_markets = saved_cfg_board.get("board_markets") or ["h2h", "spreads", "totals"]
-    bf1, bf2 = st.columns(2)
-    with bf1:
-        board_sports = st.multiselect(
-            "Sports",
-            options=all_available_sports,
-            default=[s for s in saved_board_sports if s in all_available_sports] or all_available_sports,
-            format_func=lambda k: espn.DISPLAY_NAMES.get(k, k.upper()),
-            key="board_sports_filter",
-            placeholder="All sports",
-            help="Which leagues the agent scans. Default scans every supported league. "
-                 "Untick any to trim your Odds-API credit burn.",
-        )
-    with bf2:
-        all_markets_opts = ["h2h", "spreads", "totals"]
-        board_markets = st.multiselect(
-            "Markets",
-            options=all_markets_opts,
-            default=[m for m in saved_board_markets if m in all_markets_opts] or all_markets_opts,
-            format_func=lambda m: {"h2h": "Moneyline", "spreads": "Spread", "totals": "Total"}.get(m, m),
-            key="board_markets_filter",
-            placeholder="All markets",
-            help="Which bet markets the agent considers.",
-        )
-    # Persist + expose to the rest of the app.
-    if board_sports and list(board_sports) != list(saved_board_sports):
-        settings_store.save({"board_sports": list(board_sports)})
-    if board_markets and list(board_markets) != list(saved_board_markets):
-        settings_store.save({"board_markets": list(board_markets)})
+
+    # Prefer a live widget value (set earlier this session) over the saved one
+    # so the news hero sees the CURRENT selection on rerun.
+    board_sports = st.session_state.get("board_sports_filter") or [
+        s for s in saved_board_sports if s in all_available_sports
+    ] or _default_sports
+    all_markets_opts = ["h2h", "spreads", "totals"]
+    board_markets = st.session_state.get("board_markets_filter") or [
+        m for m in saved_board_markets if m in all_markets_opts
+    ] or all_markets_opts
+
     # Share with sidebar + Analysis tab via session_state.
-    st.session_state["board_sports"] = list(board_sports) if board_sports else all_available_sports
-    st.session_state["board_markets"] = list(board_markets) if board_markets else all_markets_opts
+    st.session_state["board_sports"] = list(board_sports)
+    st.session_state["board_markets"] = list(board_markets)
 
     # Resolve downstream vars from the filter choices.
-    sport_setting = list(board_sports) if board_sports else all_available_sports
-    sports_list = sport_setting if isinstance(sport_setting, list) else [sport_setting]
+    sport_setting = list(board_sports)
+    sports_list = sport_setting
     multi_sport_mode = len(sports_list) > 1
     unit_pct = settings.get("unit_pct") or 0.01
     bankroll_units = settings.get("bankroll_units") or 100.0
@@ -726,6 +750,18 @@ def render_dashboard(settings: dict):
             if og.get("_sport") == sp and _is_today(og)
         ]
 
+    # Sports + Markets filter row — now rendered IMMEDIATELY above the agent
+    # board (not at the top of the page), so the Breaking News hero gets the
+    # top-of-page real estate and the filter sits next to the thing it controls.
+    _new_sports, _new_markets = _render_board_filters_widget(
+        all_available_sports, saved_board_sports, saved_board_markets, all_markets_opts,
+    )
+    # Persist widget changes (next rerun picks them up at the top of this fn).
+    if _new_sports and _new_sports != list(saved_board_sports):
+        settings_store.save({"board_sports": _new_sports})
+    if _new_markets and _new_markets != list(saved_board_markets):
+        settings_store.save({"board_markets": _new_markets})
+
     top_picks = _render_agent_panel(
         odds_games, kalshi_cash, settings,
         kalshi_markets_by_sport=kalshi_markets_by_sport,
@@ -760,9 +796,11 @@ def render_dashboard(settings: dict):
     # Bottom snapshot strip: Bankroll + Slate + Qualifying picks + Daily exposure.
     # Demoted from the top of the page (replaced by the Breaking News hero);
     # still visible at a glance without competing with the news/injury feed.
+    # Agent panel stores dollar stake under `stake_dollars` (our bug earlier
+    # was looking for `stake`), so this now reflects actual exposure.
     try:
         total_exposure = sum(
-            (float(p.get("stake") or 0.0))
+            (float(p.get("stake_dollars") or p.get("stake") or 0.0))
             for p in (top_picks or []) if isinstance(p, dict)
         )
     except Exception:

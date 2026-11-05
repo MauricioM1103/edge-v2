@@ -403,7 +403,7 @@ button[aria-label="Expand sidebar"] svg {
 [data-testid="collapsedControl"]::after,
 [data-testid="stSidebarCollapsedControl"]::after,
 button[aria-label="Expand sidebar"]::after {
-  content: "Open Settings" !important;
+  content: "Open Settings/Tools" !important;
   font-family: "Public Sans", -apple-system, sans-serif !important;
   font-size: 13px !important;
   font-weight: 600 !important;
@@ -652,13 +652,95 @@ button[kind="headerDeploy"] { display: none !important; }
 .snap-strip .v.accent{color: var(--accent)}
 .snap-strip .v.good{color: var(--good)}
 
-/* mobile fallback — stack the bento to single column */
-@media (max-width: 760px){
-  .bento{grid-template-columns: 1fr; grid-auto-rows: auto;}
+/* ============================================================
+   Sidebar nav header (added when tabs moved into the sidebar)
+   ============================================================ */
+.nav-head .nav-kicker{
+  font-family:"JetBrains Mono", monospace; font-size:10px;
+  letter-spacing:0.22em; text-transform:uppercase; color:var(--accent);
+}
+.nav-head h3{
+  font-family:"Fraunces", serif; font-weight:500;
+  letter-spacing:-0.015em; font-size:19px; color:var(--ink);
+}
+/* Streamlit's radio becomes a vertical nav list — larger hit targets on mobile. */
+[data-testid="stSidebar"] [data-testid="stRadio"] label{
+  padding: 10px 8px; border-radius: 8px;
+  transition: background 150ms, color 150ms;
+  margin: 1px 0; font-weight: 500; font-size: 14px;
+}
+[data-testid="stSidebar"] [data-testid="stRadio"] label:hover{
+  background: color-mix(in oklab, var(--accent) 10%, transparent);
+  color: var(--accent);
+}
+
+/* Section kicker for the filter-above-the-board */
+.board-filters-head{margin: 26px 0 6px}
+.section-kicker{
+  font-family:"JetBrains Mono", monospace; font-size:10.5px;
+  letter-spacing:0.22em; text-transform:uppercase; color: var(--muted);
+}
+
+/* ============================================================
+   Mobile-first polish (phones + tall tablets)
+   ============================================================ */
+@media (max-width: 900px){
+  section.main > div.block-container{
+    padding-left: 10px; padding-right: 10px;
+    padding-top: 0.7rem;
+    max-width: 100%;
+  }
+  .brand-bar{flex-direction: column; align-items: flex-start; gap: 4px;}
+  .brand .name{font-size: 24px;}
+  .brand-right{font-size: 10px;}
+  /* bento stacks to a single column */
+  .bento{grid-template-columns: 1fr; grid-auto-rows: auto; gap: 10px;}
   .news-tile.featured, .news-tile.mid, .news-tile.wide, .news-tile.ticker{grid-column: 1;}
-  .news-tile .portrait{opacity:.5}
-  .news-tile .text-col, .news-tile.featured .text-col{max-width:85%}
-  .snap-strip{grid-template-columns: repeat(2, 1fr);}
+  .news-tile{min-height: 160px;}
+  .news-tile.featured{min-height: 260px;}
+  .news-tile .portrait{width: 55%; max-width: 280px; opacity: .55}
+  .news-tile.featured .portrait{width: 60%; max-width: 360px;}
+  .news-tile .text-col, .news-tile.featured .text-col{max-width: 70%;}
+  .news-tile h3{font-size: 15px;}
+  .news-tile.featured h3{font-size: 22px;}
+  .news-tile .snippet{font-size: 12.5px;}
+  .news-tile .team-logos img{width: 48px; height: 48px;}
+  .news-tile .team-logos{right: 8px;}
+  .news-tile.ticker{min-height: 54px; padding: 10px 12px;}
+  .ticker-label{font-size: 10px; padding: 5px 10px;}
+  .ticker-run{font-size: 12.5px;}
+  /* Snap strip: two cells per row on phones so nothing truncates */
+  .snap-strip{grid-template-columns: repeat(2, 1fr); gap: 8px;}
+  .snap-strip .cell{padding: 10px 12px;}
+  .snap-strip .v{font-size: 14px;}
+  /* Metric grid: two columns, no narrow-column overflow */
+  .metric-grid{grid-template-columns: repeat(2, 1fr) !important; gap: 8px;}
+  .metric-card{padding: 10px 12px;}
+  .metric-card .value{font-size: 16px;}
+  /* Game cards collapse the 3-column lines row */
+  .gc-lines{grid-template-columns: 1fr !important;}
+  .gc-matchup{grid-template-columns: 1fr;}
+  .gc-matchup .gc-at{grid-column: 1;}
+  /* Ledger tables: smaller padding, horizontal scroll if needed */
+  table.ledger{display: block; overflow-x: auto; white-space: nowrap;}
+  table.ledger th, table.ledger td{padding: 6px 8px; font-size: 11.5px;}
+  /* Tab bars inherit a horizontal scroll fallback */
+  .stTabs [data-baseweb="tab-list"]{overflow-x: auto; scrollbar-width: none;}
+  .stTabs [data-baseweb="tab-list"]::-webkit-scrollbar{display: none;}
+  /* Bigger touch targets everywhere */
+  .stButton>button, .stDownloadButton>button{min-height: 42px; font-size: 14px;}
+  /* The floating Settings/Tools pill grows to a tap-friendly size */
+  [data-testid="stExpandSidebarButton"]{
+    min-height: 44px !important;
+    min-width: 170px !important;
+    top: 8px !important; left: 8px !important;
+  }
+}
+/* Very narrow phones */
+@media (max-width: 420px){
+  .snap-strip{grid-template-columns: 1fr;}
+  .news-tile .portrait{opacity: .4}
+  .news-tile .text-col, .news-tile.featured .text-col{max-width: 100%;}
 }
 
 /* fonts (incl. Material Symbols so Streamlit's icon ligatures resolve to glyphs) */
