@@ -90,6 +90,27 @@ def unit_tests():
     check("unknown team stays open", h2h("Boston Celtics wins") == "open")
     check("no winner yet stays open", h2h("Phoenix Suns wins", {"home_won": None}) == "open")
 
+    print("== spread labels")
+    sp_final = {"home_name": "Arizona Wildcats", "away_name": "Cal Poly Mustangs",
+                "home_score": 100, "away_score": 60}
+
+    def spread(selection, point, fin=sp_final):
+        row = {"selection": selection, "point": point, "status": "open"}
+        picks_store._settle_spreads(row, fin)
+        return row["status"]
+
+    check("spread label strip",
+          picks_store._spread_team("Arizona Wildcats -31") == "Arizona Wildcats"
+          and picks_store._spread_team("Celtics +3.5") == "Celtics")
+    check("home spread covers", spread("Arizona Wildcats -31", -31) == "win")
+    check("home spread misses", spread("Arizona Wildcats -45.5", -45.5) == "loss")
+    check("away spread with plus line", spread("Cal Poly Mustangs +45.5", 45.5) == "win")
+    check("whole-number line pushes", spread("Arizona Wildcats -40", -40) == "push")
+    clip_final = {"home_name": "Los Angeles Clippers", "away_name": "Denver Nuggets",
+                  "home_score": 110, "away_score": 100}
+    check("Odds API vs ESPN naming on spreads", spread("LA Clippers -3.5", -3.5, clip_final) == "win")
+    check("unknown team spread stays open", spread("Boston Celtics -2.5", -2.5) == "open")
+
 
 def find_recent_final_nba():
     today = datetime.now(timezone.utc).date()

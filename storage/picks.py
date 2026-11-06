@@ -418,38 +418,43 @@ def _h2h_team(selection) -> str:
     return _H2H_LABEL_TAIL.sub("", (selection or "").strip()).strip()
 
 
-def _settle_h2h(pick, final):
-    """Set status on a moneyline pick given ESPN final scores.
+def _match_side(team, home_name, away_name) -> Optional[str]:
+    """Which side of an ESPN final a team label names: "home", "away" or None.
 
-    Match order: exact team name -> apis.team_mapping.same_team (tolerates
-    Odds API vs ESPN naming, "LA Clippers" vs "Los Angeles Clippers") ->
-    loose containment. A selection that matches both sides is left open
-    rather than guessed.
+    Match order: exact name -> apis.team_mapping.same_team (tolerates Odds
+    API vs ESPN naming, "LA Clippers" vs "Los Angeles Clippers") -> loose
+    containment either direction. A tier only decides when exactly one side
+    matches; a label that fits both is passed down and finally left
+    unresolved rather than guessed.
     """
+    team = (team or "").strip().lower()
+    home_name = (home_name or "").strip().lower()
+    away_name = (away_name or "").strip().lower()
+    if not team:
+        return None
+    tiers = (
+        (bool(home_name) and team == home_name,
+         bool(away_name) and team == away_name),
+        (bool(home_name) and same_team(team, home_name),
+         bool(away_name) and same_team(team, away_name)),
+        (bool(home_name) and (team in home_name or home_name in team),
+         bool(away_name) and (team in away_name or away_name in team)),
+    )
+    for is_home, is_away in tiers:
+        if is_home != is_away:
+            return "home" if is_home else "away"
+    return None
+
+
+def _settle_h2h(pick, final):
+    """Set status on a moneyline pick given ESPN final scores."""
     home_won = final.get("home_won")
     if home_won is None:
         return
-    team = _h2h_team(pick.get("selection")).lower()
-    home_name = (final.get("home_name") or "").strip().lower()
-    away_name = (final.get("away_name") or "").strip().lower()
-    if not team:
-        return
-    picked_home = bool(home_name) and team == home_name
-    picked_away = bool(away_name) and team == away_name
-    if not (picked_home or picked_away):
-        sh = bool(home_name) and same_team(team, home_name)
-        sa = bool(away_name) and same_team(team, away_name)
-        if sh != sa:
-            picked_home, picked_away = sh, sa
-    if not (picked_home or picked_away):
-        # fall back to loose match, either direction
-        lh = bool(home_name) and (team in home_name or home_name in team)
-        la = bool(away_name) and (team in away_name or away_name in team)
-        if lh != la:
-            picked_home, picked_away = lh, la
-    if picked_home:
+    side = _match_side(_h2h_team(pick.get("selection")), final.get("home_name"), final.get("away_name"))
+    if side == "home":
         pick["status"] = "win" if home_won else "loss"
-    elif picked_away:
+    elif side == "away":
         pick["status"] = "win" if not home_won else "loss"
 
 
@@ -484,6 +489,14 @@ def _settle_totals(pick, final):
             pick["status"] = "push"
 
 
+_SPREAD_LABEL_TAIL = re.compile(r"\s*[+\-−]?\s*\d+(?:\.\d+)?\s*$")
+
+
+def _spread_team(selection) -> str:
+    """Team named by a spread selection, without the trailing line."""
+    return _SPREAD_LABEL_TAIL.sub("", (selection or "").strip()).strip()
+
+
 def _settle_spreads(pick, final):
     """Settle a point-spread pick. pick['point'] is the selected side's number."""
     hs = final.get("home_score")
@@ -497,14 +510,13 @@ def _settle_spreads(pick, final):
         p = float(point)
     except (TypeError, ValueError):
         return
-    sel = (pick.get("selection") or "").strip().lower()
-    home_name = (final.get("home_name") or "").strip().lower()
-    away_name = (final.get("away_name") or "").strip().lower()
-    picked_home = home_name and (sel == home_name or sel.startswith(home_name))
-    picked_away = away_name and (sel == away_name or sel.startswith(away_name))
-    if picked_home:
+    # Selection carries the line ("Arizona Wildcats -31", "Celtics +3.5");
+    # strip it and resolve the team the same way moneylines do, so Odds API
+    # vs ESPN naming drift can't leave a spread open forever.
+    side = _match_side(_spread_team(pick.get("selection")), final.get("home_name"), final.get("away_name"))
+    if side == "home":
         margin = hs - ascore + p
-    elif picked_away:
+    elif side == "away":
         margin = ascore - hs + p
     else:
         return
