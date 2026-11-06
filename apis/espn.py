@@ -167,11 +167,18 @@ def _fetch(url, timeout=10):
 
 def _comp_team(competitor):
     team = competitor.get("team") or {}
+    # ESPN returns colors as 6-char hex strings without a leading '#'. Normalize
+    # to "#RRGGBB" so UI code can use them as-is in style="background:…".
+    def _hex(v):
+        v = (v or "").strip().lstrip("#")
+        return f"#{v}" if len(v) in (3, 6) else ""
     return {
         "name": team.get("displayName") or team.get("name") or "",
         "short": team.get("shortDisplayName") or team.get("abbreviation") or "",
         "abbr": team.get("abbreviation") or "",
         "logo": team.get("logo"),
+        "color": _hex(team.get("color")),
+        "alt_color": _hex(team.get("alternateColor")),
         "record": _parse_record(competitor.get("records") or []),
         "score": _coerce_int(competitor.get("score")),
         "winner": bool(competitor.get("winner")) if competitor.get("winner") is not None else None,

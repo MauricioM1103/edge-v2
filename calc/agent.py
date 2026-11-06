@@ -664,6 +664,11 @@ def scan_kalshi_vs_pinnacle(
                 "commence_time": pin_game.get("commence_time"),
                 "home_abbr": ((espn_ev.get("home") or {}).get("abbr") or "").upper(),
                 "away_abbr": ((espn_ev.get("away") or {}).get("abbr") or "").upper(),
+                # Team primary colors (hex, from ESPN scoreboard metadata) —
+                # used by the board's team-chip renderer so chips take the team's
+                # jersey color instead of a uniform gray.
+                "home_color": (espn_ev.get("home") or {}).get("color") or "",
+                "away_color": (espn_ev.get("away") or {}).get("color") or "",
                 "status_state": espn_ev.get("status_state"),  # pre | in | post
                 "status_detail": espn_ev.get("status_detail"),
                 "home_score": home_score,
@@ -892,6 +897,8 @@ def scan_offshore_markets_vs_pinnacle(
                     "commence_time": g.get("commence_time"),
                     "home_abbr": ((espn_ev.get("home") or {}).get("abbr") or "").upper(),
                     "away_abbr": ((espn_ev.get("away") or {}).get("abbr") or "").upper(),
+                    "home_color": (espn_ev.get("home") or {}).get("color") or "",
+                    "away_color": (espn_ev.get("away") or {}).get("color") or "",
                     "status_state": espn_ev.get("status_state"),
                     "status_detail": espn_ev.get("status_detail"),
                     "home_score": hs_i,

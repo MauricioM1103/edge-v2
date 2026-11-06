@@ -244,6 +244,19 @@ def _sidebar_settings() -> dict:
             st.success("Kalshi: live connection")
         else:
             st.caption("Kalshi: manual / not connected")
+        # Discord webhook — optional outbound; posts tier-A picks to a channel.
+        try:
+            from apis import discord as _dc
+            if _dc.is_configured():
+                st.success("Discord: webhook configured")
+            else:
+                st.caption(
+                    "Discord: not configured. Set "
+                    "`DISCORD_WEBHOOK_URL` env var or "
+                    "`discord_webhook_url` in secrets.toml to post tier-A picks."
+                )
+        except Exception:
+            pass
 
         if st.button("Clear cache & reload", use_container_width=True):
             st.cache_data.clear()

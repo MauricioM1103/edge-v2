@@ -368,11 +368,18 @@ def _darken(hex_color: str, mix_black: float = 0.55) -> str:
     return f"#{r:02X}{g:02X}{b:02X}"
 
 
-def _resolve_team_color(abbr: str, league: str = "") -> str:
-    """Return a #RRGGBB for a team, falling back to the league's house color."""
+def _resolve_team_color(abbr: str, league: str = "", espn_hex: str = "") -> str:
+    """Return a #RRGGBB for a team. Order:
+      1. Hardcoded TEAM_COLORS palette (brand colors verified).
+      2. ESPN hex (per-pick metadata attached by calc/agent.py).
+      3. League house color.
+    """
     key = (abbr or "").upper().strip()
     if key and key in TEAM_COLORS:
         return "#" + TEAM_COLORS[key]
+    raw = (espn_hex or "").strip().lstrip("#")
+    if raw and len(raw) in (3, 6):
+        return ("#" + raw) if len(raw) == 6 else ("#" + "".join(c * 2 for c in raw))
     lk = (league or "").lower()
     return "#" + LEAGUE_COLOR_FALLBACK.get(lk, "131F35")
 
@@ -1587,6 +1594,19 @@ def render_dashboard(settings: dict):
     st.session_state["_board_sport_setting"] = sport_setting
     st.session_state["_board_multi_sport_mode"] = multi_sport_mode
 
+    # Discord webhook: fire once per new tier-A pick (edge >= 2%). The webhook
+    # module dedupes against a local JSON log so reruns never spam the channel,
+    # and when no webhook URL is configured it returns 0 silently. Soft-import
+    # so the main render still works if the module fails to load for any reason.
+    try:
+        from apis import discord as _discord
+        if _discord.is_configured() and top_picks and is_today:
+            _n_posted = _discord.send_new_picks(top_picks, min_edge=0.02)
+            if _n_posted:
+                st.toast(f"📣 Posted {_n_posted} tier-A pick(s) to Discord", icon="📣")
+    except Exception:
+        pass
+
     # ----- Send-to-Discord button -----
     # Posts the exact board snapshot (same top-N rows the user is looking at)
     # to the configured webhook. Lives below the table so the table above
@@ -1785,8 +1805,23 @@ def _render_agent_panel(odds_games, kalshi_cash, settings,
     # header render is deferred to the _render_board_header call below.
     _total_games = sum(len(v) for v in (pinnacle_games_by_sport or {}).values())
 
+    # Functional sort dropdown — the Court Side mockup had five sort modes.
+    # Pick with a Streamlit selectbox so the agent can actually re-sort the
+    # fresh picks on change. Stored in session_state so it persists across
+    # reruns within a session.
+    _SORT_MODES = {
+        "edge_desc": "Rank by: Edge % descending (recommended)",
+        "stake_desc": "Rank by: Stake descending",
+        "tier_edge": "Rank by: Tier then edge",
+        "kickoff": "Rank by: Kickoff time",
+        "fair_prob": "Rank by: Pinnacle fair prob",
+    }
+    sort_mode = st.session_state.get("board_sort_mode") or "edge_desc"
+
     def _render_board_header(total_games: int, actionable: int, watch: int):
-        """Spec §6: count pill shows real actionable + watch numbers directly."""
+        """Spec §6: count pill shows real actionable + watch numbers directly.
+        The sort dropdown is rendered separately via st.selectbox below so it's
+        functional — it writes to session_state and the agent re-sorts."""
         html(
             '<div class="board-hero-head">'
             '<div class="board-title">'
@@ -1795,15 +1830,44 @@ def _render_agent_panel(odds_games, kalshi_cash, settings,
             f'<b>{actionable}</b> actionable · {watch} watch</span>'
             '<span class="refresh-pill"><span class="dot"></span>Refreshing</span>'
             '</div>'
-            '<select class="sort-select" disabled title="Agent sorts by edge % with actionable on top">'
-            '<option>Rank by: Edge % descending (recommended)</option>'
-            '<option>Rank by: Stake descending</option>'
-            '<option>Rank by: Tier then edge</option>'
-            '<option>Rank by: Kickoff time</option>'
-            '<option>Rank by: Pinnacle fair prob</option>'
-            '</select>'
             '</div>'
         )
+
+    def _apply_sort(items: list, mode: str) -> list:
+        """Sort a list of edges by the chosen mode. All modes keep positive
+        edge first so the actionable rows never fall below watch-list rows,
+        except 'kickoff' which is strictly chronological."""
+        def _tier_rank(e):
+            edge_val = float(e.get("edge") or 0)
+            if edge_val >= 0.020: return 0
+            if edge_val >= 0.010: return 1
+            if edge_val > 0:      return 2
+            return 3
+        def _ts(e):
+            raw = e.get("start_utc") or e.get("commence_time") or ""
+            return str(raw)
+        if mode == "stake_desc":
+            key = lambda e: (
+                0 if float(e.get("edge") or 0) > 0 else 1,
+                -float(e.get("stake_dollars") or 0),
+                -float(e.get("edge") or 0),
+            )
+        elif mode == "tier_edge":
+            key = lambda e: (_tier_rank(e), -float(e.get("edge") or 0))
+        elif mode == "kickoff":
+            key = lambda e: (_ts(e), -float(e.get("edge") or 0))
+        elif mode == "fair_prob":
+            key = lambda e: (
+                0 if float(e.get("edge") or 0) > 0 else 1,
+                -float(e.get("fair_prob") or 0),
+            )
+        else:  # edge_desc (default)
+            key = lambda e: (
+                0 if float(e.get("edge") or 0) > 0 else 1,
+                -float(e.get("edge") or 0),
+                -float(e.get("fair_prob") or 0),
+            )
+        return sorted(items, key=key)
     kelly_mult = settings.get("agent_kelly") or 0.25
     # Historic agent_min_edge is the AUTO-LOG threshold (picks need to be
     # +EV before they hit the ledger). For the BOARD we show every candidate
@@ -2221,14 +2285,14 @@ def _render_agent_panel(odds_games, kalshi_cash, settings,
             away_abbr = away_abbr or _abbr(away.strip())
             home_abbr = home_abbr or _abbr(home.strip())
         if away_abbr and home_abbr:
-            def _chip(abbr: str) -> str:
-                col = _resolve_team_color(abbr, sport_key)
+            def _chip(abbr: str, espn_hex: str) -> str:
+                col = _resolve_team_color(abbr, sport_key, espn_hex=espn_hex)
                 extra = " light" if abbr in _LIGHT_TEAM_CHIPS else ""
                 return f'<span class="team-chip{extra}" style="--team-color:{col}">{_esc_row(abbr)}</span>'
             return (
-                f'{_chip(away_abbr)}'
+                f'{_chip(away_abbr, e.get("away_color") or "")}'
                 f'<span class="at">{"vs" if joiner == " vs " else "at"}</span>'
-                f'{_chip(home_abbr)}'
+                f'{_chip(home_abbr, e.get("home_color") or "")}'
             )
         return f'<span class="team-chip">{_esc_row(m[:28])}</span>'
 
@@ -2374,11 +2438,12 @@ def _render_agent_panel(odds_games, kalshi_cash, settings,
     # Same ordering as the master sort: positive edge first, then by fair
     # prob descending, then edge magnitude. Keeps the "actionable rows on
     # top, watch-list below" split visible within the fresh and settled halves.
-    def _rank_key(e):
-        tier = 0 if float(e.get("edge") or 0) > 0 else 1
-        return (tier, -float(e.get("fair_prob") or 0), -float(e.get("edge") or 0))
-    fresh.sort(key=_rank_key)
-    settled_rows.sort(key=_rank_key)
+    # Apply the user-selected sort mode. Settled rows always keep fair-prob
+    # ordering since re-sorting history by "kickoff" or "stake" makes no sense.
+    fresh = _apply_sort(fresh, sort_mode)
+    def _rank_key_settled(e):
+        return (-float(e.get("fair_prob") or 0), -float(e.get("edge") or 0))
+    settled_rows.sort(key=_rank_key_settled)
     funded = fresh + settled_rows
 
     # Spec §6: no top-N cap. The full slate is now one table with two internal
@@ -2476,6 +2541,22 @@ def _render_agent_panel(odds_games, kalshi_cash, settings,
     _actionable_total = sum(1 for e in funded if _is_pos(e))
     _watch_total = sum(1 for e in funded if _is_watch(e))
     _render_board_header(_total_games, _actionable_total, _watch_total)
+
+    # Sort dropdown — functional. The selected mode persists in session_state;
+    # on change, Streamlit reruns and _apply_sort() picks up the new order.
+    _sort_opts = list(_SORT_MODES.keys())
+    _cur_idx = _sort_opts.index(sort_mode) if sort_mode in _sort_opts else 0
+    _new_sort = st.selectbox(
+        "Sort the board",
+        options=_sort_opts,
+        index=_cur_idx,
+        format_func=lambda k: _SORT_MODES[k],
+        key="board_sort_mode_widget",
+        label_visibility="collapsed",
+    )
+    if _new_sort != sort_mode:
+        st.session_state["board_sort_mode"] = _new_sort
+        st.rerun()
     html(
         '<div class="board-wrap"><div class="beam"><i></i></div>'
         '<table class="board-table">'
