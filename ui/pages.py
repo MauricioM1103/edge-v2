@@ -1531,6 +1531,27 @@ def render_dashboard(settings: dict):
                         else (sport_setting.upper() if isinstance(sport_setting, str)
                               else ",".join(sports_list).upper())
                     )
+                    # Pre-compute the start-time string per pick so the PNG
+                    # renderer shows the same "Matchup · Start" cell the live
+                    # Board does (same formatter, no re-work in apis.discord).
+                    from datetime import datetime as _dt_bt
+                    from zoneinfo import ZoneInfo as _Z_bt
+                    _CT_bt = _Z_bt("America/Chicago")
+                    for _p in top_picks:
+                        state = _p.get("status_state")
+                        if state in ("in", "post"):
+                            _p["_start_time_ct"] = ""  # live/final handled by chip
+                        else:
+                            start = _p.get("start_utc") or _p.get("commence_time")
+                            if start:
+                                try:
+                                    if isinstance(start, str):
+                                        start = _dt_bt.fromisoformat(start.replace("Z", "+00:00"))
+                                    _p["_start_time_ct"] = start.astimezone(_CT_bt).strftime("%a %I:%M %p").lstrip("0") + " CT"
+                                except Exception:
+                                    _p["_start_time_ct"] = ""
+                            else:
+                                _p["_start_time_ct"] = ""
                     result = discord_api.send_board_snapshot(
                         top_picks,
                         unit_dollars=unit_dollars,
@@ -2100,6 +2121,7 @@ def _render_agent_panel(odds_games, kalshi_cash, settings,
         edge_val = float(e.get("edge") or 0)
         edge_pct = edge_val * 100.0
         fair_pct = float(e.get("fair_prob") or 0) * 100.0
+        book_imp_pct = float(e.get("book_implied") or 0) * 100.0
         # Spec §13: picks read "PIT -1.5" / "BOS ML", not full team names.
         raw_side = e.get("side_label", "") or ""
         for full, ab in ((e.get("home_team"), e.get("home_abbr")), (e.get("away_team"), e.get("away_abbr"))):
@@ -2111,6 +2133,11 @@ def _render_agent_panel(odds_games, kalshi_cash, settings,
         stake_u = _to_units(e.get("stake_dollars") or 0)
         stake_d = float(e.get("stake_dollars") or 0)
         is_settled = (e.get("status_state") == "post") or (e.get("grade") in ("win", "loss", "push"))
+        # Live-pick chip: a pick surfaces IN-GAME when the agent sees the
+        # matchup's status_state == "in" at scan time. We mark it visibly
+        # so the user can distinguish pre-game recommendations from live
+        # ones, and the auto-log carries the same tag forward to Results.
+        is_live_pick = (e.get("status_state") == "in") and not is_settled
         tier = _tier_for_edge(edge_val) if not is_settled else "w"
         market_label = e.get("market_label") or agent_calc.MARKET_LABELS.get(e.get("market", "h2h"), "Moneyline")
         edge_cls = "good" if edge_val > 0 else ("bad" if edge_val < -0.001 else "muted")
@@ -2118,12 +2145,17 @@ def _render_agent_panel(odds_games, kalshi_cash, settings,
         stake_classes = "u" if stake_u > 0 else "u watch"
         stake_detail = f"${stake_d:,.2f}" if stake_u > 0 else "watch"
         stake_value = f"{stake_u:.1f}u" if stake_u > 0 else "—"
+        live_chip = (
+            '<span class="chip live" style="padding:1px 7px; margin-left:6px; '
+            'font-size:9.5px; font-weight:600;">● LIVE PICK · IN GAME</span>'
+            if is_live_pick else ""
+        )
         return (
             '<tr>'
             f'<td class="rank-cell">{rank or ""}</td>'
             f'<td class="tier-cell"><span class="tier-badge {tier}">{tier.upper()}</span></td>'
             f'<td class="matchup-cell">'
-            f'  <div class="chip-row">{_matchup_chips(e)}</div>'
+            f'  <div class="chip-row">{_matchup_chips(e)}{live_chip}</div>'
             f'  <span class="time">{_esc_row(_start_time_ct(e))}'
             f'{(" " + _grade_cell(e)) if e.get("grade") in ("winning", "losing", "tied", "win", "loss", "push") else ""}</span>'
             f'</td>'
@@ -2131,6 +2163,7 @@ def _render_agent_panel(odds_games, kalshi_cash, settings,
             f'<span class="pick">{side_label}</span></div></td>'
             f'<td class="book-cell">{book_cell_html}</td>'
             f'<td class="num-cell">{price_disp}</td>'
+            f'<td class="num-cell muted">{book_imp_pct:.1f}%</td>'
             f'<td class="num-cell {fair_cls}">{fair_pct:.1f}%</td>'
             f'<td class="num-cell {edge_cls}">{edge_pct:+.1f}%</td>'
             f'<td><div class="stake-cell"><span class="{stake_classes}">{stake_value}</span>'
@@ -2151,7 +2184,8 @@ def _render_agent_panel(odds_games, kalshi_cash, settings,
         '<th>Side · Market</th>'
         f'<th>{_book_col_label}</th>'
         '<th class="num">Price</th>'
-        '<th class="num">Fair %</th>'
+        '<th class="num" title="What this book implies (vig-inclusive)">Book Prob %</th>'
+        '<th class="num" title="Pinnacle no-vig fair probability (sharpest book stripped of vig)">Sharp/Fair Prob %</th>'
         '<th class="num">Edge</th>'
         '<th class="num">Stake</th>'
         '<th>Methodology</th>'
@@ -3399,23 +3433,35 @@ def render_results(settings: dict):
                         side = f"{side} {float(pt):+g}"
                     except (TypeError, ValueError):
                         pass
+                # Pick-type chip: "LIVE PICK" when logged in-game, blank for pre-game.
+                pick_type = (p.get("pick_type") or "pre_game").lower()
+                type_chip = (
+                    '<span class="chip live" style="padding:1px 7px; font-size:9.5px;">● LIVE PICK</span>'
+                    if pick_type == "live_pick" else
+                    '<span class="chip" style="padding:1px 7px; font-size:9.5px; color:var(--muted);">PRE-GAME</span>'
+                )
+                # Book implied prob (the vig-inclusive market view).
+                book_imp = float(p.get("implied_prob") or 0) * 100.0
                 rows_html += (
                     f'<tr{row_bg}>'
                     f'<td class="mono" style="color:var(--muted); font-size:11px;">{sport}</td>'
                     f'<td>{p.get("event_name") or "—"}</td>'
+                    f'<td>{type_chip}</td>'
                     f'<td class="mono" style="color:var(--muted); font-size:11px;">{mk}</td>'
                     f'<td><strong>{side}</strong></td>'
-                    f'<td class="num mono {proj_tone}"><strong>{fair*100:.1f}%</strong></td>'
                     f'<td class="num mono">{format_american(p.get("price_american"))}</td>'
+                    f'<td class="num mono" style="color:var(--muted);">{book_imp:.1f}%</td>'
+                    f'<td class="num mono {proj_tone}"><strong>{fair*100:.1f}%</strong></td>'
                     f'<td>{result_chip}</td>'
                     f'</tr>'
                 )
             html(
                 '<table class="ledger" style="margin-top:4px;">'
                 '<thead><tr>'
-                '<th>Sport</th><th>Event</th><th>Market</th><th>Pick</th>'
-                '<th class="num">Pinn fair</th>'
+                '<th>Sport</th><th>Event</th><th>Type</th><th>Market</th><th>Pick</th>'
                 '<th class="num">Price</th>'
+                '<th class="num">Book Prob %</th>'
+                '<th class="num">Sharp/Fair Prob %</th>'
                 '<th>Result</th>'
                 '</tr></thead>'
                 f'<tbody>{rows_html}</tbody></table>'
@@ -3986,24 +4032,28 @@ def render_settings(settings: dict):
                     st.success("Test post landed in Discord.")
                 else:
                     st.error(f"Test failed: {r.get('error') or 'unknown'}")
-    # Site URL (link included in Discord messages)
-    site_in = st.text_input(
-        "Dashboard URL (link included in Discord posts)",
-        value=cur_site,
-        placeholder="https://your-edge-v2.streamlit.app",
-        help="The live URL of this dashboard (your Streamlit Cloud deployment). "
-             "Added to every Discord snapshot so viewers can open the board.",
-        key="set_site_url",
-    )
-    # Remember pending value for the Test button (before Save).
-    st.session_state["_pending_site_url"] = site_in
-    if site_in != cur_site:
-        if st.button("Save dashboard URL", key="set_site_save"):
+    # Site URL (link included in Discord messages). Save button is always
+    # visible so users can clear or re-save without the field having to differ.
+    sc1, sc2 = st.columns([3, 1])
+    with sc1:
+        site_in = st.text_input(
+            "Dashboard URL (link included in Discord posts)",
+            value=cur_site,
+            placeholder="https://your-edge-v2.streamlit.app",
+            help="The live URL of this dashboard (your Streamlit Cloud deployment). "
+                 "Added to every Discord snapshot so viewers can open the board.",
+            key="set_site_url",
+        )
+    with sc2:
+        st.write("")  # spacer so the button aligns with the input
+        if st.button("Save URL", use_container_width=True, key="set_site_save"):
             if discord_api.save_site_url(site_in or ""):
                 st.success("Dashboard URL " + ("saved." if site_in else "cleared."))
                 st.rerun()
             else:
                 st.error("Could not write secrets.toml")
+    # Remember pending value for the Test button (before Save).
+    st.session_state["_pending_site_url"] = site_in
     if cur_hook:
         st.caption(f"Current webhook (masked): `{masked}`")
     st.caption(

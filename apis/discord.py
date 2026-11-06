@@ -33,6 +33,7 @@ _BG = (10, 15, 28)          # --bg #0A0F1C
 _CARD = (20, 28, 51)        # --card #141C33
 _CARD_ELEV = (27, 36, 64)   # --card-elev #1B2440
 _RULE = (35, 48, 85)        # --rule #233055
+_RULE_STRONG = (51, 68, 113)  # --rule-strong #334471
 _INK = (241, 245, 249)      # --ink
 _INK_DIM = (203, 213, 225)  # --ink-dim
 _MUTED = (127, 140, 168)    # --muted
@@ -149,6 +150,26 @@ def _ellipsize(draw, text, font, max_w) -> str:
 
 # ----- PNG renderer -----
 
+def _tier_from_edge(edge_val: float) -> str:
+    """Mirror the site's tier chip: W (watch), S, A, A+ by edge magnitude."""
+    if edge_val <= 0:
+        return "W"
+    if edge_val < 0.02:
+        return "S"
+    if edge_val < 0.05:
+        return "A"
+    return "A+"
+
+
+def _tier_color(tier: str):
+    return {
+        "A+": _GOOD,
+        "A":  _ACCENT,
+        "S":  _WARN,
+        "W":  _MUTED,
+    }.get(tier, _MUTED)
+
+
 def render_board_png(
     picks: List[dict],
     unit_dollars: float,
@@ -157,87 +178,89 @@ def render_board_png(
     watch_count: int,
     truncated: int = 0,
 ) -> bytes:
-    """Render an actionable-picks table as a PNG. Returns raw bytes.
+    """Render an actionable-picks snapshot that mirrors the live Board.
 
-    Columns: #, SPORT, MATCHUP, PICK, FAIR%, EDGE, PRICE, STAKE
+    Columns, in the same order as the site table:
+      #, Tier, Matchup · Start, Side · Market, Best Book, Price,
+      Book Prob %, Sharp/Fair Prob %, Edge, Stake, Methodology
+    Adds a "● LIVE PICK · IN GAME" chip when the pick was surfaced during
+    the game (status_state == "in").
     """
-    # Canvas size: wide enough for a readable matchup column, tall enough for
-    # a header + one row per pick + a footer.
-    W = 1120
-    row_h = 44
+    W = 1480
+    row_h = 54  # taller rows so two-line matchup/side cells breathe
     header_h = 120
-    table_header_h = 44
-    footer_h = 70
+    table_header_h = 46
+    footer_h = 74
     body_h = max(row_h, row_h * len(picks))
     H = header_h + table_header_h + body_h + footer_h
 
     img = Image.new("RGB", (W, H), _BG)
     draw = ImageDraw.Draw(img)
 
-    # ----- Title block -----
+    # ----- Title -----
     now_ct = datetime.now(_CT)
     when_str = now_ct.strftime("%a, %b %d, %Y · %I:%M %p").replace(" 0", " ") + " CT"
 
     f_title = _font(28, bold=True)
     f_sub = _font(14)
-    f_chip = _font(12, bold=True, mono=True)
+    f_chip = _font(11, bold=True, mono=True)
+    f_chip_sm = _font(10, bold=True, mono=True)
 
-    # Accent dot
     dot_cx, dot_cy, dot_r = 34, 42, 8
     draw.ellipse([dot_cx - dot_r, dot_cy - dot_r, dot_cx + dot_r, dot_cy + dot_r], fill=_ACCENT)
     draw.text((56, 24), "Edge · Board snapshot", font=f_title, fill=_INK)
 
-    # Subtitle: timestamp + slate label + +EV count
     draw.text((56, 64), when_str, font=f_sub, fill=_MUTED)
     subline_right = f"{sports_label}  ·  {total_actionable} actionable  ·  {watch_count} watch-list"
     rw = _text_w(draw, subline_right, f_sub)
     draw.text((W - rw - 28, 64), subline_right, font=f_sub, fill=_MUTED)
-
-    # Separator rule
     draw.line([(28, 100), (W - 28, 100)], fill=_RULE, width=1)
 
-    # ----- Table header -----
+    # ----- Columns (match the live board header verbatim) -----
     cols = [
-        ("#",       70,  "num"),
-        ("SPORT",   120, "mono"),
-        ("MATCHUP", 360, "left"),
-        ("PICK",    230, "left"),
-        ("FAIR",    100, "num"),
-        ("EDGE",    110, "num"),
-        ("PRICE",    90, "num"),
-        ("STAKE",   100, "num"),
+        ("#",             52,  "num"),
+        ("Tier",          70,  "chip"),
+        ("Matchup · Start", 340, "left"),
+        ("Side · Market", 230,  "left"),
+        ("Best Book",     120,  "chip"),
+        ("Price",          78,  "num"),
+        ("Book Prob %",   100,  "num"),
+        ("Sharp/Fair %",  120,  "num"),
+        ("Edge",           78,  "num"),
+        ("Stake",          90,  "num"),
+        ("Methodology",   154,  "left"),
     ]
     th_y = header_h
     draw.rectangle([(0, th_y), (W, th_y + table_header_h)], fill=_CARD_ELEV)
-    f_th = _font(12, bold=True, mono=True)
+    f_th = _font(11, bold=True, mono=True)
     x = 28
     for label, w, kind in cols:
-        align = "right" if kind == "num" else "left"
-        tw = _text_w(draw, label, f_th)
-        if align == "right":
-            draw.text((x + w - tw - 14, th_y + 15), label, font=f_th, fill=_MUTED)
+        tw = _text_w(draw, label.upper(), f_th)
+        if kind == "num":
+            draw.text((x + w - tw - 12, th_y + 17), label.upper(), font=f_th, fill=_MUTED)
         else:
-            draw.text((x + 10, th_y + 15), label, font=f_th, fill=_MUTED)
+            draw.text((x + 10, th_y + 17), label.upper(), font=f_th, fill=_MUTED)
         x += w
-    draw.line([(0, th_y + table_header_h), (W, th_y + table_header_h)], fill=_RULE, width=1)
+    draw.line([(0, th_y + table_header_h), (W, th_y + table_header_h)], fill=_RULE_STRONG, width=1)
 
     # ----- Rows -----
-    f_row = _font(14, mono=True)
-    f_row_b = _font(14, bold=True, mono=True)
+    f_row = _font(13, mono=True)
+    f_row_b = _font(13, bold=True, mono=True)
     f_match = _font(15, bold=True)
-    f_side = _font(14)
+    f_side = _font(14, bold=True)
+    f_sub_row = _font(11, mono=True)
 
     for i, p in enumerate(picks, start=1):
         y = header_h + table_header_h + (i - 1) * row_h
-        # Zebra
         if i % 2 == 0:
             draw.rectangle([(0, y), (W, y + row_h)], fill=_CARD)
-        # Row content
-        sport = (p.get("_sport") or "").upper()[:8]
+
+        edge_val = float(p.get("edge") or 0)
+        edge_pct = edge_val * 100.0
+        fair_pct = float(p.get("fair_prob") or 0) * 100.0
+        book_imp_pct = float(p.get("book_implied") or 0) * 100.0
         matchup = str(p.get("matchup") or "")
         side = str(p.get("side_label") or "")
-        fair = float(p.get("fair_prob") or 0) * 100
-        edge = float(p.get("edge") or 0) * 100
         price = p.get("price")
         try:
             price_s = f"{int(price):+d}" if price is not None else "—"
@@ -245,49 +268,106 @@ def render_board_png(
             price_s = str(price)
         stake_u = p.get("_stake_units")
         stake_s = f"{float(stake_u):.1f}u" if stake_u is not None else "—"
+        market_label = p.get("market_label") or {"h2h":"Moneyline","spreads":"Spread","totals":"Total"}.get(p.get("market") or "h2h", "Moneyline")
+        best_book = str(p.get("book") or "—")
+        start_time = p.get("_start_time_ct") or ""
+        is_live_pick = (p.get("status_state") == "in")
 
         x = 28
-        # Column 0: # (with ★ for +EV — all should be, since this is the actionable set)
-        rank_lbl = f"★ {i}"
-        draw.text((x + 10, y + 12), rank_lbl, font=f_row_b, fill=_ACCENT)
+        # Col 0: #
+        rank_lbl = str(i)
+        tw = _text_w(draw, rank_lbl, f_row_b)
+        draw.text((x + cols[0][1] - tw - 12, y + 18), rank_lbl, font=f_row_b, fill=_INK_DIM)
         x += cols[0][1]
-        # Column 1: sport chip
-        chip_w = _text_w(draw, sport, f_chip) + 18
+
+        # Col 1: Tier chip
+        tier = _tier_from_edge(edge_val)
+        tier_color = _tier_color(tier)
         chip_x0 = x + 10
-        chip_y0 = y + 10
+        chip_y0 = y + 15
+        chip_w = 46
         draw.rounded_rectangle(
-            [chip_x0, chip_y0, chip_x0 + chip_w, chip_y0 + 24],
-            radius=6, fill=_CARD_ELEV, outline=_RULE, width=1,
+            [chip_x0, chip_y0, chip_x0 + chip_w, chip_y0 + 22],
+            radius=6,
+            fill=(*tier_color, 48) if hasattr(tier_color, '__len__') and len(tier_color)==3 else _CARD_ELEV,
+            outline=tier_color, width=1,
         )
-        draw.text((chip_x0 + 9, chip_y0 + 5), sport, font=f_chip, fill=_MUTED)
+        tw = _text_w(draw, tier, f_chip)
+        draw.text((chip_x0 + (chip_w - tw) // 2, chip_y0 + 4), tier, font=f_chip, fill=tier_color)
         x += cols[1][1]
-        # Column 2: matchup
-        matchup = _ellipsize(draw, matchup, f_match, cols[2][1] - 20)
-        draw.text((x + 10, y + 11), matchup, font=f_match, fill=_INK)
+
+        # Col 2: Matchup · Start (two lines)
+        mw = cols[2][1] - 18
+        mu = _ellipsize(draw, matchup, f_match, mw)
+        draw.text((x + 10, y + 7), mu, font=f_match, fill=_INK)
+        time_line = start_time
+        if is_live_pick:
+            time_line = (time_line + "  " if time_line else "") + "● LIVE · IN GAME"
+        if time_line:
+            color = _LIVE if is_live_pick else _MUTED
+            draw.text((x + 10, y + 31), _ellipsize(draw, time_line, f_sub_row, mw),
+                      font=f_sub_row, fill=color)
         x += cols[2][1]
-        # Column 3: pick (side_label) — accent color because this is the bet
-        side = _ellipsize(draw, side, f_side, cols[3][1] - 20)
-        draw.text((x + 10, y + 12), side, font=f_side, fill=_ACCENT)
+
+        # Col 3: Side · Market (two lines, like the live board's side-cell)
+        sw = cols[3][1] - 18
+        draw.text((x + 10, y + 7), _ellipsize(draw, market_label, f_sub_row, sw),
+                  font=f_sub_row, fill=_MUTED)
+        draw.text((x + 10, y + 24), _ellipsize(draw, side, f_side, sw),
+                  font=f_side, fill=_ACCENT if edge_val > 0 else _INK)
         x += cols[3][1]
-        # Column 4: fair% (right-aligned)
-        s = f"{fair:.1f}%"
-        tw = _text_w(draw, s, f_row_b)
-        draw.text((x + cols[4][1] - tw - 14, y + 12), s, font=f_row_b, fill=_INK)
+
+        # Col 4: Best Book chip
+        is_kalshi = best_book.lower() == "kalshi"
+        book_color = _ACCENT if is_kalshi else _WARN
+        chip_w = min(cols[4][1] - 18, _text_w(draw, best_book, f_chip) + 18)
+        chip_x0 = x + 10
+        chip_y0 = y + 15
+        draw.rounded_rectangle(
+            [chip_x0, chip_y0, chip_x0 + chip_w, chip_y0 + 22],
+            radius=6, fill=_CARD_ELEV, outline=book_color, width=1,
+        )
+        tw = _text_w(draw, best_book, f_chip)
+        draw.text((chip_x0 + (chip_w - tw) // 2, chip_y0 + 4), best_book, font=f_chip, fill=book_color)
         x += cols[4][1]
-        # Column 5: edge (good/muted)
-        edge_s = f"{edge:+.2f}"
-        edge_color = _GOOD if edge > 0 else (_BAD if edge < 0 else _MUTED)
-        tw = _text_w(draw, edge_s, f_row_b)
-        draw.text((x + cols[5][1] - tw - 14, y + 12), edge_s, font=f_row_b, fill=edge_color)
+
+        # Col 5: Price
+        tw = _text_w(draw, price_s, f_row_b)
+        draw.text((x + cols[5][1] - tw - 12, y + 18), price_s, font=f_row_b, fill=_INK)
         x += cols[5][1]
-        # Column 6: price
-        tw = _text_w(draw, price_s, f_row)
-        draw.text((x + cols[6][1] - tw - 14, y + 12), price_s, font=f_row, fill=_INK_DIM)
+
+        # Col 6: Book Prob %
+        s = f"{book_imp_pct:.1f}%"
+        tw = _text_w(draw, s, f_row)
+        draw.text((x + cols[6][1] - tw - 12, y + 18), s, font=f_row, fill=_MUTED)
         x += cols[6][1]
-        # Column 7: stake units (accent if > 0)
+
+        # Col 7: Sharp/Fair Prob %
+        s = f"{fair_pct:.1f}%"
+        tw = _text_w(draw, s, f_row_b)
+        fair_color = _ACCENT if edge_val > 0 else _MUTED
+        draw.text((x + cols[7][1] - tw - 12, y + 18), s, font=f_row_b, fill=fair_color)
+        x += cols[7][1]
+
+        # Col 8: Edge
+        edge_s = f"{edge_pct:+.2f}"
+        edge_color = _GOOD if edge_val > 0 else (_BAD if edge_val < -0.001 else _MUTED)
+        tw = _text_w(draw, edge_s, f_row_b)
+        draw.text((x + cols[8][1] - tw - 12, y + 18), edge_s, font=f_row_b, fill=edge_color)
+        x += cols[8][1]
+
+        # Col 9: Stake
         stake_color = _ACCENT if (stake_u or 0) > 0 else _MUTED
         tw = _text_w(draw, stake_s, f_row_b)
-        draw.text((x + cols[7][1] - tw - 14, y + 12), stake_s, font=f_row_b, fill=stake_color)
+        draw.text((x + cols[9][1] - tw - 12, y + 18), stake_s, font=f_row_b, fill=stake_color)
+        x += cols[9][1]
+
+        # Col 10: Methodology — "Model Edge · Live" / "Model Edge"
+        meth = "Model Edge"
+        meth_line2 = "In-play" if is_live_pick else "Pre-game"
+        draw.text((x + 10, y + 11), meth, font=f_sub_row, fill=_INK_DIM)
+        meth_color = _LIVE if is_live_pick else _MUTED
+        draw.text((x + 10, y + 30), meth_line2, font=f_sub_row, fill=meth_color)
 
         # Row divider
         draw.line([(28, y + row_h - 1), (W - 28, y + row_h - 1)], fill=_RULE, width=1)
@@ -300,12 +380,11 @@ def render_board_png(
     foot_left = f"Showing {len(picks)} actionable (+EV) picks"
     if truncated:
         foot_left += f"  ·  +{truncated} more actionable hidden"
-    draw.text((36, foot_y + 6), foot_left, font=f_foot_b, fill=_INK_DIM)
-    foot_right = f"★ = actionable (+EV, Kelly stake sized)   ·   generated by Edge agent"
+    draw.text((36, foot_y + 10), foot_left, font=f_foot_b, fill=_INK_DIM)
+    foot_right = "Tier A+ = big edge · A = standard · S = thin · W = watch-list    ·    Edge agent"
     rw = _text_w(draw, foot_right, f_foot)
-    draw.text((W - rw - 36, foot_y + 6), foot_right, font=f_foot, fill=_MUTED)
+    draw.text((W - rw - 36, foot_y + 10), foot_right, font=f_foot, fill=_MUTED)
 
-    # ----- Export -----
     buf = io.BytesIO()
     img.save(buf, format="PNG", optimize=True)
     return buf.getvalue()

@@ -349,6 +349,11 @@ def auto_log_agent_edges(edges: list, settings: dict, path: Optional[str] = None
             "methodology": "Agent · Pinnacle fair",
             "source": "agent-auto",
             "start_utc": start_val,
+            # pick_type: "pre_game" when the agent surfaced it before kickoff,
+            # "live_pick" when the game was already underway at scan time.
+            # Results carries this forward so in-play agent decisions stay
+            # visually distinct from pre-game ones in the audit trail.
+            "pick_type": "live_pick" if (e.get("status_state") == "in") else "pre_game",
             "notes": (
                 f"{best_book} @ {e.get('price')} vs Pinnacle · "
                 f"edge {edge_pct:+.2f}pts · "
