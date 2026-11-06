@@ -238,6 +238,15 @@ def list_events(sport: str, cache_ttl: int = 1800) -> List[dict]:
     return data
 
 
+def _event_odds_params(regions: str, markets: str, odds_format: str) -> dict:
+    return {
+        "regions": regions,
+        "markets": markets,
+        "oddsFormat": odds_format,
+        "dateFormat": "iso",
+    }
+
+
 def get_event_odds(
     sport: str,
     event_id: str,
@@ -258,17 +267,76 @@ def get_event_odds(
         return None
     data = _get(
         f"/sports/{sport}/events/{event_id}/odds",
-        {
-            "regions": regions,
-            "markets": markets,
-            "oddsFormat": odds_format,
-            "dateFormat": "iso",
-        },
+        _event_odds_params(regions, markets, odds_format),
         cache_ttl=cache_ttl,
     )
     if not data or not isinstance(data, dict):
         return None
     return data
+
+
+def event_odds_is_cached(
+    sport: str,
+    event_id: str,
+    regions: str = "us,eu",
+    markets: str = "totals_h1",
+    odds_format: str = "american",
+    cache_ttl: int = 6 * 3600,
+) -> bool:
+    """True when a get_event_odds call with these args would be served from
+    the disk cache (so it costs 0 credits). Lets credit preflights count only
+    the events that will actually hit the API."""
+    if not sport or not event_id:
+        return False
+    path = f"/sports/{sport}/events/{event_id}/odds"
+    cache_url = f"{ODDS_BASE}{path}?{urlencode(_event_odds_params(regions, markets, odds_format))}"
+    return _cache_read(cache_url, ttl=cache_ttl) is not None
+
+
+# ---------- player-prop daily spend ledger ----------
+# Props are the only fetch whose cost scales with event count, so they get a
+# hard per-day ceiling. Spend is measured from the API's own x-requests-used
+# counter (delta across a fetch batch), not estimated, so cache hits cost 0.
+
+_PROPS_SPEND_FILE = os.path.join(_CACHE_DIR, "props_spend.json")
+
+
+def _central_day() -> str:
+    try:
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+        return datetime.now(ZoneInfo("America/Chicago")).strftime("%Y-%m-%d")
+    except Exception:
+        return time.strftime("%Y-%m-%d")
+
+
+def _load_props_spend() -> dict:
+    try:
+        with open(_PROPS_SPEND_FILE, "r", encoding="utf-8") as f:
+            d = json.load(f)
+        return d if isinstance(d, dict) else {}
+    except (OSError, json.JSONDecodeError, ValueError):
+        return {}
+
+
+def props_spend_today() -> int:
+    return int(_load_props_spend().get(_central_day(), 0) or 0)
+
+
+def record_props_spend(credits: int) -> int:
+    """Add `credits` to today's props spend; returns the new daily total.
+    Only today's key is kept so the file never grows."""
+    if credits <= 0:
+        return props_spend_today()
+    day = _central_day()
+    total = int(_load_props_spend().get(day, 0) or 0) + int(credits)
+    try:
+        os.makedirs(_CACHE_DIR, exist_ok=True)
+        with open(_PROPS_SPEND_FILE, "w", encoding="utf-8") as f:
+            json.dump({day: total}, f)
+    except (OSError, TypeError):
+        pass
+    return total
 
 
 def merge_alt_markets_into_games(odds_games: List[dict], alt_data_by_eid: dict) -> List[dict]:

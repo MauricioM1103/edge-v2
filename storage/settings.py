@@ -59,6 +59,59 @@ _DEFAULTS: Dict[str, Any] = {
     "odds_alt_ttl": 6 * 3600,
     # Cache TTL for live odds in seconds. 3600 = 1h.
     "odds_live_ttl": 3600,
+    # ---- Player props (per-event endpoint; the one feature that can drain
+    # credits). Cost = regions × markets credits PER EVENT. Every knob below
+    # exists to bound that: only tonight's unstarted games, a per-sport event
+    # cap, a long cache, and a hard daily credit ceiling tracked off the API's
+    # own x-requests-used header.
+    "odds_player_props": True,
+    # Sports the prop fetcher may hit. Default = the big four (props markets
+    # are deepest there and Pinnacle prices them). Add college / soccer in
+    # Settings — the cost estimate updates live.
+    "odds_player_sports": ["nba", "nfl", "mlb", "nhl"],
+    # Per-sport prop markets. Only Over/Under (two-way) props — Yes-only
+    # markets like anytime-TD have no fair reference to price against.
+    # Keys are The Odds API market keys (see calc.agent.PROP_CATALOG).
+    "odds_player_markets": {
+        "nba": ["player_points", "player_rebounds", "player_assists"],
+        "wnba": ["player_points", "player_rebounds", "player_assists"],
+        "ncaab": ["player_points", "player_rebounds", "player_assists"],
+        "nfl": ["player_pass_yds", "player_rush_yds", "player_reception_yds", "player_receptions"],
+        "ncaaf": ["player_pass_yds", "player_rush_yds", "player_reception_yds"],
+        "cfl": ["player_pass_yds", "player_rush_yds", "player_reception_yds"],
+        "mlb": ["batter_hits", "batter_total_bases", "pitcher_strikeouts"],
+        "nhl": ["player_points", "player_shots_on_goal", "player_goals"],
+        "epl": ["player_shots_on_target", "player_shots"],
+        "la_liga": ["player_shots_on_target", "player_shots"],
+        "bundesliga": ["player_shots_on_target", "player_shots"],
+        "serie_a": ["player_shots_on_target", "player_shots"],
+        "ligue_1": ["player_shots_on_target", "player_shots"],
+        "mls": ["player_shots_on_target", "player_shots"],
+    },
+    # Prop lines drift more than 1H lines but we are not a live prop shop;
+    # 6h keeps a busy night to ~3 fetches of each slate.
+    "odds_player_ttl": 6 * 3600,
+    # Most events per sport per refresh (soonest kickoffs first). A 40-game
+    # NCAAB Saturday would otherwise cost 40 × regions × markets on its own.
+    "odds_player_max_events": 12,
+    # Only fetch props for games starting within this many hours. Tomorrow's
+    # games in the batch response are skipped — lines aren't settled yet and
+    # the fetch would be repeated tomorrow anyway.
+    "odds_player_horizon_hours": 14,
+    # Hard ceiling on credits spent on props per Central-US day. Once hit,
+    # props stop fetching until tomorrow; the Board says so. ~350/day on top
+    # of the ~200/day batch burn keeps a 20k/month plan comfortably inside
+    # its budget.
+    "odds_player_daily_cap": 350,
+    # Most prop rows the Board will show (best edge first). Props only
+    # surface when +EV — the watch-list universe is every player × market
+    # and would bury the game lines.
+    "odds_player_board_max": 10,
+    # Pinnacle does not post player props on The Odds API, so a prop's fair
+    # line is normally the no-vig consensus of the books posting that exact
+    # line. Book-to-book noise on props runs ~1-2 pts, so consensus-priced
+    # props need this much edge (vs agent_min_edge when Pinnacle is present).
+    "odds_player_consensus_min_edge": 0.03,
     # Books the agent will shop against Pinnacle fair, in addition to Kalshi.
     # Offshore books tolerate sharp action - DK/FanDuel/MGM/Caesars will ban
     # winning accounts within weeks so they are intentionally excluded.
@@ -138,6 +191,19 @@ def load() -> Dict[str, Any]:
             # the stale 10 forward so returning users see the wider board.
             if disk.get("agent_picks_shown") == 10:
                 disk["agent_picks_shown"] = _DEFAULTS["agent_picks_shown"]
+            # Migration 7: "props" joined the Board's Markets filter. A saved
+            # filter that still holds the full pre-props set meant "all
+            # markets", so extend it; a deliberately narrowed list is left alone.
+            bm = disk.get("board_markets")
+            if isinstance(bm, list) and "props" not in bm and {"h2h", "spreads", "totals"} <= set(bm):
+                disk["board_markets"] = list(bm) + ["props"]
+            # Per-sport prop markets: merge saved choices over defaults so a
+            # sport added in a later release gets its default list.
+            pm = disk.get("odds_player_markets")
+            if isinstance(pm, dict):
+                merged_pm = dict(_DEFAULTS["odds_player_markets"])
+                merged_pm.update({k: v for k, v in pm.items() if isinstance(v, list)})
+                disk["odds_player_markets"] = merged_pm
             out.update(disk)
     except (OSError, json.JSONDecodeError, ValueError):
         pass

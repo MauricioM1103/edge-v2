@@ -903,6 +903,238 @@ def scan_offshore_markets_vs_pinnacle(
     return out
 
 
+# ---------------------------------------------------------------------------
+# Player props
+# ---------------------------------------------------------------------------
+# Odds API market key -> short label. Only Over/Under (two-way) props are
+# listed: those have a fair reference (Pinnacle no-vig, else book consensus).
+# Yes-only props (anytime TD, first basket) are deliberately absent.
+PROP_MARKET_LABELS = {
+    # basketball
+    "player_points": "Points", "player_rebounds": "Rebounds", "player_assists": "Assists",
+    "player_threes": "3PM", "player_blocks": "Blocks", "player_steals": "Steals",
+    "player_turnovers": "Turnovers", "player_points_rebounds_assists": "PRA",
+    "player_points_rebounds": "Pts+Reb", "player_points_assists": "Pts+Ast",
+    "player_rebounds_assists": "Reb+Ast", "player_blocks_steals": "Blk+Stl",
+    # football
+    "player_pass_yds": "Pass Yds", "player_pass_tds": "Pass TDs", "player_pass_attempts": "Pass Att",
+    "player_pass_completions": "Completions", "player_pass_interceptions": "INTs",
+    "player_rush_yds": "Rush Yds", "player_rush_attempts": "Rush Att",
+    "player_reception_yds": "Rec Yds", "player_receptions": "Receptions",
+    "player_rush_reception_yds": "Rush+Rec Yds", "player_kicking_points": "Kicking Pts",
+    # baseball
+    "batter_hits": "Hits", "batter_total_bases": "Total Bases", "batter_home_runs": "Home Runs",
+    "batter_rbis": "RBIs", "batter_runs_scored": "Runs", "batter_hits_runs_rbis": "H+R+RBI",
+    "batter_strikeouts": "Batter Ks", "batter_walks": "Walks",
+    "pitcher_strikeouts": "Pitcher Ks", "pitcher_outs": "Outs", "pitcher_earned_runs": "Earned Runs",
+    "pitcher_hits_allowed": "Hits Allowed", "pitcher_walks": "Pitcher BB",
+    # hockey (player_points / player_assists shared with basketball labels)
+    "player_goals": "Goals", "player_shots_on_goal": "SOG", "player_blocked_shots": "Blocked Shots",
+    "player_power_play_points": "PP Points", "player_total_saves": "Saves",
+    # soccer
+    "player_shots_on_target": "Shots on Target", "player_shots": "Shots",
+}
+
+# Which O/U prop markets each sport supports on The Odds API. The Settings
+# picker builds from this so users can only choose keys the API will accept.
+PROP_CATALOG = {
+    "nba": ["player_points", "player_rebounds", "player_assists", "player_threes",
+            "player_blocks", "player_steals", "player_turnovers",
+            "player_points_rebounds_assists", "player_points_rebounds",
+            "player_points_assists", "player_rebounds_assists", "player_blocks_steals"],
+    "wnba": ["player_points", "player_rebounds", "player_assists", "player_threes",
+             "player_points_rebounds_assists"],
+    "ncaab": ["player_points", "player_rebounds", "player_assists", "player_threes"],
+    "nfl": ["player_pass_yds", "player_pass_tds", "player_pass_attempts", "player_pass_completions",
+            "player_pass_interceptions", "player_rush_yds", "player_rush_attempts",
+            "player_reception_yds", "player_receptions", "player_rush_reception_yds",
+            "player_kicking_points"],
+    "ncaaf": ["player_pass_yds", "player_pass_tds", "player_rush_yds", "player_reception_yds",
+              "player_receptions"],
+    "cfl": ["player_pass_yds", "player_rush_yds", "player_reception_yds", "player_receptions"],
+    "mlb": ["batter_hits", "batter_total_bases", "batter_home_runs", "batter_rbis",
+            "batter_runs_scored", "batter_hits_runs_rbis", "batter_strikeouts", "batter_walks",
+            "pitcher_strikeouts", "pitcher_outs", "pitcher_earned_runs", "pitcher_hits_allowed",
+            "pitcher_walks"],
+    "nhl": ["player_points", "player_assists", "player_goals", "player_shots_on_goal",
+            "player_blocked_shots", "player_power_play_points", "player_total_saves"],
+    "epl": ["player_shots_on_target", "player_shots", "player_assists"],
+    "la_liga": ["player_shots_on_target", "player_shots", "player_assists"],
+    "bundesliga": ["player_shots_on_target", "player_shots", "player_assists"],
+    "serie_a": ["player_shots_on_target", "player_shots", "player_assists"],
+    "ligue_1": ["player_shots_on_target", "player_shots", "player_assists"],
+    "mls": ["player_shots_on_target", "player_shots", "player_assists"],
+}
+
+
+def prop_market_label(market_key: str) -> str:
+    return PROP_MARKET_LABELS.get(market_key) or market_key.replace("player_", "").replace("_", " ").title()
+
+
+def scan_player_props_vs_pinnacle(
+    pinnacle_games: List[dict],
+    bankroll_cash: float,
+    sport_key: str = "",
+    prop_markets: Optional[List[str]] = None,
+    shop_books: Optional[List[str]] = None,
+    kelly_mult: float = 0.25,
+    min_edge_pct: float = 0.01,
+    max_bet_pct: float = 0.05,
+    espn_events_by_game: Optional[dict] = None,
+    min_consensus_books: int = 3,
+    consensus_min_edge_pct: float = 0.03,
+) -> List[dict]:
+    """Shop offshore books vs a fair line on player Over/Under props.
+
+    Per-event responses put props in each bookmaker's markets list with
+    outcomes shaped {name: "Over"|"Under", description: <player>, point, price}.
+    Each (player, point) is its own two-way market, so fair prob is computed
+    at that exact line: Pinnacle no-vig when Pinnacle posts the same line,
+    else the no-vig consensus of >= min_consensus_books books at that line.
+    Books posting a different point for the same player are not comparable
+    and are left out of that line's shop.
+
+    Emits edge dicts shaped like the offshore scanner's rows plus
+    is_prop=True, prop_player and a "Prop · <stat>" market_label. Grade is
+    always None — ESPN's scoreboard carries no player stats.
+    """
+    from calc.odds import implied_prob_american
+
+    out: List[dict] = []
+    if not pinnacle_games or not prop_markets:
+        return out
+    try:
+        bankroll_cash = float(bankroll_cash)
+    except (TypeError, ValueError):
+        return out
+    if bankroll_cash <= 0:
+        return out
+    shop_books = shop_books or ["Bovada", "LowVig.ag", "BetOnline.ag", "BetUS", "MyBookie.ag"]
+    shop_lower = {b.lower() for b in shop_books}
+    max_stake = bankroll_cash * max_bet_pct
+    espn_events_by_game = espn_events_by_game or {}
+
+    def _is_half(pt) -> bool:
+        try:
+            return abs(float(pt) - round(float(pt))) > 0.49
+        except (TypeError, ValueError):
+            return False
+
+    for g in pinnacle_games:
+        home_name = g.get("home_team")
+        away_name = g.get("away_team")
+        espn_ev = _find_espn_ev(espn_events_by_game, home_name, away_name)
+        for mk in prop_markets:
+            # lines[(player, point)] = {book_title: {"over": price, "under": price}}
+            lines: Dict[tuple, Dict[str, dict]] = {}
+            for b in (g.get("bookmakers") or []):
+                btitle = b.get("title") or b.get("key") or ""
+                for m in (b.get("markets") or []):
+                    if m.get("key") != mk:
+                        continue
+                    for o in (m.get("outcomes") or []):
+                        player = (o.get("description") or "").strip()
+                        side = (o.get("name") or "").strip().lower()
+                        if not player or side not in ("over", "under"):
+                            continue
+                        try:
+                            price = float(o.get("price"))
+                            pt = float(o.get("point"))
+                        except (TypeError, ValueError):
+                            continue
+                        lines.setdefault((player, pt), {}).setdefault(btitle, {})[side] = price
+            for (player, pt), by_book in lines.items():
+                if not _is_half(pt):
+                    continue  # whole-number lines carry push risk; skip like totals
+                # Fair at this exact line.
+                pin = next((d for t, d in by_book.items() if t.lower() == "pinnacle"), None)
+                fair_over = fair_under = None
+                fair_source = ""
+                if pin and pin.get("over") is not None and pin.get("under") is not None:
+                    fair_over, fair_under = no_vig_two_way(pin["over"], pin["under"])
+                    fair_source = "Pinnacle no-vig"
+                if fair_over is None:
+                    # Reference books only: the shop books are the ones we
+                    # suspect of mispricing, so they don't get a vote on
+                    # fair. Fall back to every book when the reference set
+                    # is too thin.
+                    two_way = {t: (d["over"], d["under"]) for t, d in by_book.items()
+                               if d.get("over") is not None and d.get("under") is not None}
+                    ref_pairs = [p for t, p in two_way.items() if t.lower() not in shop_lower]
+                    pairs = ref_pairs if len(ref_pairs) >= min_consensus_books else list(two_way.values())
+                    if len(pairs) >= min_consensus_books:
+                        fair_over, fair_under = _consensus_fair(pairs)
+                        fair_source = f"{len(pairs)}-book consensus"
+                if fair_over is None:
+                    continue
+                for side, fair_prob in (("over", fair_over), ("under", fair_under)):
+                    candidates = []
+                    for btitle, d in by_book.items():
+                        if btitle.lower() not in shop_lower:
+                            continue
+                        price = d.get(side)
+                        if price is None:
+                            continue
+                        imp = implied_prob_american(price)
+                        if imp is None:
+                            continue
+                        candidates.append({"book": btitle, "price": price, "implied": imp, "point": pt})
+                    if not candidates:
+                        continue
+                    best = min(candidates, key=lambda c: c["implied"])
+                    edge = fair_prob - best["implied"]
+                    # Consensus fair is a retail-book average, not a sharp
+                    # line; demand more edge from it than from Pinnacle.
+                    floor = min_edge_pct if fair_source.startswith("Pinnacle") else max(min_edge_pct, consensus_min_edge_pct)
+                    if edge < floor:
+                        continue
+                    kf = kelly_fraction(fair_prob, best["price"], kelly_mult) or 0.0
+                    stake = min(bankroll_cash * kf, max_stake)
+                    stat = prop_market_label(mk)
+                    out.append({
+                        "_sport": sport_key,
+                        "event_id": g.get("id"),
+                        "espn_event_id": espn_ev.get("id") if espn_ev else None,
+                        "home_team": home_name,
+                        "away_team": away_name,
+                        "matchup": f"{away_name} @ {home_name}",
+                        "market": mk,
+                        "market_label": f"Prop · {stat}",
+                        "is_prop": True,
+                        "prop_player": player,
+                        "prop_stat": stat,
+                        "side_label": f"{player} {'Over' if side == 'over' else 'Under'} {pt:g}",
+                        "point": pt,
+                        "picked_side_key": "home" if side == "over" else "away",
+                        "price": best["price"],
+                        "price_cents": int(round(best["implied"] * 100)),
+                        "book": best["book"],
+                        "book_implied": best["implied"],
+                        "fair_prob": fair_prob,
+                        "fair_source": fair_source,
+                        "edge": edge,
+                        "edge_pct": edge * 100.0,
+                        "kelly_frac": kf,
+                        "stake_dollars": stake,
+                        "kalshi_price_cents": None,
+                        "kalshi_implied": None,
+                        "kalshi_ticker": None,
+                        "kalshi_url": None,
+                        "candidates": candidates,
+                        "start_utc": espn_ev.get("start_utc") if espn_ev else None,
+                        "commence_time": g.get("commence_time"),
+                        "home_abbr": ((espn_ev.get("home") or {}).get("abbr") or "").upper() if espn_ev else "",
+                        "away_abbr": ((espn_ev.get("away") or {}).get("abbr") or "").upper() if espn_ev else "",
+                        "status_state": espn_ev.get("status_state") if espn_ev else None,
+                        "status_detail": espn_ev.get("status_detail") if espn_ev else None,
+                        "home_score": (espn_ev.get("home") or {}).get("score") if espn_ev else None,
+                        "away_score": (espn_ev.get("away") or {}).get("score") if espn_ev else None,
+                        "grade": None,
+                    })
+    out.sort(key=lambda r: -r["edge"])
+    return out
+
+
 def apply_daily_cap(edges: List[dict], bankroll_cash: float, daily_cap_pct: float = 0.25) -> List[dict]:
     """Top-N selection: take picks in edge-rank order until the cap is used.
 

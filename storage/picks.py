@@ -226,7 +226,10 @@ def _market_slot(p: dict) -> tuple:
             pass
     if market in ("h2h", "h2h_h1"):
         pt = None  # moneyline is always two-sided with no point
-    return (sport, event, market, pt)
+    # Player props: the slot is per player — "LeBron Over 24.5" and "Curry
+    # Over 24.5" share event/market/point but are not opposing sides.
+    player = (p.get("player") or "").strip().lower() or None
+    return (sport, event, market, pt, player)
 
 
 def upsert_agent_pick(pick: dict, path: Optional[str] = None) -> Optional[dict]:
@@ -354,6 +357,12 @@ def auto_log_agent_edges(edges: list, settings: dict, path: Optional[str] = None
             # Results carries this forward so in-play agent decisions stay
             # visually distinct from pre-game ones in the audit trail.
             "pick_type": "live_pick" if (e.get("status_state") == "in") else "pre_game",
+            # Player props carry the player so the ledger's opposing-side
+            # dedup keys per player, and so Results can label the row. They
+            # can't be graded from the ESPN scoreboard (needs a box score),
+            # so auto_settle leaves them open.
+            "market_family": "prop" if e.get("is_prop") else "game",
+            "player": e.get("prop_player"),
             "notes": (
                 f"{best_book} @ {e.get('price')} vs Pinnacle · "
                 f"edge {edge_pct:+.2f}pts · "
@@ -484,6 +493,8 @@ def auto_settle(path: Optional[str] = None) -> int:
     for p in picks:
         if p.get("status") not in (None, "open"):
             continue
+        if (p.get("market_family") or "game") == "prop":
+            continue  # scoreboard has no player stats; needs a box-score grader
         sport = p.get("sport")
         event_id = p.get("event_id")
         if not sport or not event_id:

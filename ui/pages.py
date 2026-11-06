@@ -1151,7 +1151,7 @@ def _render_board_filters_widget(all_available_sports: list, saved_board_sports:
             "Markets",
             options=all_markets_opts,
             default=[m for m in saved_board_markets if m in all_markets_opts] or list(all_markets_opts),
-            format_func=lambda m: {"h2h": "Moneyline", "spreads": "Spread", "totals": "Total"}.get(m, m),
+            format_func=lambda m: {"h2h": "Moneyline", "spreads": "Spread", "totals": "Total", "props": "Player props"}.get(m, m),
             key="board_markets_filter",
             placeholder="All markets",
             help="Which bet markets the agent considers.",
@@ -1206,14 +1206,14 @@ def render_dashboard(settings: dict):
     # Spec: default filter = ALL sports and ALL markets on a fresh visit so
     # users see the widest slate before narrowing. Saved selections still win.
     saved_board_sports = saved_cfg_board.get("board_sports") or list(all_available_sports)
-    saved_board_markets = saved_cfg_board.get("board_markets") or ["h2h", "spreads", "totals"]
+    saved_board_markets = saved_cfg_board.get("board_markets") or ["h2h", "spreads", "totals", "props"]
 
     # Prefer a live widget value (set earlier this session) over the saved one
     # so the news hero sees the CURRENT selection on rerun.
     board_sports = st.session_state.get("board_sports_filter") or [
         s for s in saved_board_sports if s in all_available_sports
     ] or list(all_available_sports)
-    all_markets_opts = ["h2h", "spreads", "totals"]
+    all_markets_opts = ["h2h", "spreads", "totals", "props"]
     board_markets = st.session_state.get("board_markets_filter") or [
         m for m in saved_board_markets if m in all_markets_opts
     ] or all_markets_opts
@@ -1275,6 +1275,45 @@ def render_dashboard(settings: dict):
     alt_markets_cfg = (saved_cfg.get("odds_alt_markets") or "").strip()
     alt_sports_allow = {str(x).strip().lower() for x in (saved_cfg.get("odds_alt_sports") or []) if str(x).strip()}
     alt_ttl = int(saved_cfg.get("odds_alt_ttl") or 6 * 3600)
+    # Player props: per-event like alt markets, but bounded harder because
+    # the universe is every game × every prop market. See storage.settings
+    # for what each knob guards. Status is stashed in session_state so the
+    # Board can say why props did or didn't fetch this refresh.
+    props_on = bool(saved_cfg.get("odds_player_props"))
+    # Unticking "Player props" in the Board's Markets filter also skips the
+    # fetch — no point spending per-event credits on rows that won't show.
+    props_filtered_out = props_on and ("props" not in board_markets)
+    props_on = props_on and not props_filtered_out
+    props_sports_allow = {str(x).strip().lower() for x in (saved_cfg.get("odds_player_sports") or []) if str(x).strip()}
+    props_markets_cfg = saved_cfg.get("odds_player_markets") or {}
+    props_ttl = int(saved_cfg.get("odds_player_ttl") or 6 * 3600)
+    props_max_events = int(saved_cfg.get("odds_player_max_events") or 12)
+    props_horizon_h = float(saved_cfg.get("odds_player_horizon_hours") or 14)
+    props_daily_cap = int(saved_cfg.get("odds_player_daily_cap") or 350)
+    props_n_regions = len([r for r in regions.split(",") if r.strip()]) or 1
+    props_status: dict = {
+        "enabled": bool(saved_cfg.get("odds_player_props")), "filtered_out": props_filtered_out,
+        "cap": props_daily_cap, "spent_today": odds_api.props_spend_today(), "sports": {},
+    }
+
+    def _prop_event_ids(games: list) -> list:
+        """Tonight's unstarted games inside the horizon, soonest first, capped."""
+        now = datetime.now(timezone.utc)
+        picked = []
+        for og in games:
+            eid = og.get("id")
+            ct = og.get("commence_time")
+            if not eid or not ct:
+                continue
+            try:
+                start = datetime.fromisoformat(str(ct).replace("Z", "+00:00"))
+            except ValueError:
+                continue
+            hours_out = (start - now).total_seconds() / 3600.0
+            if 0 <= hours_out <= props_horizon_h:
+                picked.append((start, eid))
+        picked.sort()
+        return [eid for _s, eid in picked[:props_max_events]]
 
     # Per-sport fetches, aggregated. CREDIT GUARD: only hit the Odds API
     # for sports that actually have ESPN games on the selected date.
@@ -1304,6 +1343,44 @@ def render_dashboard(settings: dict):
                     alt_data = {}
                 if alt_data:
                     odds_api.merge_alt_markets_into_games(odds_games_sp, alt_data)
+        # Player props enrichment — same per-event endpoint, stricter guard:
+        #  - sport allowlisted and has prop markets configured
+        #  - only tonight's unstarted games inside the horizon, capped
+        #  - events already on disk cost 0 and don't count toward the cap
+        #  - hard daily credit ceiling, measured off x-requests-used
+        if props_on and odds_games_sp and is_today and sp in props_sports_allow:
+            sp_prop_markets = [m for m in (props_markets_cfg.get(sp) or []) if m]
+            sp_status = {"markets": len(sp_prop_markets), "events": 0, "uncached": 0, "est": 0, "spent": 0, "skipped": None}
+            eids = _prop_event_ids(odds_games_sp) if sp_prop_markets else []
+            if not sp_prop_markets:
+                sp_status["skipped"] = "no markets configured"
+            elif not eids:
+                sp_status["skipped"] = "no games in window"
+            else:
+                mk_str = ",".join(sp_prop_markets)
+                uncached = [
+                    e for e in eids
+                    if not odds_api.event_odds_is_cached(
+                        espn.ODDS_API_SPORT_KEYS.get(sp, ""), e, regions, mk_str, cache_ttl=props_ttl)
+                ]
+                est = len(uncached) * props_n_regions * len(sp_prop_markets)
+                sp_status.update({"events": len(eids), "uncached": len(uncached), "est": est})
+                if est > 0 and props_status["spent_today"] + est > props_daily_cap:
+                    sp_status["skipped"] = f"daily cap ({props_status['spent_today']}+{est} > {props_daily_cap})"
+                else:
+                    before = odds_api.get_credit_status().get("used_total")
+                    try:
+                        prop_data = load_alt_markets(sp, tuple(eids), regions, mk_str, cache_ttl=props_ttl)
+                    except Exception:
+                        prop_data = {}
+                    after = odds_api.get_credit_status().get("used_total")
+                    spent = (after - before) if (before is not None and after is not None and after >= before) else est
+                    if spent:
+                        props_status["spent_today"] = odds_api.record_props_spend(spent)
+                    sp_status["spent"] = spent
+                    if prop_data:
+                        odds_api.merge_alt_markets_into_games(odds_games_sp, prop_data)
+            props_status["sports"][sp] = sp_status
         for og in odds_games_sp or []:
             og["_sport"] = sp
             all_odds_games_tagged.append((sp, og))
@@ -1322,6 +1399,7 @@ def render_dashboard(settings: dict):
     events = [ev for _sp, ev in all_events_tagged]
     odds_games = [og for _sp, og in all_odds_games_tagged]
     merged = all_merged
+    st.session_state["_props_status"] = props_status
 
     # summary metrics
     picks = picks_store.list_picks()
@@ -1786,6 +1864,15 @@ def _render_agent_panel(odds_games, kalshi_cash, settings,
             if m and m not in markets_list:
                 markets_list.append(m)
     scan_other_fn = getattr(agent_calc, "scan_offshore_markets_vs_pinnacle", None)
+    # Player props: only +EV rows surface (min_edge_log, not the negative
+    # board floor) — the watch-list universe is every player × market and
+    # would bury the game lines. Prop markets never enter markets_list; the
+    # offshore scanner's Over/Under parser is per-game, not per-player.
+    scan_props_fn = getattr(agent_calc, "scan_player_props_vs_pinnacle", None)
+    props_on = bool(saved_cfg.get("odds_player_props")) and callable(scan_props_fn)
+    props_sports_allow = {str(x).strip().lower() for x in (saved_cfg.get("odds_player_sports") or [])}
+    props_markets_cfg = saved_cfg.get("odds_player_markets") or {}
+    props_board_max = int(saved_cfg.get("odds_player_board_max") or 10)
     for sp in (sports_list or []):
         sp_kalshi = kalshi_markets_by_sport.get(sp, {})
         sp_pin = pinnacle_games_by_sport.get(sp, [])
@@ -1834,6 +1921,24 @@ def _render_agent_panel(odds_games, kalshi_cash, settings,
             except Exception:
                 other_edges = []
             edges.extend(other_edges)
+
+        if props_on and sp in props_sports_allow and props_markets_cfg.get(sp):
+            try:
+                prop_edges = scan_props_fn(
+                    pinnacle_games=sp_pin,
+                    bankroll_cash=kalshi_cash,
+                    sport_key=sp,
+                    prop_markets=list(props_markets_cfg.get(sp) or []),
+                    shop_books=shop_books,
+                    kelly_mult=kelly_mult,
+                    min_edge_pct=min_edge_log,
+                    max_bet_pct=max_bet,
+                    espn_events_by_game=sp_espn,
+                    consensus_min_edge_pct=float(saved_cfg.get("odds_player_consensus_min_edge") or 0.03),
+                )
+            except Exception:
+                prop_edges = []
+            edges.extend(prop_edges)
     # Deduplicate across sports — key by (event, market, side).
     seen = set()
     deduped = []
@@ -1917,7 +2022,8 @@ def _render_agent_panel(odds_games, kalshi_cash, settings,
                 pt_norm = pt
         else:
             pt_norm = pt
-        return (e.get("event_id"), mk, pt_norm)
+        # Props: Over/Under collapse per player, not per market.
+        return (e.get("event_id"), mk, pt_norm, (e.get("prop_player") or "").lower() or None)
     grouped: Dict[tuple, dict] = {}
     for e in deduped:
         gk = _group_key(e)
@@ -1985,7 +2091,7 @@ def _render_agent_panel(odds_games, kalshi_cash, settings,
         sp = (e.get("_sport") or "").lower()
         if board_sports_sel and sp and sp not in board_sports_sel:
             return False
-        mk = (e.get("market") or "h2h").lower()
+        mk = "props" if e.get("is_prop") else (e.get("market") or "h2h").lower()
         if board_markets_sel and mk not in board_markets_sel:
             return False
         # Hide heavy Pinnacle favorites that don't carry a positive edge.
@@ -1999,6 +2105,12 @@ def _render_agent_panel(odds_games, kalshi_cash, settings,
             return False
         return True
     filtered = [e for e in edges if _keep(e)]
+    # Cap prop rows (best edge first) so a deep prop slate can't crowd out
+    # the game lines. Game-line rows are untouched.
+    prop_rows = sorted((e for e in filtered if e.get("is_prop")), key=lambda e: -float(e.get("edge") or 0))
+    if len(prop_rows) > props_board_max:
+        keep_ids = {id(e) for e in prop_rows[:props_board_max]}
+        filtered = [e for e in filtered if not e.get("is_prop") or id(e) in keep_ids]
     if not filtered:
         html('<div class="hint">Every edge was filtered out. Clear a filter above to see picks again.</div>')
         return []
@@ -2065,9 +2177,15 @@ def _render_agent_panel(odds_games, kalshi_cash, settings,
             return "c"
         return "w"
 
-    def _methodology_tag(edge_val: float, is_settled: bool) -> str:
+    def _methodology_tag(edge_val: float, is_settled: bool, e: Optional[dict] = None) -> str:
         if is_settled:
             return '<span class="method-tag watch">Settled</span>'
+        if e is not None and e.get("is_prop"):
+            # Props name their fair source: Pinnacle rarely posts props, so
+            # most rows are priced off an N-book no-vig consensus.
+            src = (e.get("fair_source") or "")
+            short = "Pinnacle" if src.startswith("Pinnacle") else _esc_row(src.replace(" consensus", ""))
+            return f'<span class="method-tag sit">Prop · {short or "consensus"}</span>'
         if edge_val > 0.020:
             return '<span class="method-tag line">Sharp Move</span>'
         if edge_val > 0:
@@ -2218,7 +2336,7 @@ def _render_agent_panel(odds_games, kalshi_cash, settings,
             f'<td class="num-cell {edge_cls}">{edge_pct:+.1f}%</td>'
             f'<td><div class="stake-cell"><span class="{stake_classes}">{stake_value}</span>'
             f'<span class="d">{stake_detail}</span></div></td>'
-            f'<td>{_methodology_tag(edge_val, is_settled)}</td>'
+            f'<td>{_methodology_tag(edge_val, is_settled, e)}</td>'
             '</tr>'
         )
 
@@ -2379,6 +2497,33 @@ def _render_agent_panel(odds_games, kalshi_cash, settings,
     )
     html(f'<div class="auto-log-caption">{_caption_line}</div>')
 
+    # Props status line: what the per-event fetch did this refresh and where
+    # today's prop credit spend sits against the daily ceiling.
+    _ps = st.session_state.get("_props_status") or {}
+    if _ps.get("enabled") and _ps.get("filtered_out"):
+        html(
+            '<div class="hint" style="margin-top:8px;"><strong>Player props</strong> · unticked in the '
+            'Markets filter, so nothing was fetched this refresh (0 credits).</div>'
+        )
+    elif _ps.get("enabled"):
+        _n_prop_rows = sum(1 for e in top if e.get("is_prop"))
+        _parts = []
+        for _sp, _s in (_ps.get("sports") or {}).items():
+            if _s.get("skipped"):
+                _parts.append(f"{_sp.upper()}: skipped — {_s['skipped']}")
+            else:
+                _parts.append(f"{_sp.upper()}: {_s.get('events', 0)} games · {_s.get('spent', 0)} credits")
+        _spent = int(_ps.get("spent_today") or 0)
+        _cap = int(_ps.get("cap") or 0)
+        _tone = "warn" if (_cap and _spent >= _cap) else ""
+        html(
+            f'<div class="hint {_tone}" style="margin-top:8px;">'
+            f'<strong>Player props</strong> · {_n_prop_rows} +EV prop{"s" if _n_prop_rows != 1 else ""} on the board · '
+            f'props credits today <strong>{_spent} / {_cap}</strong>'
+            + (f' · {" · ".join(_parts)}' if _parts else " · no allowlisted sport had games in the window")
+            + '</div>'
+        )
+
     if dropped:
         # Dropped picks hit the daily cap - show them separately with $0 stake so
         # the user can see opportunities their cap didn't fund.
@@ -2538,7 +2683,7 @@ def _render_single_pick_analysis(e, idx, total, unit_dollars, _units_fn, kelly_m
     # Fair row first (reference).
     ladder_rows += (
         f'<tr style="background: color-mix(in oklab, var(--accent) 8%, transparent);">'
-        f'<td><strong class="accent">Pinnacle fair (no-vig)</strong></td>'
+        f'<td><strong class="accent">{_esc(e.get("fair_source") or "Pinnacle no-vig")} (fair)</strong></td>'
         f'<td class="num mono"><strong>{fair_prob*100:.2f}%</strong></td>'
         f'<td class="num mono accent">—</td>'
         f'<td class="mono" style="color:var(--muted); font-size:11px;">reference</td>'
@@ -3996,6 +4141,150 @@ def render_settings(settings: dict):
             st.success(f"Alt markets enabled: {new_alt_str}")
         else:
             st.info("Alt markets disabled.")
+
+    # ----- Player props (per-event; hard-capped) -----
+    st.markdown("### Player props")
+    st.caption(
+        "Over/Under player props. Fair line = no-vig consensus of every book posting that exact "
+        "line (Pinnacle is used automatically when present — it does not post props on The Odds "
+        "API today). Shop = your offshore books only. Per-event pricing: "
+        "**regions × markets credits per game**. Only tonight's unstarted games "
+        "are fetched, capped per sport, cached 6h, and cut off by a hard daily ceiling."
+    )
+    props_enabled_now = st.toggle(
+        "Scan player props", value=bool(saved.get("odds_player_props")), key="set_props_on",
+    )
+    if props_enabled_now != bool(saved.get("odds_player_props")):
+        settings_store.save({"odds_player_props": props_enabled_now})
+        st.cache_data.clear()
+        st.rerun()
+    if props_enabled_now:
+        prop_sport_opts = [s for s in espn.ODDS_API_SPORT_KEYS if s in agent_calc.PROP_CATALOG]
+        cur_prop_sports = [s for s in (saved.get("odds_player_sports") or []) if s in prop_sport_opts]
+        pc1, pc2 = st.columns([3, 1])
+        with pc1:
+            new_prop_sports = st.multiselect(
+                "Sports to scan for props",
+                options=prop_sport_opts,
+                default=cur_prop_sports,
+                format_func=lambda s: espn.DISPLAY_NAMES.get(s, s.upper()),
+                key="set_props_sports",
+                help="Props cost per game, so this list is the biggest lever on credit burn.",
+            )
+        with pc2:
+            st.write("")
+            if st.button("All prop sports", key="set_props_all_sports", use_container_width=True):
+                settings_store.save({"odds_player_sports": prop_sport_opts})
+                st.cache_data.clear()
+                st.rerun()
+        if new_prop_sports != cur_prop_sports:
+            settings_store.save({"odds_player_sports": new_prop_sports})
+            st.cache_data.clear()
+        cur_prop_markets = dict(saved.get("odds_player_markets") or {})
+        with st.expander("Prop markets per sport", expanded=False):
+            changed_pm = False
+            for s in new_prop_sports:
+                opts = agent_calc.PROP_CATALOG.get(s) or []
+                cur = [m for m in (cur_prop_markets.get(s) or []) if m in opts]
+                chosen = st.multiselect(
+                    espn.DISPLAY_NAMES.get(s, s.upper()),
+                    options=opts, default=cur,
+                    format_func=agent_calc.prop_market_label,
+                    key=f"set_props_mk_{s}",
+                )
+                if chosen != cur:
+                    cur_prop_markets[s] = chosen
+                    changed_pm = True
+            if changed_pm:
+                settings_store.save({"odds_player_markets": cur_prop_markets})
+                st.cache_data.clear()
+        pk1, pk2, pk3, pk4, pk5 = st.columns(5)
+        with pk1:
+            new_cap = st.number_input(
+                "Daily props credit cap", min_value=0, max_value=5000, step=50,
+                value=int(saved.get("odds_player_daily_cap") or 350), key="set_props_cap",
+                help="Props stop fetching for the day once this is spent. Measured off the API's own usage counter.",
+            )
+        with pk2:
+            new_max_ev = st.number_input(
+                "Max games / sport", min_value=1, max_value=60, step=1,
+                value=int(saved.get("odds_player_max_events") or 12), key="set_props_max_ev",
+            )
+        with pk3:
+            ttl_opts = {3 * 3600: "3h", 6 * 3600: "6h", 12 * 3600: "12h"}
+            cur_ttl = int(saved.get("odds_player_ttl") or 6 * 3600)
+            new_ttl = st.selectbox(
+                "Props cache", options=list(ttl_opts.keys()),
+                index=list(ttl_opts.keys()).index(cur_ttl) if cur_ttl in ttl_opts else 1,
+                format_func=lambda v: ttl_opts[v], key="set_props_ttl",
+            )
+        with pk4:
+            new_board_max = st.number_input(
+                "Max prop rows on Board", min_value=1, max_value=50, step=1,
+                value=int(saved.get("odds_player_board_max") or 10), key="set_props_board_max",
+            )
+        with pk5:
+            cur_cons_edge = float(saved.get("odds_player_consensus_min_edge") or 0.03)
+            new_cons_edge = st.number_input(
+                "Min edge, consensus fair (%)", min_value=0.5, max_value=15.0, step=0.5,
+                value=round(cur_cons_edge * 100, 1), key="set_props_cons_edge",
+                help="Edge floor when the fair line is a book consensus rather than Pinnacle. "
+                     "Retail books disagree by 1-2 pts on props, so 3%+ filters that noise.",
+            )
+        _pk_changes = {}
+        if int(new_cap) != int(saved.get("odds_player_daily_cap") or 350):
+            _pk_changes["odds_player_daily_cap"] = int(new_cap)
+        if int(new_max_ev) != int(saved.get("odds_player_max_events") or 12):
+            _pk_changes["odds_player_max_events"] = int(new_max_ev)
+        if int(new_ttl) != cur_ttl:
+            _pk_changes["odds_player_ttl"] = int(new_ttl)
+        if int(new_board_max) != int(saved.get("odds_player_board_max") or 10):
+            _pk_changes["odds_player_board_max"] = int(new_board_max)
+        if abs(float(new_cons_edge) / 100.0 - cur_cons_edge) > 1e-9:
+            _pk_changes["odds_player_consensus_min_edge"] = round(float(new_cons_edge) / 100.0, 4)
+        if _pk_changes:
+            settings_store.save(_pk_changes)
+            st.cache_data.clear()
+        # Live estimate for tonight, from ESPN (free): games inside the
+        # horizon per allowlisted sport × regions × markets.
+        _horizon = float(saved.get("odds_player_horizon_hours") or 14)
+        _now = datetime.now(timezone.utc)
+        est_lines = []
+        est_total = 0
+        for s in new_prop_sports:
+            n_mk = len([m for m in (cur_prop_markets.get(s) or []) if m])
+            if not n_mk:
+                continue
+            n_games = 0
+            for ev in load_espn_scoreboard(s) or []:
+                start = ev.get("start_utc")
+                if ev.get("status_state") != "pre" or not start:
+                    continue
+                try:
+                    hrs = (start - _now).total_seconds() / 3600.0
+                except TypeError:
+                    continue
+                if 0 <= hrs <= _horizon:
+                    n_games += 1
+            n_games = min(n_games, int(new_max_ev))
+            cost = n_games * n_regions * n_mk
+            est_total += cost
+            if n_games:
+                est_lines.append(f"{espn.DISPLAY_NAMES.get(s, s.upper())} {n_games} × {n_regions} × {n_mk} = **{cost}**")
+        spent_today = odds_api.props_spend_today()
+        remaining_c = odds_api.get_credit_status().get("remaining")
+        st.caption(
+            f"Tonight, first fetch of each slate ≈ **{est_total} credits** "
+            + (f"({'; '.join(est_lines)}). " if est_lines else "(no allowlisted sport has games in the next "
+               f"{_horizon:g}h). ")
+            + f"Spent on props today: **{spent_today} / {int(new_cap)}**. "
+            + (f"Plan credits remaining: **{remaining_c:,}**." if remaining_c is not None else "")
+        )
+        if est_total > int(new_cap):
+            st.warning(
+                f"Tonight's estimate ({est_total}) is above the daily cap ({int(new_cap)}): later sports in the "
+                "scan order will be skipped once the cap is reached. Drop a sport or a market, or raise the cap."
+            )
     with c3:
         if st.button("Clear Odds API disk cache"):
             import shutil, os

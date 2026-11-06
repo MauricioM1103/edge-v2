@@ -289,7 +289,9 @@ def render_board_png(
         draw.rounded_rectangle(
             [chip_x0, chip_y0, chip_x0 + chip_w, chip_y0 + 22],
             radius=6,
-            fill=(*tier_color, 48) if hasattr(tier_color, '__len__') and len(tier_color)==3 else _CARD_ELEV,
+            # RGB canvas: blend the tint by hand (an RGBA tuple's alpha is
+            # ignored here, which painted the chip solid and hid the letter).
+            fill=tuple(int(c * 0.22 + b * 0.78) for c, b in zip(tier_color, _CARD_ELEV)),
             outline=tier_color, width=1,
         )
         tw = _text_w(draw, tier, f_chip)
