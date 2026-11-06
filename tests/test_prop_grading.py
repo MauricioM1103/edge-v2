@@ -111,6 +111,59 @@ def unit_tests():
     check("Odds API vs ESPN naming on spreads", spread("LA Clippers -3.5", -3.5, clip_final) == "win")
     check("unknown team spread stays open", spread("Boston Celtics -2.5", -2.5) == "open")
 
+    print("== BTTS labels")
+
+    def btts(selection, fin):
+        row = {"selection": selection, "status": "open"}
+        picks_store._settle_btts(row, fin)
+        return row["status"]
+
+    both_scored = {"home_score": 2, "away_score": 1}
+    one_blank = {"home_score": 3, "away_score": 0}
+    goalless = {"home_score": 0, "away_score": 0}
+    check("BTTS side parse: Yes", picks_store._btts_side("Both to score: Yes") == "yes")
+    check("BTTS side parse: No", picks_store._btts_side("BTTS No") == "no")
+    check("BTTS side parse: ambiguous -> None", picks_store._btts_side("yes or no") is None)
+    check("BTTS Yes wins when both score", btts("Both to score: Yes", both_scored) == "win")
+    check("BTTS Yes loses on a blank sheet", btts("Both to score: Yes", one_blank) == "loss")
+    check("BTTS No wins when one is blank", btts("Both to score: No", one_blank) == "win")
+    check("BTTS No wins on 0-0", btts("Both to score: No", goalless) == "win")
+    check("BTTS without score stays open",
+          btts("Both to score: Yes", {"home_score": None, "away_score": 2}) == "open")
+
+    print("== Draw No Bet labels")
+
+    def dnb(selection, fin):
+        row = {"selection": selection, "status": "open"}
+        picks_store._settle_dnb(row, fin)
+        return row["status"]
+
+    # Simulated soccer finals (ESPN fields).
+    arsenal_win = {"home_name": "Arsenal", "away_name": "Chelsea",
+                   "home_score": 2, "away_score": 1, "home_won": True}
+    chelsea_win = {"home_name": "Arsenal", "away_name": "Chelsea",
+                   "home_score": 0, "away_score": 1, "home_won": False}
+    draw = {"home_name": "Arsenal", "away_name": "Chelsea",
+            "home_score": 1, "away_score": 1, "home_won": None}
+    check("DNB label strip: '(DNB)'", picks_store._dnb_team("Arsenal (DNB)") == "Arsenal")
+    check("DNB label strip: 'DNB' tail", picks_store._dnb_team("Arsenal DNB") == "Arsenal")
+    check("DNB home win", dnb("Arsenal (DNB)", arsenal_win) == "win")
+    check("DNB home loss", dnb("Arsenal (DNB)", chelsea_win) == "loss")
+    check("DNB away win", dnb("Chelsea (DNB)", chelsea_win) == "win")
+    check("DNB draw -> push (either side)",
+          dnb("Arsenal (DNB)", draw) == "push" and dnb("Chelsea (DNB)", draw) == "push")
+    # Naming drift still resolves through same_team.
+    man_city_draw = {"home_name": "Manchester City", "away_name": "Liverpool",
+                     "home_score": 1, "away_score": 1, "home_won": None}
+    check("DNB Odds API vs ESPN naming on draw",
+          dnb("Man City (DNB)", man_city_draw) == "push")
+    man_city_win = {"home_name": "Manchester City", "away_name": "Liverpool",
+                    "home_score": 2, "away_score": 1, "home_won": True}
+    check("DNB Odds API vs ESPN naming on win",
+          dnb("Man City (DNB)", man_city_win) == "win")
+    check("DNB unknown team stays open",
+          dnb("Real Madrid (DNB)", arsenal_win) == "open")
+
 
 def find_recent_final_nba():
     today = datetime.now(timezone.utc).date()

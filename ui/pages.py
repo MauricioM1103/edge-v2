@@ -1158,7 +1158,8 @@ def _render_board_filters_widget(all_available_sports: list, saved_board_sports:
             "Markets",
             options=all_markets_opts,
             default=[m for m in saved_board_markets if m in all_markets_opts] or list(all_markets_opts),
-            format_func=lambda m: {"h2h": "Moneyline", "spreads": "Spread", "totals": "Total", "props": "Player props"}.get(m, m),
+            format_func=lambda m: {"h2h": "Moneyline", "spreads": "Spread", "totals": "Total",
+                                   "props": "Player props", "btts": "BTTS", "draw_no_bet": "Draw No Bet"}.get(m, m),
             key="board_markets_filter",
             placeholder="All markets",
             help="Which bet markets the agent considers.",
@@ -1213,14 +1214,14 @@ def render_dashboard(settings: dict):
     # Spec: default filter = ALL sports and ALL markets on a fresh visit so
     # users see the widest slate before narrowing. Saved selections still win.
     saved_board_sports = saved_cfg_board.get("board_sports") or list(all_available_sports)
-    saved_board_markets = saved_cfg_board.get("board_markets") or ["h2h", "spreads", "totals", "props"]
+    saved_board_markets = saved_cfg_board.get("board_markets") or ["h2h", "spreads", "totals", "props", "btts", "draw_no_bet"]
 
     # Prefer a live widget value (set earlier this session) over the saved one
     # so the news hero sees the CURRENT selection on rerun.
     board_sports = st.session_state.get("board_sports_filter") or [
         s for s in saved_board_sports if s in all_available_sports
     ] or list(all_available_sports)
-    all_markets_opts = ["h2h", "spreads", "totals", "props"]
+    all_markets_opts = ["h2h", "spreads", "totals", "props", "btts", "draw_no_bet"]
     board_markets = st.session_state.get("board_markets_filter") or [
         m for m in saved_board_markets if m in all_markets_opts
     ] or all_markets_opts
@@ -4234,7 +4235,7 @@ def render_settings(settings: dict):
         "— 10-100× more. Only enable per-event markets if your plan can afford it."
     )
     batch_markets = ["h2h", "totals", "spreads"]
-    alt_markets_opts = ["totals_h1", "spreads_h1", "h2h_h1", "btts"]
+    alt_markets_opts = ["totals_h1", "spreads_h1", "h2h_h1", "btts", "draw_no_bet"]
     labels = {
         "h2h": "Moneyline (h2h) — required for Kalshi",
         "totals": "Full-game totals (O/U)",
@@ -4243,6 +4244,7 @@ def render_settings(settings: dict):
         "totals_h1": "1st-half totals (O/U)",
         "spreads_h1": "1st-half spread",
         "btts": "Both teams to score (soccer only)",
+        "draw_no_bet": "Draw No Bet — pick a team; draw refunds (soccer only)",
     }
     cur_markets_list = [m.strip() for m in (saved.get("odds_markets") or "h2h").split(",") if m.strip()]
     # Batch picker — the standard /odds endpoint.

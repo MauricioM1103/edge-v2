@@ -497,6 +497,76 @@ def _spread_team(selection) -> str:
     return _SPREAD_LABEL_TAIL.sub("", (selection or "").strip()).strip()
 
 
+_DNB_LABEL_TAIL = re.compile(r"\s*\(\s*dnb\s*\)\s*$|\s+(?:dnb|draw\s*no\s*bet)\s*$", re.I)
+
+
+def _dnb_team(selection) -> str:
+    """Team named by a draw-no-bet selection, without the '(DNB)' marker.
+
+    The scanner labels DNB rows as e.g. "Arsenal (DNB)" or "Arsenal" -
+    strip that tail so the same team-matching ladder as moneylines decides
+    which side of the ESPN final we're on.
+    """
+    sel = _DNB_LABEL_TAIL.sub("", (selection or "").strip()).strip()
+    return sel
+
+
+def _btts_side(selection) -> Optional[str]:
+    """Which half of BTTS a selection names: "yes" | "no" | None.
+
+    Tolerates the human labels ("Both to score: Yes", "BTTS No") and bare
+    "Yes" / "No" rows. A selection that matches neither word returns None
+    so the pick stays open rather than being guessed into a side.
+    """
+    sel = (selection or "").lower()
+    has_yes = re.search(r"\byes\b", sel) is not None
+    has_no = re.search(r"\bno\b", sel) is not None
+    if has_yes and not has_no:
+        return "yes"
+    if has_no and not has_yes:
+        return "no"
+    return None
+
+
+def _settle_btts(pick, final):
+    """Settle a Both Teams To Score pick from a soccer final."""
+    hs = final.get("home_score")
+    ascore = final.get("away_score")
+    if hs is None or ascore is None:
+        return
+    side = _btts_side(pick.get("selection"))
+    if side is None:
+        return
+    try:
+        both_scored = int(hs) > 0 and int(ascore) > 0
+    except (TypeError, ValueError):
+        return
+    if side == "yes":
+        pick["status"] = "win" if both_scored else "loss"
+    else:  # "no"
+        pick["status"] = "win" if not both_scored else "loss"
+
+
+def _settle_dnb(pick, final):
+    """Settle a Draw No Bet pick. Draws are a push (stake refunded)."""
+    hs = final.get("home_score")
+    ascore = final.get("away_score")
+    if hs is None or ascore is None:
+        return
+    if hs == ascore:
+        pick["status"] = "push"
+        return
+    home_won = final.get("home_won")
+    if home_won is None:
+        return
+    side = _match_side(_dnb_team(pick.get("selection")),
+                       final.get("home_name"), final.get("away_name"))
+    if side == "home":
+        pick["status"] = "win" if home_won else "loss"
+    elif side == "away":
+        pick["status"] = "win" if not home_won else "loss"
+
+
 def _settle_spreads(pick, final):
     """Settle a point-spread pick. pick['point'] is the selected side's number."""
     hs = final.get("home_score")
@@ -686,6 +756,10 @@ def auto_settle(path: Optional[str] = None) -> int:
             _settle_totals(p, final)
         elif market == "spreads":
             _settle_spreads(p, final)
+        elif market == "btts":
+            _settle_btts(p, final)
+        elif market == "draw_no_bet":
+            _settle_dnb(p, final)
         p["result_payload"] = {
             "home_score": final.get("home_score"),
             "away_score": final.get("away_score"),

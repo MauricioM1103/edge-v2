@@ -90,6 +90,27 @@ def _grade_offshore_pick(market, side_key, point, home_score, away_score,
         return _label("win" if winning else "loss",
                       "winning" if winning else "losing",
                       "tied")
+    if mk == "btts":
+        # home side = Yes, away side = No (per _collect_market).
+        picked_yes = side_key == "home"
+        both_scored = (home_score > 0) and (away_score > 0)
+        winning = (both_scored == picked_yes)
+        # Live BTTS can flip once the trailing side scores, so "ahead" stays
+        # meaningful: Yes is winning once both have scored, No is winning as
+        # long as at least one has zero.
+        return _label("win" if winning else "loss",
+                      "winning" if winning else "losing",
+                      "tied")
+    if mk == "draw_no_bet":
+        # Draw refunds the stake — push on finals, tied in play.
+        if home_score == away_score:
+            return "push" if is_final else "tied"
+        picked_home = side_key == "home"
+        home_leads = home_score > away_score
+        winning = (home_leads == picked_home)
+        return _label("win" if winning else "loss",
+                      "winning" if winning else "losing",
+                      "tied")
     return None
 
 
@@ -688,6 +709,7 @@ MARKET_LABELS = {
     "totals_h1": "1H Total",
     "spreads_h1": "1H Spread",
     "btts": "BTTS",
+    "draw_no_bet": "Draw No Bet",
 }
 
 
@@ -858,6 +880,13 @@ def scan_offshore_markets_vs_pinnacle(
                         side_label = f"{side_label} {pt_f:+g}"
                     except (TypeError, ValueError):
                         pass
+                elif mk == "btts":
+                    # "Yes" / "No" alone is ambiguous on a mixed-market board;
+                    # the storage layer still keys off `market`, this just
+                    # reads better in the Board rows.
+                    side_label = f"Both to score: {side_label}"
+                elif mk == "draw_no_bet":
+                    side_label = f"{side_label} (DNB)"
                 # Grade the pick: ✓/✗/= for finals, ▲/▼/= for in-progress.
                 grade = _grade_offshore_pick(
                     mk, side_key, pt, hs_i, as_i,

@@ -197,6 +197,15 @@ def load() -> Dict[str, Any]:
             bm = disk.get("board_markets")
             if isinstance(bm, list) and "props" not in bm and {"h2h", "spreads", "totals"} <= set(bm):
                 disk["board_markets"] = list(bm) + ["props"]
+            # Migration 8: BTTS and Draw No Bet joined the Markets filter. A
+            # saved filter that held the full h2h/spreads/totals/props set
+            # meant "all markets" at the time of saving, so extend it with
+            # the new soccer-only keys; a narrowed list is left alone.
+            bm = disk.get("board_markets")
+            if isinstance(bm, list) and {"h2h", "spreads", "totals", "props"} <= set(bm):
+                add = [k for k in ("btts", "draw_no_bet") if k not in bm]
+                if add:
+                    disk["board_markets"] = list(bm) + add
             # Per-sport prop markets: merge saved choices over defaults so a
             # sport added in a later release gets its default list.
             pm = disk.get("odds_player_markets")
