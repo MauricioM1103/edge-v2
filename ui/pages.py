@@ -3211,6 +3211,68 @@ def render_pro_tools(settings: dict):
 # TAB 3 - Verified Picks Ledger
 # ============================================================================
 
+def _is_prop_row(p: dict) -> bool:
+    return (p.get("market_family") or "game") == "prop"
+
+
+def _ledger_market_label(p: dict) -> str:
+    """Market cell: 'H2H' / 'TOTALS' for game lines, 'PROP · Points' for props."""
+    mk = p.get("market") or ""
+    if _is_prop_row(p):
+        return f"PROP · {agent_calc.prop_market_label(mk)}"
+    return (mk or "h2h").upper()
+
+
+def _ledger_selection_html(p: dict) -> str:
+    """Selection cell. Game lines append the point ('Lakers -3.5'); a prop's
+    selection already reads 'Devin Booker Over 26.5', so the point is not
+    repeated."""
+    sel = p.get("selection") or "-"
+    pt = p.get("point")
+    if _is_prop_row(p) or pt is None:
+        return f"<strong>{sel}</strong>"
+    try:
+        pt_f = float(pt)
+    except (TypeError, ValueError):
+        return f"<strong>{sel}</strong>"
+    # Agent rows already carry the number in the selection ("Under 92.5",
+    # "Avalanche -1.5"); only append it when it isn't there yet.
+    if f"{abs(pt_f):g}" in str(sel):
+        return f"<strong>{sel}</strong>"
+    return f"<strong>{sel}</strong> {pt_f:+g}"
+
+
+def _prop_result_text(p: dict) -> str:
+    """'27 pts vs 26.5' for a graded prop; the void reason ('did not play')
+    for a voided one; '' for anything else (open rows, game lines)."""
+    if not _is_prop_row(p):
+        return ""
+    rp = p.get("result_payload") or {}
+    stat = rp.get("stat")
+    pt = rp.get("point", p.get("point"))
+    if stat is None:
+        if (p.get("status") or "open") == "void":
+            return rp.get("reason") or "void"
+        return ""
+    try:
+        stat_s = f"{float(stat):g}"
+        pt_s = f"{float(pt):g}" if pt is not None else "?"
+    except (TypeError, ValueError):
+        return ""
+    label = rp.get("stat_label") or ""
+    return f"{stat_s} {label} vs {pt_s}".replace("  ", " ")
+
+
+def _prop_result_html(p: dict) -> str:
+    txt = _prop_result_text(p)
+    if not txt:
+        return ""
+    return (
+        f'<br><span class="mono" style="font-size:10.5px; color:var(--muted);">'
+        f'{txt}</span>'
+    )
+
+
 def render_picks(settings: dict):
     brand_bar("Verified Picks Ledger · by slate date")
 
@@ -3240,7 +3302,7 @@ def render_picks(settings: dict):
                 st.info("No opposing-side duplicates found.")
     with cols[2]:
         filter_status = st.selectbox(
-            "Filter", options=["All", "Open", "Won", "Lost", "Push"],
+            "Filter", options=["All", "Open", "Won", "Lost", "Push", "Void"],
             key="ledger_filter", label_visibility="collapsed",
         )
     with cols[3]:
@@ -3264,14 +3326,19 @@ def render_picks(settings: dict):
             import csv, io
             buf = io.StringIO()
             fieldnames = [
-                "id", "created_at", "sport", "event_name", "market", "selection", "point",
+                "id", "created_at", "sport", "event_name", "market", "market_family",
+                "player", "selection", "point", "actual",
                 "price_american", "implied_prob", "projected_prob",
                 "risk_units", "win_units", "status", "clv_pct", "methodology", "notes",
             ]
             writer = csv.DictWriter(buf, fieldnames=fieldnames, extrasaction="ignore")
             writer.writeheader()
             for p in all_picks:
-                writer.writerow({k: p.get(k) for k in fieldnames})
+                row = {k: p.get(k) for k in fieldnames}
+                # `actual` = the graded box-score number for props (what the
+                # player actually did), blank for game lines / open rows.
+                row["actual"] = (p.get("result_payload") or {}).get("stat") if _is_prop_row(p) else None
+                writer.writerow(row)
             st.download_button(
                 "⬇ CSV", buf.getvalue().encode("utf-8"),
                 "picks.csv", "text/csv",
@@ -3305,6 +3372,8 @@ def render_picks(settings: dict):
         if filter_status == "Lost" and status != "loss":
             return False
         if filter_status == "Push" and status != "push":
+            return False
+        if filter_status == "Void" and status != "void":
             return False
         if filter_sport != "All" and p.get("sport") != filter_sport:
             return False
@@ -3404,14 +3473,14 @@ def render_picks(settings: dict):
                       <td>{src_chip}</td>
                       <td class="mono" style="color:var(--muted);">{(p.get('sport') or '').upper()}</td>
                       <td>{p.get('event_name') or '-'}</td>
-                      <td class="mono" style="color:var(--muted);">{(p.get('market') or '').upper()}</td>
-                      <td><strong>{p.get('selection') or '-'}</strong>{(' ' + (f"{p.get('point'):+g}" if p.get('point') is not None else '')) if p.get('point') is not None else ''}</td>
+                      <td class="mono" style="color:var(--muted);">{_ledger_market_label(p)}</td>
+                      <td>{_ledger_selection_html(p)}</td>
                       <td class="num mono">{format_american(p.get('price_american'))}</td>
                       <td class="num mono">{(p.get('implied_prob') or 0)*100:.1f}%</td>
                       <td class="num mono">{(p.get('projected_prob') or 0)*100:.1f}%</td>
                       <td class="num mono">{risk_u:.2f}u</td>
                       <td class="num mono">{net_disp}</td>
-                      <td><span class="chip {status_cls}">{status_lbl}</span></td>
+                      <td><span class="chip {status_cls}">{status_lbl}</span>{_prop_result_html(p)}</td>
                       <td class="num mono">{clv_s}</td>
                     </tr>
                     """)
@@ -3457,15 +3526,15 @@ def render_picks(settings: dict):
           <td>{src_chip}</td>
           <td class="mono" style="color:var(--muted);">{(p.get('sport') or '').upper()}</td>
           <td>{p.get('event_name') or '-'}</td>
-          <td class="mono" style="color:var(--muted);">{(p.get('market') or '').upper()}</td>
-          <td><strong>{p.get('selection') or '-'}</strong>{(' ' + (f"{p.get('point'):+g}" if p.get('point') is not None else '')) if p.get('point') is not None else ''}</td>
+          <td class="mono" style="color:var(--muted);">{_ledger_market_label(p)}</td>
+          <td>{_ledger_selection_html(p)}</td>
           <td class="num mono">{format_american(p.get('price_american'))}</td>
           <td class="num mono">{(p.get('implied_prob') or 0)*100:.1f}%</td>
           <td class="num mono">{(p.get('projected_prob') or 0)*100:.1f}%</td>
           <td><span class="tag {tag_cls}">{meth}</span></td>
           <td class="num mono">{(p.get('risk_units') or 0):.2f}u</td>
           <td class="num mono">{(p.get('win_units') or 0):.2f}u</td>
-          <td><span class="chip {status_cls}">{status_lbl}</span></td>
+          <td><span class="chip {status_cls}">{status_lbl}</span>{_prop_result_html(p)}</td>
           <td class="num mono">{clv_s}</td>
         </tr>
         """)
@@ -3552,7 +3621,7 @@ def render_results(settings: dict):
     wins = sum(1 for p in decided if p.get("status") == "win")
     losses = len(decided) - wins
     hit_rate = (wins / len(decided)) if decided else None
-    pending = len(high_conf) - len(decided) - sum(1 for p in high_conf if p.get("status") == "push")
+    pending = sum(1 for p in high_conf if (p.get("status") or "open") == "open")
     # Expected win-rate if the Pinnacle fair prob is calibrated: average of
     # projected_probs across decided rows. Difference vs realized is the
     # calibration gap.
@@ -3616,10 +3685,16 @@ def render_results(settings: dict):
                 elif status == "push":
                     result_chip = '<span class="chip warn" style="padding:2px 9px;">= PUSH</span>'
                     row_bg = ""
+                elif status == "void":
+                    result_chip = '<span class="chip" style="padding:2px 9px; color:var(--muted);">∅ VOID</span>'
+                    row_bg = ""
                 else:
                     result_chip = '<span class="chip" style="padding:2px 9px;">· OPEN</span>'
                     row_bg = ""
-                mk = (p.get("market") or "h2h").upper()
+                # Props: show the box-score number against the line ("27 pts vs 26.5")
+                # or the void reason, so the result is auditable at a glance.
+                result_chip += _prop_result_html(p)
+                mk = _ledger_market_label(p)
                 sport = (p.get("sport") or "").upper()
                 side = p.get("selection") or "—"
                 pt = p.get("point")

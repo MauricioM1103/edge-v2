@@ -9,16 +9,24 @@ Picks live in `picks.json` next to app.py by default. A pick has:
   closing_price_american (filled on auto-settle),
   status ('open' | 'win' | 'loss' | 'push' | 'void'),
   result_payload (ESPN final scores).
+
+Agent-logged player props add market_family='prop', player, point and a
+prop `market` key (player_points, batter_hits, ...). They grade from the
+ESPN box score (apis.espn_boxscore) once the game is final; their
+result_payload carries {stat, point, side, player, stat_label, settled_at}
+so the Ledger can show the actual number against the line.
 """
 from __future__ import annotations
 
 import json
 import os
+import re
 import uuid
 from datetime import datetime, timezone
 from typing import List, Optional
 
 from apis import espn
+from apis import espn_boxscore
 from calc.odds import profit_on_win, implied_prob_american
 from calc.clv import clv_percent
 
@@ -358,9 +366,9 @@ def auto_log_agent_edges(edges: list, settings: dict, path: Optional[str] = None
             # visually distinct from pre-game ones in the audit trail.
             "pick_type": "live_pick" if (e.get("status_state") == "in") else "pre_game",
             # Player props carry the player so the ledger's opposing-side
-            # dedup keys per player, and so Results can label the row. They
-            # can't be graded from the ESPN scoreboard (needs a box score),
-            # so auto_settle leaves them open.
+            # dedup keys per player, and so Results can label the row. The
+            # scoreboard has no player stats, so auto_settle grades them from
+            # the ESPN box score (apis.espn_boxscore) once the game is final.
             "market_family": "prop" if e.get("is_prop") else "game",
             "player": e.get("prop_player"),
             "notes": (
@@ -479,6 +487,98 @@ def _settle_spreads(pick, final):
         pick["status"] = "push"
 
 
+def grade_prop(stat, point, side: str) -> Optional[str]:
+    """Over/Under rule for a player prop: 'win' | 'loss' | 'push' | None.
+
+    Over wins when stat > point, Under wins when stat < point, equal is a
+    push. None when any input is missing/unparseable (caller leaves it open).
+    """
+    if stat is None or point is None:
+        return None
+    try:
+        s = float(stat)
+        pt = float(point)
+    except (TypeError, ValueError):
+        return None
+    side = (side or "").strip().lower()
+    if side not in ("over", "under"):
+        return None
+    if abs(s - pt) < 1e-9:
+        return "push"
+    if side == "over":
+        return "win" if s > pt else "loss"
+    return "win" if s < pt else "loss"
+
+
+_PROP_SIDE_RE = re.compile(r"\b(over|under)\b", re.I)
+_PROP_SELECTION_RE = re.compile(r"^(?P<player>.+?)\s+(?P<side>over|under)\s+[-+]?\d+(?:\.\d+)?\s*$", re.I)
+
+
+def _prop_side(pick: dict) -> Optional[str]:
+    side = (pick.get("side") or "").strip().lower()
+    if side in ("over", "under"):
+        return side
+    m = _PROP_SIDE_RE.search(pick.get("selection") or "")
+    return m.group(1).lower() if m else None
+
+
+def _prop_player(pick: dict) -> str:
+    player = (pick.get("player") or "").strip()
+    if player:
+        return player
+    m = _PROP_SELECTION_RE.match((pick.get("selection") or "").strip())
+    return m.group("player").strip() if m else ""
+
+
+def _settle_prop(pick: dict, final: dict) -> bool:
+    """Grade one agent-logged player prop from the ESPN box score.
+
+    Called only once the game is final. Returns True when the row changed
+    (win / loss / push / void). Leaves the row open — returning False — when
+    the box score isn't readable yet so the next sweep retries. Void is
+    reserved for cases where there is no number to grade against: the player
+    did not play / is not on the box score, or ESPN has no column for the
+    stat; the reason is kept in result_payload so the Ledger can show it.
+    """
+    sport = (pick.get("sport") or "").lower()
+    event_id = str(pick.get("event_id") or "")
+    market = (pick.get("market") or "").lower()
+    side = _prop_side(pick)
+    player = _prop_player(pick)
+    point = pick.get("point")
+    if not (sport and event_id and market and side and player) or point is None:
+        return False
+    try:
+        res = espn_boxscore.lookup_player_stat(sport, event_id, player, market)
+    except Exception:
+        return False
+    status = res.get("status")
+    if status == "unavailable":
+        return False
+    payload = {
+        "stat": res.get("value"),
+        "point": point,
+        "side": side,
+        "player": res.get("player") or player,
+        "stat_label": res.get("label") or "",
+        "reason": res.get("detail") or "",
+        "home_score": final.get("home_score"),
+        "away_score": final.get("away_score"),
+        "settled_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+    }
+    if status == "ok":
+        grade = grade_prop(res.get("value"), point, side)
+        if grade is None:
+            return False
+        pick["status"] = grade
+    elif status in ("dnp", "not_found", "unsupported"):
+        pick["status"] = "void"
+    else:
+        return False
+    pick["result_payload"] = payload
+    return True
+
+
 def auto_settle(path: Optional[str] = None) -> int:
     """Query ESPN for each open pick's event; settle finals. Returns # settled.
 
@@ -486,19 +586,32 @@ def auto_settle(path: Optional[str] = None) -> int:
     historical events are looked up on the right dated scoreboard. The ESPN
     "today" endpoint rolls old games off, so without this hint anything older
     than the current day never settles.
+
+    Game lines (h2h / spreads / totals) grade from the scoreboard. Agent-logged
+    player props (market_family == "prop") grade from the ESPN box score via
+    _settle_prop once the same final check passes; manually logged props are
+    the user's own records and are never auto-graded. Idempotent: only rows
+    still 'open' are considered.
     """
     file_path = path or _default_path()
     picks = _load(file_path)
     settled = 0
+    # One scoreboard lookup per (sport, event, date) per sweep — several props
+    # on the same game would otherwise each re-fetch the same scoreboard.
+    finals_memo: dict = {}
     for p in picks:
         if p.get("status") not in (None, "open"):
             continue
-        if (p.get("market_family") or "game") == "prop":
-            continue  # scoreboard has no player stats; needs a box-score grader
+        is_prop = (p.get("market_family") or "game") == "prop"
         sport = p.get("sport")
         event_id = p.get("event_id")
         if not sport or not event_id:
             continue
+        if is_prop:
+            if (p.get("source") or "manual") != "agent-auto":
+                continue  # manual prop rows are the user's own decisions
+            if not str(event_id).isdigit():
+                continue  # Odds API id (no ESPN match at scan time) — can't look it up
         # Hint ESPN with the pick's date (Central-time YYYYMMDD) so dated
         # historical scoreboards are hit without the 7-day fallback sweep.
         date_hint = None
@@ -509,12 +622,21 @@ def auto_settle(path: Optional[str] = None) -> int:
                 date_hint = dt.strftime("%Y%m%d")
             except ValueError:
                 date_hint = None
-        final = espn.is_event_final(sport, event_id, date=date_hint)
-        if not final:
-            # Fall back to the no-date lookup so games on the current scoreboard
-            # (or in the 7-day sweep) still resolve when the hint missed.
-            final = espn.is_event_final(sport, event_id)
+        memo_key = (str(sport).lower(), str(event_id), date_hint)
+        if memo_key in finals_memo:
+            final = finals_memo[memo_key]
+        else:
+            final = espn.is_event_final(sport, event_id, date=date_hint)
+            if not final:
+                # Fall back to the no-date lookup so games on the current scoreboard
+                # (or in the 7-day sweep) still resolve when the hint missed.
+                final = espn.is_event_final(sport, event_id)
+            finals_memo[memo_key] = final
         if not final or not final.get("is_final"):
+            continue
+        if is_prop:
+            if _settle_prop(p, final) and p.get("status") in ("win", "loss", "push"):
+                settled += 1
             continue
         market = (p.get("market") or "h2h").lower()
         if market == "h2h":
