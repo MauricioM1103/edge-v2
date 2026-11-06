@@ -2383,10 +2383,12 @@ def _render_agent_panel(odds_games, kalshi_cash, settings,
         stake_u = _to_units(e.get("stake_dollars") or 0)
         stake_d = float(e.get("stake_dollars") or 0)
         is_settled = (e.get("status_state") == "post") or (e.get("grade") in ("win", "loss", "push"))
-        # Live-pick chip: a pick surfaces IN-GAME when the agent sees the
-        # matchup's status_state == "in" at scan time. We mark it visibly
-        # so the user can distinguish pre-game recommendations from live
-        # ones, and the auto-log carries the same tag forward to Results.
+        # Origin chip: picks whose matchup was already in-play at scan time
+        # get labeled "ADDED DURING GAME" so they're distinguishable from
+        # pre-game recommendations in the audit trail. This is the origin
+        # of the pick, NOT the current game state — the game-state "● LIVE"
+        # chip is rendered separately by _status_cell so the two don't
+        # overlap or share styling.
         is_live_pick = (e.get("status_state") == "in") and not is_settled
         tier = _tier_for_edge(edge_val) if not is_settled else "w"
         market_label = e.get("market_label") or agent_calc.MARKET_LABELS.get(e.get("market", "h2h"), "Moneyline")
@@ -2396,8 +2398,10 @@ def _render_agent_panel(odds_games, kalshi_cash, settings,
         stake_detail = f"${stake_d:,.2f}" if stake_u > 0 else "watch"
         stake_value = f"{stake_u:.1f}u" if stake_u > 0 else "—"
         live_chip = (
-            '<span class="chip live" style="padding:1px 7px; margin-left:6px; '
-            'font-size:9.5px; font-weight:600;">● LIVE PICK · IN GAME</span>'
+            '<span class="chip" style="padding:1px 7px; margin-left:6px; '
+            'font-size:9.5px; font-weight:600; color:var(--accent); '
+            'border:1px solid color-mix(in oklab, var(--accent) 40%, transparent);">'
+            'ADDED DURING GAME</span>'
             if is_live_pick else ""
         )
         return (
@@ -3830,13 +3834,34 @@ def render_results(settings: dict):
                         side = f"{side} {float(pt):+g}"
                     except (TypeError, ValueError):
                         pass
-                # Pick-type chip: "LIVE PICK" when logged in-game, blank for pre-game.
+                # Origin chip reports when the pick was logged relative to
+                # kickoff. "ADDED DURING GAME" replaces the old "● LIVE
+                # PICK" label so it can't be confused with the game-state
+                # LIVE icon (which is reserved for in-play games, below).
+                # The two concepts intentionally render with different
+                # styling: accent-bordered neutral for origin, filled red
+                # chip for live state.
                 pick_type = (p.get("pick_type") or "pre_game").lower()
                 type_chip = (
-                    '<span class="chip live" style="padding:1px 7px; font-size:9.5px;">● LIVE PICK</span>'
+                    '<span class="chip" style="padding:1px 7px; font-size:9.5px; '
+                    'color:var(--accent); '
+                    'border:1px solid color-mix(in oklab, var(--accent) 40%, transparent);">'
+                    'ADDED DURING GAME</span>'
                     if pick_type == "live_pick" else
                     '<span class="chip" style="padding:1px 7px; font-size:9.5px; color:var(--muted);">PRE-GAME</span>'
                 )
+                # Board-presence marker on open picks. A pick that was logged
+                # as A-tier and then dropped off the Board — line moved, odds
+                # pulled, or edge collapsed, pre-game or during the run of
+                # play — surfaces here so the Results view isn't quietly
+                # grading picks on a slate the user could no longer act on.
+                if picks_store.was_removed_from_board(p):
+                    type_chip += (
+                        ' <span class="chip" style="padding:1px 7px; font-size:9.5px; '
+                        'color:var(--muted); '
+                        'border:1px dashed color-mix(in oklab, var(--muted) 60%, transparent);">'
+                        '⊗ REMOVED FROM BOARD</span>'
+                    )
                 # Book implied prob (the vig-inclusive market view).
                 book_imp = float(p.get("implied_prob") or 0) * 100.0
                 rows_html += (

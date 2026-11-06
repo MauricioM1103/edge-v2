@@ -194,6 +194,59 @@ def unit_tests():
         check("auto_log gate: only tier-A rows recorded", n == 1 and len(stored) == 1)
         check("auto_log gate: it's the A-tier row",
               stored[0]["event_id"] == "ev_a")
+        check("new rows stamp first_seen_on_board and last_seen_on_board",
+              "first_seen_on_board" in stored[0] and "last_seen_on_board" in stored[0])
+    finally:
+        try: os.remove(path)
+        except OSError: pass
+
+    print("== board-presence tracking")
+    # Second scan of the same A-tier edge: no new row, but last_seen is refreshed.
+    import time as _time
+    fd, path = tempfile.mkstemp(prefix="picks_board_", suffix=".json")
+    os.close(fd)
+    try:
+        edge = {"_sport": "nba", "event_id": "ev_a", "matchup": "A @ B", "market": "h2h",
+                "side_label": "Team A wins", "price": -110, "book": "Bovada",
+                "book_implied": 0.524, "fair_prob": 0.56, "edge": 0.036,
+                "stake_dollars": 10.0, "start_utc": "2026-11-05T00:00:00+00:00"}
+        n1 = picks_store.auto_log_agent_edges([edge], {"kalshi_cash": 500.0, "unit_pct": 0.01}, path=path)
+        stored = picks_store.list_picks(path)
+        first_seen_1 = stored[0]["first_seen_on_board"]
+        last_seen_1 = stored[0]["last_seen_on_board"]
+        check("insert sets first_seen = last_seen", first_seen_1 == last_seen_1)
+        _time.sleep(1.1)
+        # Second scan with same edge: no new row, but last_seen bumps.
+        n2 = picks_store.auto_log_agent_edges([edge], {"kalshi_cash": 500.0, "unit_pct": 0.01}, path=path)
+        stored = picks_store.list_picks(path)
+        check("second scan inserts nothing new", n2 == 0 and len(stored) == 1)
+        check("second scan refreshes last_seen_on_board",
+              stored[0]["last_seen_on_board"] > last_seen_1, f"before={last_seen_1} after={stored[0]['last_seen_on_board']}")
+        check("first_seen_on_board stays put",
+              stored[0]["first_seen_on_board"] == first_seen_1)
+
+        # Stale check: force last_seen into the past, expect was_removed_from_board = True.
+        from datetime import datetime as _dt, timezone as _tz, timedelta as _tdlt
+        stored = picks_store.list_picks(path)
+        stored[0]["last_seen_on_board"] = (_dt.now(_tz.utc) - _tdlt(minutes=15)).isoformat(timespec="seconds")
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(stored, f)
+        p = picks_store.list_picks(path)[0]
+        check("open pick with 15-min-old last_seen is removed from board",
+              picks_store.was_removed_from_board(p))
+        # Now the same pick after settling must NOT be flagged.
+        p["status"] = "win"
+        check("settled pick never flagged as removed",
+              not picks_store.was_removed_from_board(p))
+        # A fresh last_seen is not stale.
+        p["status"] = "open"
+        p["last_seen_on_board"] = _dt.now(_tz.utc).isoformat(timespec="seconds")
+        check("fresh last_seen is NOT stale",
+              not picks_store.was_removed_from_board(p))
+        # Legacy rows with no last_seen aren't retroactively flagged.
+        del p["last_seen_on_board"]
+        check("legacy row without last_seen is NOT flagged",
+              not picks_store.was_removed_from_board(p))
     finally:
         try: os.remove(path)
         except OSError: pass

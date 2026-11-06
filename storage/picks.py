@@ -245,7 +245,8 @@ def upsert_agent_pick(pick: dict, path: Optional[str] = None) -> Optional[dict]:
     """Insert an agent pick, deduping against both exact and opposing-side matches.
 
     Returns the stored row on insert, None when skipped. Rules:
-     - Exact-match (same side) is a no-op skip.
+     - Exact-match (same side) refreshes `last_seen_on_board` so the Results
+       tab can tell "still on the Board" from "dropped off"; no new row.
      - Opposing-side match (same market slot, other side) keeps whichever
        side has the higher Pinnacle fair prob. If the stored row is a loser,
        it gets replaced by the better side; otherwise the incoming pick is
@@ -254,6 +255,9 @@ def upsert_agent_pick(pick: dict, path: Optional[str] = None) -> Optional[dict]:
     """
     p = dict(pick or {})
     p.setdefault("source", "agent-auto")
+    now_iso = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    p.setdefault("first_seen_on_board", now_iso)
+    p.setdefault("last_seen_on_board", now_iso)
     file_path = path or _default_path()
     picks = _load(file_path)
 
@@ -267,7 +271,14 @@ def upsert_agent_pick(pick: dict, path: Optional[str] = None) -> Optional[dict]:
         if (existing.get("source") or "manual") != "agent-auto":
             continue
         if _dedup_key(existing) == exact:
-            return None  # exact-side duplicate
+            # Same side logged again this scan: treat it as "still on the
+            # board" rather than a duplicate silently dropped. Refresh
+            # last_seen so Results can flag picks that later drop off.
+            existing["last_seen_on_board"] = p.get("last_seen_on_board") or now_iso
+            if not existing.get("first_seen_on_board"):
+                existing["first_seen_on_board"] = p.get("first_seen_on_board") or existing.get("created_at") or now_iso
+            _save(file_path, picks)
+            return None
         if _market_slot(existing) != slot:
             continue
         # Opposing-side hit on the same market slot. Keep the Pinnacle-favored
@@ -343,6 +354,40 @@ def is_tier_a(pick: dict) -> bool:
     return _edge_from_pick(pick) >= TIER_A_EDGE
 
 
+#: How long an A-tier pick can go unseen on the Board before Results flags
+#: it as "removed from board". Agent scans run every 30s by default, so a
+#: 10-minute grace is well past any transient scan hiccup — a gap this big
+#: means the pick really did drop off (line moved, odds pulled, or edge
+#: collapsed below tier A).
+BOARD_STALE_MINUTES = 10
+
+
+def was_removed_from_board(pick: dict, now: Optional[datetime] = None,
+                           grace_minutes: int = BOARD_STALE_MINUTES) -> bool:
+    """True when an agent pick was logged, then dropped off the Board.
+
+    Only meaningful for still-open rows — settled rows naturally fall out
+    of the Board regardless of whether their line survived. Returns False
+    when `last_seen_on_board` is missing (legacy rows logged before the
+    timestamp existed) so we don't retroactively label every old pick.
+    """
+    status = (pick.get("status") or "open").lower()
+    if status != "open":
+        return False
+    last_seen = pick.get("last_seen_on_board")
+    if not last_seen:
+        return False
+    try:
+        if isinstance(last_seen, str):
+            last_seen = datetime.fromisoformat(last_seen.replace("Z", "+00:00"))
+        if last_seen.tzinfo is None:
+            last_seen = last_seen.replace(tzinfo=timezone.utc)
+    except (ValueError, TypeError, AttributeError):
+        return False
+    now = now or datetime.now(timezone.utc)
+    return (now - last_seen).total_seconds() / 60.0 > grace_minutes
+
+
 def auto_log_agent_edges(edges: list, settings: dict, path: Optional[str] = None) -> int:
     """Write every A-tier funded edge into the ledger, then settle.
 
@@ -350,6 +395,13 @@ def auto_log_agent_edges(edges: list, settings: dict, path: Optional[str] = None
     recorded so the ledger stays a high-signal record of the agent's best
     picks; B / C / Watch rows still show on the Board but aren't stored.
     Called from the dashboard every time the agent panel re-renders.
+
+    Every A-tier row on the board also refreshes its stored
+    `last_seen_on_board` timestamp (via upsert_agent_pick) so the Results
+    tab can distinguish picks still live on the Board from ones that have
+    since dropped off — the line moved, the game started, or the edge
+    collapsed below tier A — regardless of whether the drop happened
+    pre-game or in the run of play.
     """
     if not edges:
         return 0
@@ -357,6 +409,7 @@ def auto_log_agent_edges(edges: list, settings: dict, path: Optional[str] = None
     unit_pct = float(settings.get("unit_pct") or 0.01) or 0.01
     unit_dollars = kalshi_cash * unit_pct
     inserted = 0
+    scan_iso = datetime.now(timezone.utc).isoformat(timespec="seconds")
     for e in edges:
         if (e.get("stake_dollars") or 0) <= 0:
             continue  # don't track cap-dropped / rounded-to-zero rows
@@ -395,6 +448,11 @@ def auto_log_agent_edges(edges: list, settings: dict, path: Optional[str] = None
             # Results carries this forward so in-play agent decisions stay
             # visually distinct from pre-game ones in the audit trail.
             "pick_type": "live_pick" if (e.get("status_state") == "in") else "pre_game",
+            # Board-presence timestamps: every scan that still finds this
+            # pick in the A-tier set bumps last_seen_on_board. Results uses
+            # a stale last_seen on an open row to flag "removed from board".
+            "first_seen_on_board": scan_iso,  # kept only on first insert
+            "last_seen_on_board": scan_iso,
             # Player props carry the player so the ledger's opposing-side
             # dedup keys per player, and so Results can label the row. The
             # scoreboard has no player stats, so auto_settle grades them from
