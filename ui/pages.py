@@ -1416,6 +1416,33 @@ def render_dashboard(settings: dict):
     upcoming = sum(1 for ev, _, _ in merged if ev.get("status_state") == "pre")
     api_key_ok = odds_api.get_api_key() is not None
 
+    # Auto-roll to tomorrow once every game on today's slate has gone final.
+    # Fires ONCE per real-world day (keyed on central_today) so a user who
+    # clicks "Today" to come back isn't bounced forward on the next rerun.
+    # Guardrails:
+    #   - only when the user is actually viewing today (don't move them off
+    #     a date they picked explicitly)
+    #   - only when the slate has at least one game AND every game is final
+    #     (an empty slate isn't "all done — it's "nothing listed yet")
+    #   - only when tomorrow is within the date-picker's max range
+    #   - skip when the slate has any live or pre-game rows
+    if (
+        is_today
+        and merged
+        and live_count == 0
+        and upcoming == 0
+        and final_count == len(merged)
+        and st.session_state.get("_auto_advanced_from") != central_today
+        and picked_date + timedelta(days=1) <= central_today + timedelta(days=30)
+    ):
+        st.session_state["_auto_advanced_from"] = central_today
+        st.session_state["dash_date"] = central_today + timedelta(days=1)
+        st.toast(
+            f"Tonight's slate is final — jumping to tomorrow ({(central_today + timedelta(days=1)).strftime('%a %b %d')}) early.",
+            icon="➡️",
+        )
+        st.rerun()
+
     # Kick on the live auto-refresh now that we know how many games are
     # in-progress. We only poll while at least one game is live — once the
     # slate is all pre-game or all final there's nothing moving to refresh.
