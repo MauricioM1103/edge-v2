@@ -1844,6 +1844,56 @@ def _render_agent_panel(odds_games, kalshi_cash, settings,
         seen.add(key)
         deduped.append(e)
 
+    # Time-based state reconciliation: when ESPN didn't resolve a game's
+    # state (name-match miss, sport we don't scrape, feed delay), derive it
+    # from commence_time + a sport-typical finish buffer. This keeps the
+    # board self-correcting: finished games drop to the "settled" band on
+    # the next refresh even when ESPN's feed never attached a final, and
+    # in-play games show the LIVE chip instead of a stale kickoff time.
+    from datetime import datetime as _dt_recon, timezone as _tz_recon
+    _FINISH_BUFFER_MIN = {
+        "mlb": 240, "nba": 165, "wnba": 150, "nhl": 180,
+        "nfl": 220, "ncaaf": 230, "ncaab": 150, "ncaaw": 150,
+        "mls": 130, "epl": 130, "la_liga": 130, "bundesliga": 130,
+        "serie_a": 130, "ligue_1": 130, "ucl": 150, "uel": 150,
+        "nwsl": 130, "liga_mx": 130,
+        "ufc": 300, "boxing": 240,
+        "atp": 240, "wta": 240,
+    }
+    _now_utc = _dt_recon.now(_tz_recon.utc)
+    def _reconcile_state(e: dict) -> None:
+        """Fill status_state from commence_time when ESPN didn't resolve it."""
+        if e.get("status_state") in ("pre", "in", "post"):
+            return
+        start = e.get("start_utc") or e.get("commence_time")
+        if not start:
+            return
+        try:
+            if isinstance(start, str):
+                start = _dt_recon.fromisoformat(start.replace("Z", "+00:00"))
+            if start.tzinfo is None:
+                start = start.replace(tzinfo=_tz_recon.utc)
+        except (ValueError, TypeError, AttributeError):
+            return
+        delta_min = (_now_utc - start).total_seconds() / 60.0
+        if delta_min < 0:
+            e["status_state"] = "pre"
+            return
+        buf = _FINISH_BUFFER_MIN.get((e.get("_sport") or "").lower(), 180)
+        if delta_min >= buf:
+            e["status_state"] = "post"
+            # Flag so downstream rendering can note ESPN didn't attach a
+            # final score — we still mark the row settled so it leaves the
+            # actionable band.
+            e["status_detail"] = e.get("status_detail") or "FINAL · likely"
+            e["_time_derived_state"] = True
+        else:
+            e["status_state"] = "in"
+            e["status_detail"] = e.get("status_detail") or "LIVE · in progress"
+            e["_time_derived_state"] = True
+    for e in deduped:
+        _reconcile_state(e)
+
     # Collapse opposing sides of the same two-way market down to one row.
     # Scanners can emit both home and away when both show positive edge
     # (bookmakers price asymmetrically), but keeping both on the board is

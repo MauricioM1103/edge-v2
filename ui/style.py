@@ -967,11 +967,133 @@ td.num-cell.muted{color: var(--muted);}
 .method-tag.fade{background: rgba(255,68,119,.15); color: var(--bad);}
 .method-tag.watch{background: var(--chip); color: var(--muted); border:1px solid var(--rule-strong);}
 
-/* Board on mobile: horizontal scroll inside the card so the layout holds */
+/* ------------------------------------------------------------------
+   Board on mobile: horizontal scroll with sticky rank + matchup columns
+   so the user can still see which row they're looking at while sliding
+   the price/edge/stake columns into view. A right-edge gradient hints
+   that there's more to the right.
+   ------------------------------------------------------------------ */
 @media (max-width: 900px){
-  .board-wrap{overflow-x: auto;}
-  table.board-table{min-width: 820px;}
-  table.board-table thead th, table.board-table tbody td{padding:9px 10px; font-size:12px;}
+  .board-wrap{
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    scroll-snap-type: x proximity;
+    /* Right-edge scroll-hint gradient — fades the far-right content so
+       users know the table continues past the viewport. */
+    background:
+      linear-gradient(to right, var(--card) 0 10px, transparent 10px 40px) 0 0 / 40px 100% no-repeat,
+      linear-gradient(to left,  var(--card) 0 10px, transparent 10px 40px) 100% 0 / 40px 100% no-repeat,
+      linear-gradient(to right, rgba(0,0,0,0.25), transparent 24px) 0 0 / 24px 100% no-repeat local,
+      linear-gradient(to left,  rgba(0,0,0,0.25), transparent 24px) 100% 0 / 24px 100% no-repeat local,
+      var(--card);
+  }
+  table.board-table{
+    /* Smaller min-width so more fits on-screen; combined with sticky-left
+       cells the horizontal scroll feels less like "the whole table is
+       off-screen" and more like "slide to see the price columns". */
+    min-width: 720px;
+  }
+  table.board-table thead th,
+  table.board-table tbody td{
+    padding: 8px 9px; font-size: 11.5px;
+  }
+  /* Rank (#) column pinned left — narrow. */
+  table.board-table thead th:nth-child(1),
+  table.board-table tbody td:nth-child(1){
+    position: sticky; left: 0; z-index: 3;
+    background: var(--card-elev);
+    padding-left: 8px; padding-right: 4px;
+    min-width: 24px; max-width: 28px;
+  }
+  table.board-table tbody tr:hover td:nth-child(1){
+    background: color-mix(in oklab, var(--accent) 10%, var(--card-elev));
+  }
+  /* Tier badge column pinned next to it — also narrow. */
+  table.board-table thead th:nth-child(2),
+  table.board-table tbody td:nth-child(2){
+    position: sticky; left: 28px; z-index: 3;
+    background: var(--card-elev);
+    padding-left: 4px; padding-right: 4px;
+    min-width: 28px; max-width: 32px;
+  }
+  table.board-table tbody tr:hover td:nth-child(2){
+    background: color-mix(in oklab, var(--accent) 10%, var(--card-elev));
+  }
+  /* Matchup column pinned too — the row anchor, kept visible as the user
+     scrolls price / edge / stake into view. 140px fits two 3-letter abbrs
+     + "at" + the LIVE/time row without truncation. */
+  table.board-table thead th:nth-child(3),
+  table.board-table tbody td:nth-child(3){
+    position: sticky; left: 60px; z-index: 3;
+    background: var(--card-elev);
+    box-shadow: 2px 0 6px rgba(0,0,0,0.25);
+    min-width: 140px; max-width: 140px;
+    white-space: normal;
+    padding-left: 8px; padding-right: 6px;
+  }
+  table.board-table tbody tr:hover td:nth-child(3){
+    background: color-mix(in oklab, var(--accent) 10%, var(--card-elev));
+  }
+  /* Row-divider cells span the full viewport, not just the sticky columns. */
+  table.board-table tbody tr.row-divider td{
+    position: static !important;
+    box-shadow: none !important;
+  }
+  /* Right of the sticky trio: these are the scrollable info columns. Keep
+     them tight so the row fits the most columns in view at any scroll
+     offset. Price / edge / stake are the ones users compare side-by-side. */
+  table.board-table thead th:nth-child(n+4),
+  table.board-table tbody td:nth-child(n+4){
+    padding-left: 8px; padding-right: 8px;
+  }
+  /* Side · Market cell: shorter so Price fits without scrolling on wider phones. */
+  table.board-table tbody td:nth-child(4){ min-width: 110px; max-width: 128px; }
+  .side-cell .pick{font-size: 12px;}
+  /* Book cell can be long ("Bovada -110") — let it wrap or truncate. */
+  table.board-table tbody td:nth-child(5){ min-width: 92px; max-width: 108px; white-space: normal;}
+  .book-cell{font-size: 10.5px;}
+  /* Tighter matchup chips so two abbrs + "at" fit on one line in the pinned
+     cell. nowrap keeps the row single-line; the LIVE chip gets shortened to
+     "● LIVE" so it doesn't blow up the row height when it wraps. */
+  .matchup-cell .chip-row{gap: 4px; flex-wrap: nowrap; align-items: center;}
+  .matchup-cell .chip-row .team-chip{padding: 2px 5px; font-size: 9.5px; flex-shrink: 0;}
+  .matchup-cell .chip-row .at{font-size: 10px; flex-shrink: 0;}
+  .matchup-cell .time{font-size: 10px; line-height: 1.3;}
+  /* Shrink the LIVE PICK label to "LIVE" on mobile — the full text blows the
+     pinned cell to 4 lines. The time cell still carries "● LIVE · in progress"
+     for context, and the row keeps its distinctive red chip. */
+  .matchup-cell .chip-row .chip.live{
+    padding: 1px 5px !important;
+    font-size: 9px !important;
+    letter-spacing: 0;
+    margin-left: 4px !important;
+    white-space: nowrap;
+    font-size: 0 !important;  /* hide full text */
+  }
+  .matchup-cell .chip-row .chip.live::before{
+    content: "● LIVE";
+    font-size: 9px;
+    letter-spacing: 0.04em;
+  }
+  /* Caption telling users the board scrolls sideways. */
+  .board-wrap::before{
+    content: "← swipe for price, edge & stake →";
+    display: block;
+    font-family: "JetBrains Mono", monospace;
+    font-size: 9.5px; letter-spacing: 0.14em; text-transform: uppercase;
+    color: var(--muted);
+    padding: 6px 12px 0; text-align: center;
+  }
+}
+
+/* Narrower phones: drop the sticky matchup col to a smaller cap so the
+   first-glance view still shows enough price context without squeezing
+   the stuck column into the price column. */
+@media (max-width: 480px){
+  table.board-table thead th:nth-child(3),
+  table.board-table tbody td:nth-child(3){
+    max-width: 128px;
+  }
 }
 
 /* ============================================================
