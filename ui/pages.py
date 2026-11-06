@@ -1537,7 +1537,8 @@ def render_dashboard(settings: dict):
                         sports_label=sp_label,
                     )
                     if result.get("ok"):
-                        st.success(f"Snapshot posted to Discord ({len(top_picks)} rows).")
+                        actionable_n = sum(1 for p in top_picks if float(p.get("edge") or 0) > 0)
+                        st.success(f"PNG snapshot posted ({actionable_n} actionable picks).")
                     else:
                         st.error(f"Discord post failed: {result.get('error') or 'unknown'}")
         with sc2:
@@ -3944,6 +3945,7 @@ def render_settings(settings: dict):
     # ----- Discord integration -----
     st.markdown("### Discord integration")
     cur_hook = discord_api.get_webhook_url() or ""
+    cur_site = discord_api.get_site_url() or ""
     masked = (cur_hook[:48] + "…") if cur_hook else ""
     dc1, dc2 = st.columns([3, 1])
     with dc1:
@@ -3970,24 +3972,45 @@ def render_settings(settings: dict):
                 st.warning("Enter a webhook URL first.")
             else:
                 probe = [{
-                    "_sport": "test", "matchup": "Edge agent · test probe",
-                    "side_label": "Webhook reachability check",
-                    "fair_prob": 0.55, "edge": 0.0, "price": -110, "stake_dollars": 0,
+                    "_sport": "TEST", "matchup": "Edge agent · reachability probe",
+                    "side_label": "Webhook ping (synthetic +EV row)",
+                    "fair_prob": 0.56, "edge": 0.015, "price": -115, "stake_dollars": 10.0,
                 }]
                 r = discord_api.send_board_snapshot(
-                    probe, unit_dollars=1.0, webhook_url=(hook_in or cur_hook),
+                    probe, unit_dollars=10.0,
+                    webhook_url=(hook_in or cur_hook),
+                    site_url=(st.session_state.get("_pending_site_url") or cur_site) or None,
                     sports_label="test",
                 )
                 if r.get("ok"):
                     st.success("Test post landed in Discord.")
                 else:
                     st.error(f"Test failed: {r.get('error') or 'unknown'}")
+    # Site URL (link included in Discord messages)
+    site_in = st.text_input(
+        "Dashboard URL (link included in Discord posts)",
+        value=cur_site,
+        placeholder="https://your-edge-v2.streamlit.app",
+        help="The live URL of this dashboard (your Streamlit Cloud deployment). "
+             "Added to every Discord snapshot so viewers can open the board.",
+        key="set_site_url",
+    )
+    # Remember pending value for the Test button (before Save).
+    st.session_state["_pending_site_url"] = site_in
+    if site_in != cur_site:
+        if st.button("Save dashboard URL", key="set_site_save"):
+            if discord_api.save_site_url(site_in or ""):
+                st.success("Dashboard URL " + ("saved." if site_in else "cleared."))
+                st.rerun()
+            else:
+                st.error("Could not write secrets.toml")
     if cur_hook:
         st.caption(f"Current webhook (masked): `{masked}`")
     st.caption(
         "The webhook is write-only — Discord can't talk back. The Board's "
-        "**📤 Send to Discord** button posts the current snapshot on demand, "
-        "with a Central-US timestamp and a ★ marker on +EV rows."
+        "**📤 Send to Discord** button posts a **PNG snapshot of the actionable (+EV) "
+        "picks** with a Central-US timestamp, counts of watch-list / extra +EV picks "
+        "still on the board, and a link back to the live dashboard."
     )
 
     # ----- Live score auto-refresh -----
