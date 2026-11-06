@@ -244,16 +244,16 @@ def _sidebar_settings() -> dict:
             st.success("Kalshi: live connection")
         else:
             st.caption("Kalshi: manual / not connected")
-        # Discord webhook — optional outbound; posts tier-A picks to a channel.
+        # Discord webhook status — restored module uses get_webhook_url().
         try:
             from apis import discord as _dc
-            if _dc.is_configured():
+            if _dc.get_webhook_url():
                 st.success("Discord: webhook configured")
             else:
                 st.caption(
                     "Discord: not configured. Set "
                     "`DISCORD_WEBHOOK_URL` env var or "
-                    "`discord_webhook_url` in secrets.toml to post tier-A picks."
+                    "`discord_webhook_url` in secrets.toml to post board snapshots."
                 )
         except Exception:
             pass

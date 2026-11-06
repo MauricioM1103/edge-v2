@@ -1621,18 +1621,8 @@ def render_dashboard(settings: dict):
     st.session_state["_board_sport_setting"] = sport_setting
     st.session_state["_board_multi_sport_mode"] = multi_sport_mode
 
-    # Discord webhook: fire once per new tier-A pick (edge >= 2%). The webhook
-    # module dedupes against a local JSON log so reruns never spam the channel,
-    # and when no webhook URL is configured it returns 0 silently. Soft-import
-    # so the main render still works if the module fails to load for any reason.
-    try:
-        from apis import discord as _discord
-        if _discord.is_configured() and top_picks and is_today:
-            _n_posted = _discord.send_new_picks(top_picks, min_edge=0.02)
-            if _n_posted:
-                st.toast(f"📣 Posted {_n_posted} tier-A pick(s) to Discord", icon="📣")
-    except Exception:
-        pass
+    # Discord posting is handled by the existing "Push to Discord" button
+    # below (uses discord_api.send_board_snapshot). No auto-post here.
 
     # ----- Send-to-Discord button -----
     # Posts the exact board snapshot (same top-N rows the user is looking at)
