@@ -316,13 +316,40 @@ def collapse_duplicate_sides(path: Optional[str] = None) -> int:
     return removed
 
 
-def auto_log_agent_edges(edges: list, settings: dict, path: Optional[str] = None) -> int:
-    """Write every funded edge into the ledger (dedup-aware), then settle.
+#: Agent-pick tier cutoffs: edge in [0,1] space (not percent). A ≥ 2%, B ≥ 1%,
+#: C > 0, else Watch. Only A-tier picks enter the ledger - everything below
+#: that is still scanned, still shown on the Board, just not recorded, so the
+#: ledger is a working record of the agent's strongest signals.
+TIER_A_EDGE = 0.020
 
-    Returns the number of new rows inserted. Called from the dashboard every
-    time the agent panel re-renders, so the ledger ends up being a complete
-    audit trail of what the agent recommended — not just the picks the user
-    bothered to click "Log" on.
+
+def _edge_from_pick(pick: dict) -> float:
+    """Edge (fair_prob - book_implied) reconstructed from a stored pick row.
+
+    Agent rows carry both; a missing/zero field gives 0 so the pick is not
+    counted toward tier A on incomplete data. Props store the same fields,
+    so they tier the same way.
+    """
+    try:
+        fair = float(pick.get("projected_prob") or 0)
+        imp = float(pick.get("implied_prob") or 0)
+    except (TypeError, ValueError):
+        return 0.0
+    return fair - imp
+
+
+def is_tier_a(pick: dict) -> bool:
+    """True when a stored agent pick would have been A-tier when logged."""
+    return _edge_from_pick(pick) >= TIER_A_EDGE
+
+
+def auto_log_agent_edges(edges: list, settings: dict, path: Optional[str] = None) -> int:
+    """Write every A-tier funded edge into the ledger, then settle.
+
+    Returns the number of new rows inserted. Only tier A (edge >= 2%) is
+    recorded so the ledger stays a high-signal record of the agent's best
+    picks; B / C / Watch rows still show on the Board but aren't stored.
+    Called from the dashboard every time the agent panel re-renders.
     """
     if not edges:
         return 0
@@ -333,6 +360,8 @@ def auto_log_agent_edges(edges: list, settings: dict, path: Optional[str] = None
     for e in edges:
         if (e.get("stake_dollars") or 0) <= 0:
             continue  # don't track cap-dropped / rounded-to-zero rows
+        if float(e.get("edge") or 0) < TIER_A_EDGE:
+            continue  # tier-B / C / Watch — kept on the Board, kept out of the ledger
         espn_eid = e.get("espn_event_id") or e.get("event_id")
         matchup = e.get("matchup") or ""
         best_book = e.get("book") or "?"

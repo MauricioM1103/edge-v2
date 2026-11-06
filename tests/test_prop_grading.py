@@ -164,6 +164,40 @@ def unit_tests():
     check("DNB unknown team stays open",
           dnb("Real Madrid (DNB)", arsenal_win) == "open")
 
+    print("== tier-A gate")
+    check("is_tier_a: 2.1% edge is A", picks_store.is_tier_a({"projected_prob": 0.521, "implied_prob": 0.500}))
+    check("is_tier_a: exactly 2% edge is A", picks_store.is_tier_a({"projected_prob": 0.520, "implied_prob": 0.500}))
+    check("is_tier_a: 1.9% edge is not A", not picks_store.is_tier_a({"projected_prob": 0.519, "implied_prob": 0.500}))
+    check("is_tier_a: missing data -> not A",
+          not picks_store.is_tier_a({}) and not picks_store.is_tier_a({"projected_prob": None, "implied_prob": None}))
+
+    # auto_log_agent_edges: only A-tier funded edges enter the ledger.
+    fd, path = tempfile.mkstemp(prefix="picks_tier_a_", suffix=".json")
+    os.close(fd)
+    try:
+        edges = [
+            {"_sport": "nba", "event_id": "ev_a", "matchup": "A @ B", "market": "h2h",
+             "side_label": "Team A wins", "price": -110, "book": "Bovada",
+             "book_implied": 0.524, "fair_prob": 0.56, "edge": 0.036,  # A-tier (3.6%)
+             "stake_dollars": 10.0, "start_utc": "2026-11-05T00:00:00+00:00"},
+            {"_sport": "nba", "event_id": "ev_b", "matchup": "C @ D", "market": "h2h",
+             "side_label": "Team C wins", "price": -110, "book": "Bovada",
+             "book_implied": 0.524, "fair_prob": 0.54, "edge": 0.016,  # B-tier (1.6%)
+             "stake_dollars": 10.0, "start_utc": "2026-11-05T00:00:00+00:00"},
+            {"_sport": "nba", "event_id": "ev_c", "matchup": "E @ F", "market": "h2h",
+             "side_label": "Team E wins", "price": -110, "book": "Bovada",
+             "book_implied": 0.524, "fair_prob": 0.529, "edge": 0.005,  # C-tier
+             "stake_dollars": 10.0, "start_utc": "2026-11-05T00:00:00+00:00"},
+        ]
+        n = picks_store.auto_log_agent_edges(edges, {"kalshi_cash": 500.0, "unit_pct": 0.01}, path=path)
+        stored = picks_store.list_picks(path)
+        check("auto_log gate: only tier-A rows recorded", n == 1 and len(stored) == 1)
+        check("auto_log gate: it's the A-tier row",
+              stored[0]["event_id"] == "ev_a")
+    finally:
+        try: os.remove(path)
+        except OSError: pass
+
 
 def find_recent_final_nba():
     today = datetime.now(timezone.utc).date()

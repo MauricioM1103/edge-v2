@@ -3673,22 +3673,45 @@ def render_picks(settings: dict):
 
 
 # ============================================================================
-# TAB - Results (high-confidence agent picks + whether they hit)
+# TAB - Results (tier-A agent picks + whether they hit)
 # ============================================================================
 #
-# User-driven view: which picks did the agent flag as higher-than-coinflip
-# confidence (Pinnacle no-vig fair prob > 55%), and what was the hit rate?
-# This is the "did the agent actually get it right" readout — intentionally
+# User-driven view: of the picks the agent rated tier A (edge >= 2% vs
+# Pinnacle no-vig fair) in the last 7 days, how many hit? This is the "did
+# the agent actually get its best picks right" readout — intentionally
 # separate from the Ledger so the signal isn't lost in the noise.
+# Mirrors the Board's tier badge so Results and Board stay in sync; an
+# A-tier pick on the Board is an A-tier pick here once it grades.
 
-HIGH_CONF_THRESHOLD = 0.55
+#: A-tier edge cutoff mirrors _tier_for_edge in the agent panel (edge >= 2%).
+#: Results shows only the A-tier agent picks — the same tier the auto-log
+#: now records going forward — so this tab is a clean record of the agent's
+#: strongest signals rather than every surfaced edge.
+RESULTS_TIER_A_EDGE = picks_store.TIER_A_EDGE  # 0.020
+
+
+def _pick_edge(p: dict) -> float:
+    """Edge of a stored pick: Pinnacle fair prob minus book implied."""
+    try:
+        return float(p.get("projected_prob") or 0) - float(p.get("implied_prob") or 0)
+    except (TypeError, ValueError):
+        return 0.0
+
 
 def render_results(settings: dict):
-    brand_bar(f"Results · past 7 days · picks with > {int(HIGH_CONF_THRESHOLD*100)}% Pinnacle fair prob")
+    brand_bar(f"Results · past 7 days · tier-A agent picks (edge ≥ {RESULTS_TIER_A_EDGE*100:.0f}%)")
 
     # Backfill pick_date on legacy rows so the by-date grouping works.
     try:
         picks_store.backfill_pick_dates()
+    except Exception:
+        pass
+    # Settle any open agent picks whose games have finished since the last
+    # scan. The auto-log triggers this on every dashboard re-render, but a
+    # user opening Results directly on a quiet day would otherwise see last
+    # week's A-tier rows stuck on "open" until they nudge the dashboard.
+    try:
+        picks_store.auto_settle()
     except Exception:
         pass
 
@@ -3700,17 +3723,22 @@ def render_results(settings: dict):
     window_dates = {(today_c - _td(days=n)).strftime("%Y-%m-%d") for n in range(7)}
 
     all_picks = picks_store.list_picks()
+    # Keep the same window (7 days of Central-US slate dates) and the same
+    # agent-auto source filter; just replace the old "Pinnacle fair prob >
+    # 55%" gate with the A-tier edge gate used by the Board. Existing picks
+    # that were logged under the earlier (looser) rules keep showing, as
+    # long as their stored fair vs implied puts them in tier A.
     high_conf = [
         p for p in all_picks
         if (p.get("source") or "manual") == "agent-auto"
-        and float(p.get("projected_prob") or 0) > HIGH_CONF_THRESHOLD
+        and _pick_edge(p) >= RESULTS_TIER_A_EDGE
         and (p.get("pick_date") or "")[:10] in window_dates
     ]
     if not high_conf:
         html(
-            f'<div class="hint">No agent picks above the {int(HIGH_CONF_THRESHOLD*100)}% '
-            'Pinnacle fair prob threshold in the past 7 days. The Results tab lights up once '
-            'the agent surfaces high-confidence edges and they grade from ESPN. '
+            f'<div class="hint">No tier-A agent picks (edge ≥ {RESULTS_TIER_A_EDGE*100:.0f}%) '
+            'in the past 7 days. The Results tab lights up once the agent surfaces '
+            'tier-A edges and they grade from ESPN. '
             f'Window: <strong>{window_start.strftime("%b %d")} – {today_c.strftime("%b %d, %Y")}</strong>.</div>'
         )
         return
@@ -3730,7 +3758,7 @@ def render_results(settings: dict):
 
     tone = "good" if (hit_rate or 0) >= (exp_rate or 0) else "bad"
     metric_row([
-        {"label": f"Picks > {int(HIGH_CONF_THRESHOLD*100)}%", "value": str(len(high_conf)),
+        {"label": "Tier-A picks", "value": str(len(high_conf)),
          "foot": f"{pending} open · {len(decided)} decided"},
         {"label": "Record", "value": f"{wins}-{losses}",
          "foot": f"n = {len(decided)} decided"},
@@ -3764,7 +3792,7 @@ def render_results(settings: dict):
         hit_disp = f" · hit {d_hit*100:.0f}%" if d_hit is not None else ""
         is_today = (d == today_c)
         header = (
-            f"{pretty} · {len(items)} high-conf picks · "
+            f"{pretty} · {len(items)} tier-A picks · "
             f"{d_wins}-{d_losses}{(' · ' + str(d_open) + ' open') if d_open else ''}"
             f"{hit_disp}"
         )
@@ -3842,7 +3870,7 @@ def render_results(settings: dict):
             interp = (
                 f"Agent is beating its own fair-prob estimate by "
                 f"<strong class='good'>{gap_pts:+.1f} pts</strong> — "
-                "picks above 55% confidence are converting at or above their expected rate."
+                "tier-A picks are converting at or above their expected rate."
             )
         else:
             interp = (
