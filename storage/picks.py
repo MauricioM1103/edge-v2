@@ -27,6 +27,7 @@ from typing import List, Optional
 
 from apis import espn
 from apis import espn_boxscore
+from apis.team_mapping import same_team
 from calc.odds import profit_on_win, implied_prob_american
 from calc.clv import clv_percent
 
@@ -404,20 +405,48 @@ def delete_pick(pick_id: str, path: Optional[str] = None) -> bool:
     return True
 
 
+_H2H_LABEL_TAIL = re.compile(r"\s+(?:wins?|to win|ml|moneyline)\s*$", re.I)
+
+
+def _h2h_team(selection) -> str:
+    """Team named by a moneyline selection, without the label tail.
+
+    Agent rows are logged as "Phoenix Suns wins" (Kalshi-style label); manual
+    rows and the offshore scanner use the bare team name. Both must resolve
+    to the team so the ESPN final can be matched against it.
+    """
+    return _H2H_LABEL_TAIL.sub("", (selection or "").strip()).strip()
+
+
 def _settle_h2h(pick, final):
-    """Set status/result_payload on a moneyline pick given ESPN final scores."""
+    """Set status on a moneyline pick given ESPN final scores.
+
+    Match order: exact team name -> apis.team_mapping.same_team (tolerates
+    Odds API vs ESPN naming, "LA Clippers" vs "Los Angeles Clippers") ->
+    loose containment. A selection that matches both sides is left open
+    rather than guessed.
+    """
     home_won = final.get("home_won")
     if home_won is None:
         return
-    selection = (pick.get("selection") or "").strip().lower()
+    team = _h2h_team(pick.get("selection")).lower()
     home_name = (final.get("home_name") or "").strip().lower()
     away_name = (final.get("away_name") or "").strip().lower()
-    picked_home = home_name and selection == home_name
-    picked_away = away_name and selection == away_name
+    if not team:
+        return
+    picked_home = bool(home_name) and team == home_name
+    picked_away = bool(away_name) and team == away_name
     if not (picked_home or picked_away):
-        # fall back to loose match
-        picked_home = home_name and selection in home_name
-        picked_away = away_name and selection in away_name
+        sh = bool(home_name) and same_team(team, home_name)
+        sa = bool(away_name) and same_team(team, away_name)
+        if sh != sa:
+            picked_home, picked_away = sh, sa
+    if not (picked_home or picked_away):
+        # fall back to loose match, either direction
+        lh = bool(home_name) and (team in home_name or home_name in team)
+        la = bool(away_name) and (team in away_name or away_name in team)
+        if lh != la:
+            picked_home, picked_away = lh, la
     if picked_home:
         pick["status"] = "win" if home_won else "loss"
     elif picked_away:

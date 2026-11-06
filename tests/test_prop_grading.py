@@ -71,6 +71,25 @@ def unit_tests():
           picks_store._prop_player({"selection": "Devin Booker Under 26.5"}) == "Devin Booker")
     check("game line has no prop side", picks_store._prop_side({"selection": "Lakers -3.5"}) is None)
 
+    print("== moneyline labels")
+    final = {"home_won": True, "home_name": "Phoenix Suns", "away_name": "Orlando Magic",
+             "home_score": 117, "away_score": 104}
+
+    def h2h(selection, fin=final):
+        row = {"selection": selection, "status": "open"}
+        picks_store._settle_h2h(row, fin)
+        return row["status"]
+
+    check("'Team wins' label, home winner", h2h("Phoenix Suns wins") == "win")
+    check("'Team wins' label, away loser", h2h("Orlando Magic wins") == "loss")
+    check("bare team name still grades", h2h("Phoenix Suns") == "win")
+    check("'to win' / 'ML' tails stripped",
+          h2h("Orlando Magic to win") == "loss" and h2h("Phoenix Suns ML") == "win")
+    la_final = {"home_won": False, "home_name": "Los Angeles Clippers", "away_name": "Denver Nuggets"}
+    check("Odds API vs ESPN naming via same_team", h2h("LA Clippers wins", la_final) == "loss")
+    check("unknown team stays open", h2h("Boston Celtics wins") == "open")
+    check("no winner yet stays open", h2h("Phoenix Suns wins", {"home_won": None}) == "open")
+
 
 def find_recent_final_nba():
     today = datetime.now(timezone.utc).date()
