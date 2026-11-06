@@ -6,7 +6,7 @@ from typing import List, Optional
 
 import streamlit as st
 
-from apis import espn, odds as odds_api, kalshi, polymarket, betfair
+from apis import espn, odds as odds_api, kalshi, polymarket, betfair, discord as discord_api
 from apis.team_mapping import same_team
 from apis.book_filter import book_market
 from apis.kalshi_match import find_event_markets, home_implied_prob
@@ -1508,6 +1508,47 @@ def render_dashboard(settings: dict):
     st.session_state["_board_sports_list"] = sports_list
     st.session_state["_board_sport_setting"] = sport_setting
     st.session_state["_board_multi_sport_mode"] = multi_sport_mode
+
+    # ----- Send-to-Discord button -----
+    # Posts the exact board snapshot (same top-N rows the user is looking at)
+    # to the configured webhook. Lives below the table so the table above
+    # reflects what's about to be sent.
+    if top_picks:
+        sc1, sc2 = st.columns([1, 4])
+        with sc1:
+            if st.button("📤 Send to Discord", key="send_discord_btn",
+                         use_container_width=True, type="primary",
+                         help="Posts the current board snapshot with a timestamp."):
+                hook = discord_api.get_webhook_url()
+                if not hook:
+                    st.warning("Add a Discord webhook URL in Settings → Discord integration.")
+                else:
+                    unit_pct = settings.get("unit_pct") or 0.01
+                    unit_dollars = (settings.get("kalshi_cash") or 0) * unit_pct
+                    sp_label = (
+                        f"{len(sports_list)} sports"
+                        if multi_sport_mode
+                        else (sport_setting.upper() if isinstance(sport_setting, str)
+                              else ",".join(sports_list).upper())
+                    )
+                    result = discord_api.send_board_snapshot(
+                        top_picks,
+                        unit_dollars=unit_dollars,
+                        sports_label=sp_label,
+                    )
+                    if result.get("ok"):
+                        st.success(f"Snapshot posted to Discord ({len(top_picks)} rows).")
+                    else:
+                        st.error(f"Discord post failed: {result.get('error') or 'unknown'}")
+        with sc2:
+            hook_set = bool(discord_api.get_webhook_url())
+            chip = ("hook configured" if hook_set else
+                    "no webhook set — add one in Settings → Discord integration")
+            html(
+                f'<div style="color:var(--muted); font-size:12px; padding-top:9px;">'
+                f'Includes a Central-US timestamp, pick count, +EV marker on actionable rows. '
+                f'<span class="mono" style="font-size:10px; opacity:0.8;">({chip})</span></div>'
+            )
 
     if not merged:
         html('<div class="hint">No games on the slate for this sport right now. Try another sport in the sidebar, or check back later.</div>')
@@ -3899,6 +3940,55 @@ def render_settings(settings: dict):
             "daily cap=25%, theme=dark. "
             "Does **not** clear your API keys or Kalshi connection."
         )
+
+    # ----- Discord integration -----
+    st.markdown("### Discord integration")
+    cur_hook = discord_api.get_webhook_url() or ""
+    masked = (cur_hook[:48] + "…") if cur_hook else ""
+    dc1, dc2 = st.columns([3, 1])
+    with dc1:
+        hook_in = st.text_input(
+            "Webhook URL",
+            value=cur_hook,
+            type="password",
+            placeholder="https://discord.com/api/webhooks/...",
+            help="Server Settings → Integrations → Webhooks → New Webhook → "
+                 "Copy URL. Stored in .streamlit/secrets.toml (gitignored).",
+            key="set_discord_hook",
+        )
+    with dc2:
+        c_save, c_test = st.columns(2)
+        if c_save.button("Save", use_container_width=True, key="set_discord_save"):
+            if discord_api.save_webhook_url(hook_in or ""):
+                st.cache_data.clear()
+                st.success("Webhook " + ("saved." if hook_in else "cleared."))
+                st.rerun()
+            else:
+                st.error("Could not write secrets.toml")
+        if c_test.button("Test", use_container_width=True, key="set_discord_test"):
+            if not (hook_in or cur_hook):
+                st.warning("Enter a webhook URL first.")
+            else:
+                probe = [{
+                    "_sport": "test", "matchup": "Edge agent · test probe",
+                    "side_label": "Webhook reachability check",
+                    "fair_prob": 0.55, "edge": 0.0, "price": -110, "stake_dollars": 0,
+                }]
+                r = discord_api.send_board_snapshot(
+                    probe, unit_dollars=1.0, webhook_url=(hook_in or cur_hook),
+                    sports_label="test",
+                )
+                if r.get("ok"):
+                    st.success("Test post landed in Discord.")
+                else:
+                    st.error(f"Test failed: {r.get('error') or 'unknown'}")
+    if cur_hook:
+        st.caption(f"Current webhook (masked): `{masked}`")
+    st.caption(
+        "The webhook is write-only — Discord can't talk back. The Board's "
+        "**📤 Send to Discord** button posts the current snapshot on demand, "
+        "with a Central-US timestamp and a ★ marker on +EV rows."
+    )
 
     # ----- Live score auto-refresh -----
     st.markdown("### Live score auto-refresh")
