@@ -69,14 +69,24 @@ _DEFAULTS: Dict[str, Any] = {
     # are deepest there and Pinnacle prices them). Add college / soccer in
     # Settings — the cost estimate updates live.
     "odds_player_sports": ["nba", "nfl", "mlb", "nhl"],
-    # Per-sport prop markets. Only Over/Under (two-way) props — Yes-only
-    # markets like anytime-TD have no fair reference to price against.
+    # Per-sport prop markets. Mix of two-way Over/Under primary markets and
+    # the Odds API's "_alternate" ladders (Over-only, many lines per player)
+    # so a tight alt-line edge can surface as its own Board row alongside
+    # the main-line pick. Alt variants are opt-in per market so the
+    # defaults fit comfortably inside odds_player_daily_cap even on a
+    # full slate (odds_player_max_events × regions × markets).
+    #   NBA: 3 primary + 1 alt (points) = 4 markets → 96 cr / fetch at us,eu×12
+    #   NFL: 4 primary + 2 alt (pass_yds, receptions) = 6 markets → 144 cr / fetch
     # Keys are The Odds API market keys (see calc.agent.PROP_CATALOG).
     "odds_player_markets": {
-        "nba": ["player_points", "player_rebounds", "player_assists"],
+        "nba": ["player_points", "player_points_alternate",
+                "player_rebounds", "player_assists"],
         "wnba": ["player_points", "player_rebounds", "player_assists"],
         "ncaab": ["player_points", "player_rebounds", "player_assists"],
-        "nfl": ["player_pass_yds", "player_rush_yds", "player_reception_yds", "player_receptions"],
+        "nfl": ["player_pass_yds", "player_pass_yds_alternate",
+                "player_rush_yds",
+                "player_reception_yds",
+                "player_receptions", "player_receptions_alternate"],
         "ncaaf": ["player_pass_yds", "player_rush_yds", "player_reception_yds"],
         "cfl": ["player_pass_yds", "player_rush_yds", "player_reception_yds"],
         "mlb": ["batter_hits", "batter_total_bases", "pitcher_strikeouts"],
@@ -94,15 +104,36 @@ _DEFAULTS: Dict[str, Any] = {
     # Most events per sport per refresh (soonest kickoffs first). A 40-game
     # NCAAB Saturday would otherwise cost 40 × regions × markets on its own.
     "odds_player_max_events": 12,
-    # Only fetch props for games starting within this many hours. Tomorrow's
-    # games in the batch response are skipped — lines aren't settled yet and
-    # the fetch would be repeated tomorrow anyway.
+    # Default horizon — only fetch props for games starting within this
+    # many hours. Daily-cadence sports (NBA, NHL, MLB, soccer) play tonight,
+    # so 14h catches their slate without paying for tomorrow's shifting
+    # lines. Weekly sports override this below.
     "odds_player_horizon_hours": 14,
+    # Per-sport horizon overrides. NFL is weekly: Thu kickoff, Sun early /
+    # late / SNF, MNF. The earliest game can be 60-120h away at scan time,
+    # so a 14h horizon would miss every slate for days at a stretch. 96h
+    # means the Thu game surfaces from Mon onward and SNF/MNF from Fri.
+    # NCAAF lands mostly Fri-Sat; 84h catches the whole weekend from a
+    # Wed scan. Any sport not listed uses odds_player_horizon_hours.
+    "odds_player_horizon_by_sport": {
+        "nfl": 96,
+        "ncaaf": 84,
+        "cfl": 84,
+    },
     # Hard ceiling on credits spent on props per Central-US day. Once hit,
     # props stop fetching until tomorrow; the Board says so. ~350/day on top
     # of the ~200/day batch burn keeps a 20k/month plan comfortably inside
     # its budget.
     "odds_player_daily_cap": 350,
+    # Monthly plan-remaining floor. When The Odds API reports fewer than
+    # this many credits left on the plan, ALL per-event fetches are
+    # skipped (props and alt markets both). Batch /odds fetches still run
+    # since their cost is bounded per-sport, not per-event. 500 keeps a
+    # comfortable safety buffer against the alt-ladder multiplier (a
+    # full NFL week with alts can burn ~900 credits across refreshes).
+    # Set to 0 to disable the floor and let the daily cap be the only
+    # guard.
+    "odds_min_plan_credits": 500,
     # Most prop rows the Board will show (best edge first). Props only
     # surface when +EV — the watch-list universe is every player × market
     # and would bury the game lines.
@@ -207,11 +238,30 @@ def load() -> Dict[str, Any]:
                 if add:
                     disk["board_markets"] = list(bm) + add
             # Per-sport prop markets: merge saved choices over defaults so a
-            # sport added in a later release gets its default list.
+            # sport added in a later release gets its default list, AND so
+            # the new "_alternate" variants fold into a saved list that
+            # already held just the primary market (user hadn't opted out
+            # of alts — they didn't exist yet).
             pm = disk.get("odds_player_markets")
             if isinstance(pm, dict):
                 merged_pm = dict(_DEFAULTS["odds_player_markets"])
-                merged_pm.update({k: v for k, v in pm.items() if isinstance(v, list)})
+                for sp, saved_mks in pm.items():
+                    if not isinstance(saved_mks, list):
+                        continue
+                    default_mks = _DEFAULTS["odds_player_markets"].get(sp, [])
+                    saved_set = set(saved_mks)
+                    # Add every default alt that corresponds to a primary the
+                    # user already had — gives NFL users the four _alternate
+                    # keys without surprising someone who deliberately
+                    # untick'd a primary market.
+                    added = []
+                    for dm in default_mks:
+                        if not dm.endswith("_alternate"):
+                            continue
+                        primary = dm[:-len("_alternate")]
+                        if primary in saved_set and dm not in saved_set:
+                            added.append(dm)
+                    merged_pm[sp] = list(saved_mks) + added
                 disk["odds_player_markets"] = merged_pm
             out.update(disk)
     except (OSError, json.JSONDecodeError, ValueError):

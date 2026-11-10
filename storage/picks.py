@@ -223,10 +223,15 @@ def _market_slot(p: dict) -> tuple:
        and "Celtics +3.5" collapse. Different numbers (-3.5 vs -7.5) stay
        as distinct slots.
      - totals: Over/Under share the same point, so point is used as-is.
+     - props: a "<market>_alternate" variant collapses to its primary key
+       so the same player/line doesn't get logged twice when both the
+       main and alt markets surface it.
     """
     sport = (p.get("sport") or "").lower()
     event = str(p.get("event_id") or "")
     market = (p.get("market") or "h2h").lower()
+    if market.endswith("_alternate"):
+        market = market[:-len("_alternate")]
     pt = p.get("point")
     if market in ("spreads", "spreads_h1") and pt is not None:
         try:

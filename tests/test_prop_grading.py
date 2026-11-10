@@ -251,6 +251,76 @@ def unit_tests():
         try: os.remove(path)
         except OSError: pass
 
+    print("== alt-prop (one-sided) scanner")
+    from calc import agent as agent_calc
+    # Fake pinnacle_game with only alt-market Over-side data across four
+    # books: three reference (DraftKings, FanDuel, Caesars) + one shop
+    # (BetOnline.ag) priced better than the consensus.
+    def _mk_outcome(desc, pt, price):
+        return {"description": desc, "name": "Over", "point": pt, "price": price}
+    def _mk_book(title, outs):
+        return {"title": title, "markets": [{"key": "player_receptions_alternate", "outcomes": outs}]}
+    g = {
+        "id": "ev_alt", "home_team": "Giants", "away_team": "Commanders",
+        "commence_time": "2026-11-13T01:15:00+00:00",
+        "bookmakers": [
+            _mk_book("DraftKings", [_mk_outcome("Malik Nabers", 4.5, -288)]),  # imp ~74.2%
+            _mk_book("FanDuel",    [_mk_outcome("Malik Nabers", 4.5, -260)]),  # imp ~72.2%
+            _mk_book("Caesars",    [_mk_outcome("Malik Nabers", 4.5, -275)]),  # imp ~73.3%
+            _mk_book("BetOnline.ag", [_mk_outcome("Malik Nabers", 4.5, -200)]),  # imp ~66.7%
+        ],
+    }
+    out = agent_calc.scan_player_props_vs_pinnacle(
+        [g], bankroll_cash=500.0, sport_key="nfl",
+        prop_markets=["player_receptions_alternate"],
+        shop_books=["BetOnline.ag"],
+        min_edge_pct=0.01,
+        consensus_min_edge_pct=0.03,
+        alt_min_edge_pct=0.05,
+    )
+    check("alt-market scanner surfaces the mis-priced shop side",
+          len(out) == 1 and out[0]["prop_player"] == "Malik Nabers",
+          f"got {len(out)} edges")
+    if out:
+        row = out[0]
+        check("alt-market is_prop + market key preserved",
+              row["is_prop"] and row["market"] == "player_receptions_alternate")
+        check("alt-market fair_source names '-book alt consensus'",
+              "alt consensus" in (row.get("fair_source") or ""),
+              f"got {row.get('fair_source')!r}")
+        check("alt-market side is Over (no Under on one-sided markets)",
+              row["side_label"].endswith("Over 4.5"),
+              row["side_label"])
+        check("alt-market edge clears the alt floor (>=5 pts)",
+              row["edge"] >= 0.05, f"edge={row['edge']:.4f}")
+    # No qualifying shop beats the floor -> emits nothing
+    g2 = {
+        "id": "ev_alt2", "home_team": "Giants", "away_team": "Commanders",
+        "commence_time": "2026-11-13T01:15:00+00:00",
+        "bookmakers": [
+            _mk_book("DraftKings", [_mk_outcome("Player X", 4.5, -200)]),
+            _mk_book("FanDuel",    [_mk_outcome("Player X", 4.5, -210)]),
+            _mk_book("Caesars",    [_mk_outcome("Player X", 4.5, -195)]),
+            _mk_book("BetOnline.ag", [_mk_outcome("Player X", 4.5, -210)]),  # worse, no edge
+        ],
+    }
+    out2 = agent_calc.scan_player_props_vs_pinnacle(
+        [g2], bankroll_cash=500.0, sport_key="nfl",
+        prop_markets=["player_receptions_alternate"],
+        shop_books=["BetOnline.ag"],
+        alt_min_edge_pct=0.05,
+    )
+    check("alt-market scanner rejects shop at parity", len(out2) == 0)
+
+    # Market-key normalization: a primary pick and an alt pick at the same
+    # (player, line) collapse to the same storage slot.
+    primary = {"sport": "nfl", "event_id": "ev_alt", "market": "player_receptions",
+               "selection": "Malik Nabers Over 4.5", "point": 4.5, "player": "Malik Nabers"}
+    alt = {"sport": "nfl", "event_id": "ev_alt", "market": "player_receptions_alternate",
+           "selection": "Malik Nabers Over 4.5", "point": 4.5, "player": "Malik Nabers"}
+    check("primary + alt same-line share one market slot",
+          picks_store._market_slot(primary) == picks_store._market_slot(alt))
+
 
 def find_recent_final_nba():
     today = datetime.now(timezone.utc).date()

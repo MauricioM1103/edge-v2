@@ -1007,6 +1007,26 @@ def prop_market_label(market_key: str) -> str:
     return PROP_MARKET_LABELS.get(market_key) or market_key.replace("player_", "").replace("_", " ").title()
 
 
+def _is_alternate_market(market_key: str) -> bool:
+    """True when a prop market is the Odds API 'ladder' variant.
+
+    Alt markets are one-sided (Over only) with many lines per player, so
+    fair is derived from a vig-padded consensus of other books at the same
+    line rather than from two-way no-vig removal.
+    """
+    k = (market_key or "").lower()
+    return k.endswith("_alternate")
+
+
+def _primary_market_key(market_key: str) -> str:
+    """Strip the '_alternate' suffix so primary + alt at the same line
+    collapse into one slot for grouping/dedup."""
+    k = (market_key or "").lower()
+    if k.endswith("_alternate"):
+        return k[:-len("_alternate")]
+    return k
+
+
 def scan_player_props_vs_pinnacle(
     pinnacle_games: List[dict],
     bankroll_cash: float,
@@ -1019,16 +1039,23 @@ def scan_player_props_vs_pinnacle(
     espn_events_by_game: Optional[dict] = None,
     min_consensus_books: int = 3,
     consensus_min_edge_pct: float = 0.03,
+    alt_min_edge_pct: float = 0.05,
 ) -> List[dict]:
     """Shop offshore books vs a fair line on player Over/Under props.
 
-    Per-event responses put props in each bookmaker's markets list with
-    outcomes shaped {name: "Over"|"Under", description: <player>, point, price}.
-    Each (player, point) is its own two-way market, so fair prob is computed
-    at that exact line: Pinnacle no-vig when Pinnacle posts the same line,
-    else the no-vig consensus of >= min_consensus_books books at that line.
-    Books posting a different point for the same player are not comparable
-    and are left out of that line's shop.
+    Handles two market shapes:
+
+    1. Primary two-way markets (e.g. player_points): outcomes come as
+       {Over, Under} at one standard line per book. Fair is Pinnacle no-vig
+       at that line, else the no-vig consensus of >= min_consensus_books
+       books at the same line.
+
+    2. Odds API "_alternate" ladders (e.g. player_points_alternate): Over
+       only, many lines per player per book. No Under means no no-vig fair
+       can be computed, so fair is taken as the median Over-implied across
+       reference books (shop books excluded) at the same line. That number
+       is still vig-padded, so alt rows must clear a higher edge floor
+       (alt_min_edge_pct, default 5 %) to surface.
 
     Emits edge dicts shaped like the offshore scanner's rows plus
     is_prop=True, prop_player and a "Prop · <stat>" market_label. Grade is
@@ -1061,6 +1088,7 @@ def scan_player_props_vs_pinnacle(
         away_name = g.get("away_team")
         espn_ev = _find_espn_ev(espn_events_by_game, home_name, away_name)
         for mk in prop_markets:
+            is_alt = _is_alternate_market(mk)
             # lines[(player, point)] = {book_title: {"over": price, "under": price}}
             lines: Dict[tuple, Dict[str, dict]] = {}
             for b in (g.get("bookmakers") or []):
@@ -1082,18 +1110,20 @@ def scan_player_props_vs_pinnacle(
             for (player, pt), by_book in lines.items():
                 if not _is_half(pt):
                     continue  # whole-number lines carry push risk; skip like totals
-                # Fair at this exact line.
+                # Fair at this exact line — three paths:
+                #   1. Primary market with Pinnacle both sides -> no-vig fair
+                #   2. Primary market with >=min_consensus_books two-way ->
+                #      no-vig consensus
+                #   3. _alternate market (Over-only) -> median reference
+                #      Over-implied (vig-padded, higher edge floor applies)
                 pin = next((d for t, d in by_book.items() if t.lower() == "pinnacle"), None)
                 fair_over = fair_under = None
                 fair_source = ""
-                if pin and pin.get("over") is not None and pin.get("under") is not None:
+                is_alt_fair = False
+                if not is_alt and pin and pin.get("over") is not None and pin.get("under") is not None:
                     fair_over, fair_under = no_vig_two_way(pin["over"], pin["under"])
                     fair_source = "Pinnacle no-vig"
-                if fair_over is None:
-                    # Reference books only: the shop books are the ones we
-                    # suspect of mispricing, so they don't get a vote on
-                    # fair. Fall back to every book when the reference set
-                    # is too thin.
+                if fair_over is None and not is_alt:
                     two_way = {t: (d["over"], d["under"]) for t, d in by_book.items()
                                if d.get("over") is not None and d.get("under") is not None}
                     ref_pairs = [p for t, p in two_way.items() if t.lower() not in shop_lower]
@@ -1101,9 +1131,30 @@ def scan_player_props_vs_pinnacle(
                     if len(pairs) >= min_consensus_books:
                         fair_over, fair_under = _consensus_fair(pairs)
                         fair_source = f"{len(pairs)}-book consensus"
+                if fair_over is None and is_alt:
+                    # Alt markets are Over-only, so no no-vig removal is
+                    # possible. Use the median reference-book Over implied
+                    # as the fair estimate; the one-sided nature means it
+                    # still carries vig, hence the stricter edge floor
+                    # below. Under side is never shoppable here.
+                    ref_overs = [d["over"] for t, d in by_book.items()
+                                 if d.get("over") is not None and t.lower() not in shop_lower]
+                    pool_overs = ref_overs if len(ref_overs) >= min_consensus_books else [
+                        d["over"] for d in by_book.values() if d.get("over") is not None
+                    ]
+                    implieds = sorted(
+                        p for p in (implied_prob_american(x) for x in pool_overs) if p is not None
+                    )
+                    if len(implieds) >= min_consensus_books:
+                        mid = implieds[len(implieds) // 2]
+                        fair_over = mid
+                        fair_under = 1.0 - mid  # not actually shoppable
+                        fair_source = f"{len(implieds)}-book alt consensus"
+                        is_alt_fair = True
                 if fair_over is None:
                     continue
-                for side, fair_prob in (("over", fair_over), ("under", fair_under)):
+                sides = (("over", fair_over),) if is_alt_fair else (("over", fair_over), ("under", fair_under))
+                for side, fair_prob in sides:
                     candidates = []
                     for btitle, d in by_book.items():
                         if btitle.lower() not in shop_lower:
@@ -1119,9 +1170,18 @@ def scan_player_props_vs_pinnacle(
                         continue
                     best = min(candidates, key=lambda c: c["implied"])
                     edge = fair_prob - best["implied"]
-                    # Consensus fair is a retail-book average, not a sharp
-                    # line; demand more edge from it than from Pinnacle.
-                    floor = min_edge_pct if fair_source.startswith("Pinnacle") else max(min_edge_pct, consensus_min_edge_pct)
+                    # Edge floor varies by fair-source credibility:
+                    #   Pinnacle no-vig: min_edge_pct (sharpest reference)
+                    #   N-book consensus: consensus_min_edge_pct (retail
+                    #     avg with vig removed)
+                    #   Alt consensus: alt_min_edge_pct (vig-padded median,
+                    #     highest floor since the Under side was unavailable)
+                    if is_alt_fair:
+                        floor = max(min_edge_pct, alt_min_edge_pct)
+                    elif fair_source.startswith("Pinnacle"):
+                        floor = min_edge_pct
+                    else:
+                        floor = max(min_edge_pct, consensus_min_edge_pct)
                     if edge < floor:
                         continue
                     kf = kelly_fraction(fair_prob, best["price"], kelly_mult) or 0.0

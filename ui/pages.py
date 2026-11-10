@@ -1297,16 +1297,39 @@ def render_dashboard(settings: dict):
     props_ttl = int(saved_cfg.get("odds_player_ttl") or 6 * 3600)
     props_max_events = int(saved_cfg.get("odds_player_max_events") or 12)
     props_horizon_h = float(saved_cfg.get("odds_player_horizon_hours") or 14)
+    #: Per-sport horizon override for weekly sports (NFL / NCAAF / CFL) so a
+    #: Tuesday scan still catches Thursday-through-Sunday props.
+    props_horizon_by_sport = saved_cfg.get("odds_player_horizon_by_sport") or {}
     props_daily_cap = int(saved_cfg.get("odds_player_daily_cap") or 350)
     props_n_regions = len([r for r in regions.split(",") if r.strip()]) or 1
+    #: Monthly plan-remaining floor — when the API reports fewer than this
+    #: many credits on the plan, skip every per-event fetch so a runaway
+    #: alt-ladder burn can't exhaust the month in one bad night.
+    props_min_plan_credits = int(saved_cfg.get("odds_min_plan_credits") or 0)
+    plan_remaining = odds_api.get_credit_status().get("remaining")
+    plan_guard_tripped = (
+        props_min_plan_credits > 0
+        and plan_remaining is not None
+        and plan_remaining < props_min_plan_credits
+    )
     props_status: dict = {
         "enabled": bool(saved_cfg.get("odds_player_props")), "filtered_out": props_filtered_out,
         "cap": props_daily_cap, "spent_today": odds_api.props_spend_today(), "sports": {},
+        "plan_remaining": plan_remaining,
+        "plan_floor": props_min_plan_credits,
+        "plan_guard_tripped": plan_guard_tripped,
     }
 
-    def _prop_event_ids(games: list) -> list:
-        """Tonight's unstarted games inside the horizon, soonest first, capped."""
+    def _prop_event_ids(games: list, sport_key: str = "") -> list:
+        """Unstarted games inside the sport's horizon, soonest first, capped.
+
+        Weekly sports (NFL / NCAAF / CFL) use a longer horizon from
+        `odds_player_horizon_by_sport` so a Tuesday scan still catches
+        Thursday-through-Sunday props. Daily sports fall back to
+        `props_horizon_h`.
+        """
         now = datetime.now(timezone.utc)
+        horizon = float(props_horizon_by_sport.get(sport_key, props_horizon_h))
         picked = []
         for og in games:
             eid = og.get("id")
@@ -1318,7 +1341,7 @@ def render_dashboard(settings: dict):
             except ValueError:
                 continue
             hours_out = (start - now).total_seconds() / 3600.0
-            if 0 <= hours_out <= props_horizon_h:
+            if 0 <= hours_out <= horizon:
                 picked.append((start, eid))
         picked.sort()
         return [eid for _s, eid in picked[:props_max_events]]
@@ -1344,7 +1367,10 @@ def render_dashboard(settings: dict):
         #    to enrich, and no sense wasting credits)
         if alt_markets_cfg and odds_games_sp and is_today and (not alt_sports_allow or sp in alt_sports_allow):
             eids = tuple(og.get("id") for og in odds_games_sp if og.get("id"))
-            if eids:
+            # Same plan-floor guard as player props: alt markets are also
+            # per-event fetches, so a runaway month could blow through
+            # remaining credits via 1H / BTTS / DNB refreshes.
+            if eids and not plan_guard_tripped:
                 try:
                     alt_data = load_alt_markets(sp, eids, regions, alt_markets_cfg, cache_ttl=alt_ttl)
                 except Exception:
@@ -1359,11 +1385,13 @@ def render_dashboard(settings: dict):
         if props_on and odds_games_sp and is_today and sp in props_sports_allow:
             sp_prop_markets = [m for m in (props_markets_cfg.get(sp) or []) if m]
             sp_status = {"markets": len(sp_prop_markets), "events": 0, "uncached": 0, "est": 0, "spent": 0, "skipped": None}
-            eids = _prop_event_ids(odds_games_sp) if sp_prop_markets else []
+            eids = _prop_event_ids(odds_games_sp, sp) if sp_prop_markets else []
             if not sp_prop_markets:
                 sp_status["skipped"] = "no markets configured"
             elif not eids:
                 sp_status["skipped"] = "no games in window"
+            elif plan_guard_tripped:
+                sp_status["skipped"] = f"plan floor ({plan_remaining} < {props_min_plan_credits})"
             else:
                 mk_str = ",".join(sp_prop_markets)
                 uncached = [
@@ -1375,6 +1403,8 @@ def render_dashboard(settings: dict):
                 sp_status.update({"events": len(eids), "uncached": len(uncached), "est": est})
                 if est > 0 and props_status["spent_today"] + est > props_daily_cap:
                     sp_status["skipped"] = f"daily cap ({props_status['spent_today']}+{est} > {props_daily_cap})"
+                elif est > 0 and plan_remaining is not None and est > plan_remaining - props_min_plan_credits:
+                    sp_status["skipped"] = f"would cross plan floor ({est} > {plan_remaining - props_min_plan_credits})"
                 else:
                     before = odds_api.get_credit_status().get("used_total")
                     try:
@@ -2096,6 +2126,12 @@ def _render_agent_panel(odds_games, kalshi_cash, settings,
     #  - alt markets (h2h_h1, spreads_h1, totals_h1, btts): same rules per family.
     def _group_key(e):
         mk = (e.get("market") or "h2h").lower()
+        # Collapse "<market>_alternate" into "<market>" so a primary-line
+        # pick and an alt-ladder pick at the same number and player don't
+        # double up in the Board — they're the same bet, scanner keeps
+        # the better price.
+        if mk.endswith("_alternate"):
+            mk = mk[:-len("_alternate")]
         pt = e.get("point")
         if mk in ("spreads", "spreads_h1") and pt is not None:
             try:
@@ -2618,11 +2654,23 @@ def _render_agent_panel(odds_games, kalshi_cash, settings,
                 _parts.append(f"{_sp.upper()}: {_s.get('events', 0)} games · {_s.get('spent', 0)} credits")
         _spent = int(_ps.get("spent_today") or 0)
         _cap = int(_ps.get("cap") or 0)
-        _tone = "warn" if (_cap and _spent >= _cap) else ""
+        _plan_rem = _ps.get("plan_remaining")
+        _plan_floor = int(_ps.get("plan_floor") or 0)
+        _plan_tripped = bool(_ps.get("plan_guard_tripped"))
+        _tone = "warn" if (_plan_tripped or (_cap and _spent >= _cap)) else ""
+        _plan_line = ""
+        if _plan_tripped:
+            _plan_line = (
+                f' · <strong class="warn">PLAN FLOOR HIT</strong> ({_plan_rem} credits '
+                f'remaining < {_plan_floor} floor) — per-event fetches paused'
+            )
+        elif _plan_rem is not None and _plan_floor > 0:
+            _plan_line = f' · plan remaining <strong>{_plan_rem:,}</strong> (floor {_plan_floor})'
         html(
             f'<div class="hint {_tone}" style="margin-top:8px;">'
             f'<strong>Player props</strong> · {_n_prop_rows} +EV prop{"s" if _n_prop_rows != 1 else ""} on the board · '
             f'props credits today <strong>{_spent} / {_cap}</strong>'
+            + _plan_line
             + (f' · {" · ".join(_parts)}' if _parts else " · no allowlisted sport had games in the window")
             + '</div>'
         )
@@ -3681,7 +3729,7 @@ def render_picks(settings: dict):
 # ============================================================================
 #
 # User-driven view: of the picks the agent rated tier A (edge >= 2% vs
-# Pinnacle no-vig fair) in the last 7 days, how many hit? This is the "did
+# Pinnacle no-vig fair) in the last month, how many hit? This is the "did
 # the agent actually get its best picks right" readout — intentionally
 # separate from the Ledger so the signal isn't lost in the noise.
 # Mirrors the Board's tier badge so Results and Board stay in sync; an
@@ -3702,8 +3750,15 @@ def _pick_edge(p: dict) -> float:
         return 0.0
 
 
+#: How far back the Results tab reads tier-A picks. 30 days rolls the
+#: window up to a month, which is long enough to see meaningful hit-rate
+#: and gap-vs-expected trends without pulling in stale slates that are
+#: no longer relevant to tuning.
+RESULTS_WINDOW_DAYS = 30
+
+
 def render_results(settings: dict):
-    brand_bar(f"Results · past 7 days · tier-A agent picks (edge ≥ {RESULTS_TIER_A_EDGE*100:.0f}%)")
+    brand_bar(f"Results · past {RESULTS_WINDOW_DAYS} days · tier-A agent picks (edge ≥ {RESULTS_TIER_A_EDGE*100:.0f}%)")
 
     # Backfill pick_date on legacy rows so the by-date grouping works.
     try:
@@ -3712,22 +3767,22 @@ def render_results(settings: dict):
         pass
     # Settle any open agent picks whose games have finished since the last
     # scan. The auto-log triggers this on every dashboard re-render, but a
-    # user opening Results directly on a quiet day would otherwise see last
-    # week's A-tier rows stuck on "open" until they nudge the dashboard.
+    # user opening Results directly on a quiet day would otherwise see
+    # last month's A-tier rows stuck on "open" until they nudge the dashboard.
     try:
         picks_store.auto_settle()
     except Exception:
         pass
 
-    # Last 7 slate dates (Central), inclusive of today.
+    # Last RESULTS_WINDOW_DAYS slate dates (Central), inclusive of today.
     from datetime import timedelta as _td
     from zoneinfo import ZoneInfo as _ZI
     today_c = datetime.now(_ZI("America/Chicago")).date()
-    window_start = today_c - _td(days=6)  # 7 days including today
-    window_dates = {(today_c - _td(days=n)).strftime("%Y-%m-%d") for n in range(7)}
+    window_start = today_c - _td(days=RESULTS_WINDOW_DAYS - 1)  # inclusive of today
+    window_dates = {(today_c - _td(days=n)).strftime("%Y-%m-%d") for n in range(RESULTS_WINDOW_DAYS)}
 
     all_picks = picks_store.list_picks()
-    # Keep the same window (7 days of Central-US slate dates) and the same
+    # Keep the agent-auto source filter and swap the old 7-day window for
     # agent-auto source filter; just replace the old "Pinnacle fair prob >
     # 55%" gate with the A-tier edge gate used by the Board. Existing picks
     # that were logged under the earlier (looser) rules keep showing, as
@@ -3741,7 +3796,7 @@ def render_results(settings: dict):
     if not high_conf:
         html(
             f'<div class="hint">No tier-A agent picks (edge ≥ {RESULTS_TIER_A_EDGE*100:.0f}%) '
-            'in the past 7 days. The Results tab lights up once the agent surfaces '
+            f'in the past {RESULTS_WINDOW_DAYS} days. The Results tab lights up once the agent surfaces '
             'tier-A edges and they grade from ESPN. '
             f'Window: <strong>{window_start.strftime("%b %d")} – {today_c.strftime("%b %d, %Y")}</strong>.</div>'
         )
@@ -4459,6 +4514,24 @@ def render_settings(settings: dict):
                 help="Edge floor when the fair line is a book consensus rather than Pinnacle. "
                      "Retail books disagree by 1-2 pts on props, so 3%+ filters that noise.",
             )
+        # Plan-floor row — single-column safety guard against runaway burn.
+        cur_plan_floor = int(saved.get("odds_min_plan_credits") or 500)
+        new_plan_floor = st.number_input(
+            "Plan credit floor — pause per-event fetches below this remaining",
+            min_value=0, max_value=20000, step=100,
+            value=cur_plan_floor, key="set_plan_floor",
+            help="When the monthly plan's remaining credits fall below this number, "
+                 "props and alt-markets stop fetching so a bad night can't exhaust the "
+                 "month. Batch /odds fetches still run (cost is bounded per-sport). "
+                 "Set to 0 to disable and rely only on the daily cap.",
+        )
+        _plan_rem = odds_api.get_credit_status().get("remaining")
+        if _plan_rem is not None and new_plan_floor > 0 and _plan_rem < new_plan_floor:
+            st.warning(
+                f"Plan floor is **tripped**: {_plan_rem:,} credits remaining < {new_plan_floor:,} floor. "
+                "All per-event fetches (props, alt markets) are paused until the plan refills "
+                "or you lower the floor."
+            )
         _pk_changes = {}
         if int(new_cap) != int(saved.get("odds_player_daily_cap") or 350):
             _pk_changes["odds_player_daily_cap"] = int(new_cap)
@@ -4470,12 +4543,17 @@ def render_settings(settings: dict):
             _pk_changes["odds_player_board_max"] = int(new_board_max)
         if abs(float(new_cons_edge) / 100.0 - cur_cons_edge) > 1e-9:
             _pk_changes["odds_player_consensus_min_edge"] = round(float(new_cons_edge) / 100.0, 4)
+        if int(new_plan_floor) != cur_plan_floor:
+            _pk_changes["odds_min_plan_credits"] = int(new_plan_floor)
         if _pk_changes:
             settings_store.save(_pk_changes)
             st.cache_data.clear()
         # Live estimate for tonight, from ESPN (free): games inside the
-        # horizon per allowlisted sport × regions × markets.
+        # horizon per allowlisted sport × regions × markets. Weekly sports
+        # (NFL / NCAAF / CFL) use their per-sport horizon so the preview
+        # matches what the fetcher will actually hit.
         _horizon = float(saved.get("odds_player_horizon_hours") or 14)
+        _horizon_by_sport = saved.get("odds_player_horizon_by_sport") or {}
         _now = datetime.now(timezone.utc)
         est_lines = []
         est_total = 0
@@ -4483,6 +4561,7 @@ def render_settings(settings: dict):
             n_mk = len([m for m in (cur_prop_markets.get(s) or []) if m])
             if not n_mk:
                 continue
+            sport_horizon = float(_horizon_by_sport.get(s, _horizon))
             n_games = 0
             for ev in load_espn_scoreboard(s) or []:
                 start = ev.get("start_utc")
@@ -4492,13 +4571,16 @@ def render_settings(settings: dict):
                     hrs = (start - _now).total_seconds() / 3600.0
                 except TypeError:
                     continue
-                if 0 <= hrs <= _horizon:
+                if 0 <= hrs <= sport_horizon:
                     n_games += 1
             n_games = min(n_games, int(new_max_ev))
             cost = n_games * n_regions * n_mk
             est_total += cost
             if n_games:
-                est_lines.append(f"{espn.DISPLAY_NAMES.get(s, s.upper())} {n_games} × {n_regions} × {n_mk} = **{cost}**")
+                tag = f" (≤{int(sport_horizon)}h)" if sport_horizon != _horizon else ""
+                est_lines.append(
+                    f"{espn.DISPLAY_NAMES.get(s, s.upper())} {n_games} × {n_regions} × {n_mk} = **{cost}**{tag}"
+                )
         spent_today = odds_api.props_spend_today()
         remaining_c = odds_api.get_credit_status().get("remaining")
         st.caption(
