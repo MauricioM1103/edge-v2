@@ -2636,6 +2636,123 @@ def _render_agent_panel(odds_games, kalshi_cash, settings,
     )
     html(f'<div class="auto-log-caption">{_caption_line}</div>')
 
+    # ------------------------------------------------------------------
+    # Capper's Parlay button — manual trigger that asks the agent to pick
+    # a small set of tier-A legs and combine them. Kept behind a button,
+    # not auto-run, because parlays compound vig and are a losing
+    # expectation on average; a one-off capper pick is a tool, not a
+    # strategy. The card below the button shows the legs, combined
+    # price, joint fair vs market, EV and a Kelly stake (quarter-Kelly
+    # by default — parlay variance is strictly higher than any single
+    # leg's).
+    # ------------------------------------------------------------------
+    from calc import capper as capper_calc
+    pc1, pc2 = st.columns([1, 4])
+    with pc1:
+        _build_parlay = st.button(
+            "🎯 Build Capper's Parlay",
+            key="build_parlay_btn",
+            use_container_width=True,
+            help="Hand-picks today's tier-A edges into a 2–5 leg parlay. "
+                 "One leg per game, no in-play legs, quarter-Kelly stake. "
+                 "Parlays compound vig — the rationale shows whether the "
+                 "specific combination stays +EV after the stack.",
+        )
+    if _build_parlay:
+        try:
+            parlay_build = capper_calc.build_capper_parlay(
+                edges=top, bankroll=float(kalshi_cash or 500.0),
+                kelly_mult=float(saved_cfg.get("agent_kelly") or 0.25),
+            )
+        except Exception as _ex:
+            st.warning(f"Could not build parlay: {_ex}")
+            parlay_build = None
+        st.session_state["_capper_parlay"] = parlay_build
+    _parlay = st.session_state.get("_capper_parlay")
+    if _parlay:
+        _legs = _parlay.get("legs") or []
+        if not _legs:
+            html(
+                f'<div class="hint" style="margin-top:8px;">'
+                f'<strong>Capper</strong> · {_esc(_parlay.get("rationale") or "")}'
+                f'</div>'
+            )
+        else:
+            _combined = _parlay.get("combined_american")
+            _jf = (_parlay.get("joint_fair_prob") or 0) * 100.0
+            _ji = (_parlay.get("joint_implied_prob") or 0) * 100.0
+            _edge = (_parlay.get("edge") or 0) * 100.0
+            _stake = float(_parlay.get("stake_dollars") or 0)
+            _ev = _parlay.get("ev_dollars")
+            _profit = _parlay.get("profit_on_win")
+            _edge_cls = "good" if _edge > 0 else "bad"
+            _ev_cls = "good" if (_ev or 0) > 0 else ("bad" if (_ev or 0) < 0 else "muted")
+            _legs_html = "".join(
+                f'<li><strong>{_esc(leg.get("selection") or "")}</strong>'
+                f' <span class="mono" style="color:var(--muted);">'
+                f'{_esc((leg.get("sport") or "").upper())} · '
+                f'{format_american(leg.get("price_american"))} · '
+                f'fair {(leg.get("fair_prob") or 0) * 100:.1f}%</span></li>'
+                for leg in _legs
+            )
+            _price_disp = f"+{_combined}" if (_combined or 0) >= 0 else f"{_combined}"
+            html(
+                '<div class="hint" style="margin-top:12px; padding:12px; '
+                'border:1px solid color-mix(in oklab, var(--accent) 30%, transparent); '
+                'border-radius:10px;">'
+                f'<div style="font-size:11px; letter-spacing:0.08em; '
+                f'color:var(--accent); text-transform:uppercase;">'
+                f'Capper\'s {len(_legs)}-leg parlay</div>'
+                f'<ul style="margin:6px 0 8px 18px; padding:0;">{_legs_html}</ul>'
+                '<div style="display:flex; gap:18px; flex-wrap:wrap; '
+                'font-size:12px;">'
+                f'<div><span style="color:var(--muted);">Combined</span> '
+                f'<strong class="mono">{_price_disp}</strong></div>'
+                f'<div><span style="color:var(--muted);">Joint fair</span> '
+                f'<strong class="mono">{_jf:.1f}%</strong></div>'
+                f'<div><span style="color:var(--muted);">Market</span> '
+                f'<strong class="mono">{_ji:.1f}%</strong></div>'
+                f'<div><span style="color:var(--muted);">Edge</span> '
+                f'<strong class="mono {_edge_cls}">{_edge:+.2f}pts</strong></div>'
+                f'<div><span style="color:var(--muted);">¼-Kelly stake</span> '
+                f'<strong class="mono">${_stake:,.2f}</strong></div>'
+                f'<div><span style="color:var(--muted);">Expected $</span> '
+                f'<strong class="mono {_ev_cls}">'
+                f'{("+" if (_ev or 0) >= 0 else "")}{(_ev or 0):.2f}</strong></div>'
+                f'<div><span style="color:var(--muted);">Profit if hit</span> '
+                f'<strong class="mono good">+${(_profit or 0):.2f}</strong></div>'
+                '</div>'
+                f'<p style="margin:10px 0 0; font-size:12px; color:var(--muted); '
+                f'line-height:1.5;">{_esc(_parlay.get("rationale") or "")}</p>'
+                '</div>'
+            )
+            _bc1, _bc2 = st.columns([1, 4])
+            with _bc1:
+                if st.button(
+                    "📝 Log this parlay",
+                    key="log_parlay_btn",
+                    use_container_width=True,
+                    type="primary",
+                    help="Writes the parlay to the ledger as its own row. "
+                         "Each leg grades against its own game's ESPN final; "
+                         "pushes drop legs without killing the parlay.",
+                ):
+                    unit_pct = settings.get("unit_pct") or 0.01
+                    unit_dollars = (kalshi_cash or 500.0) * unit_pct
+                    try:
+                        stored = picks_store.log_capper_parlay(
+                            _parlay, bankroll=float(kalshi_cash or 500.0),
+                            unit_dollars=float(unit_dollars or 1.0),
+                        )
+                    except Exception as _ex:
+                        st.warning(f"Could not log parlay: {_ex}")
+                        stored = None
+                    if stored:
+                        st.success(f"Parlay logged: {stored.get('event_name')}")
+                        st.session_state["_capper_parlay"] = None
+                    else:
+                        st.warning("Parlay needs at least two legs to log.")
+
     # Props status line: what the per-event fetch did this refresh and where
     # today's prop credit spend sits against the daily ceiling.
     _ps = st.session_state.get("_props_status") or {}

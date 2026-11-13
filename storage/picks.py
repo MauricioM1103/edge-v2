@@ -782,6 +782,162 @@ def _settle_prop(pick: dict, final: dict) -> bool:
     return True
 
 
+def log_capper_parlay(parlay: dict, bankroll: float, unit_dollars: float,
+                      path: Optional[str] = None) -> Optional[dict]:
+    """Write a capper-built parlay into the ledger as a single pick row.
+
+    `parlay` is the dict returned by calc.capper.build_capper_parlay —
+    legs, combined price, joint probs, Kelly stake, rationale. The
+    stored row has market="parlay", source="capper", and a `legs` array
+    that auto_settle walks to grade each leg's game independently.
+    """
+    legs = parlay.get("legs") or []
+    if len(legs) < 2:
+        return None
+    stake_dollars = float(parlay.get("stake_dollars") or 0)
+    risk_units = round(stake_dollars / max(1e-6, unit_dollars), 2) if unit_dollars else 0.0
+    sports = sorted({(leg.get("sport") or "").lower() for leg in legs if leg.get("sport")})
+    sport_mix = "/".join(s.upper() for s in sports) or "mixed"
+    # Synthetic event id — parlay has no single event. Prefixed so it
+    # can never collide with a real ESPN id.
+    synth_eid = "parlay_" + uuid.uuid4().hex[:10]
+    row = {
+        "sport": "mixed",
+        "event_id": synth_eid,
+        "event_name": f"Capper's {len(legs)}-leg parlay ({sport_mix})",
+        "market": "parlay",
+        "market_family": "parlay",
+        "selection": " + ".join(leg.get("selection") or "" for leg in legs),
+        "price_american": parlay.get("combined_american"),
+        "projected_prob": parlay.get("joint_fair_prob"),
+        "implied_prob": parlay.get("joint_implied_prob"),
+        "risk_units": risk_units,
+        "win_units": None,
+        "methodology": "Capper · tier-A parlay",
+        "source": "capper",
+        "legs": legs,
+        "rationale": parlay.get("rationale"),
+        "kelly_fraction": parlay.get("kelly_fraction"),
+        "ev_dollars": parlay.get("ev_dollars"),
+        "profit_on_win": parlay.get("profit_on_win"),
+        "combined_decimal": parlay.get("combined_decimal"),
+        "built_at": parlay.get("built_at"),
+        "notes": (
+            f"{len(legs)}-leg parlay @ {parlay.get('combined_american')} "
+            f"· joint fair {(parlay.get('joint_fair_prob') or 0) * 100:.1f}% "
+            f"vs market {(parlay.get('joint_implied_prob') or 0) * 100:.1f}% "
+            f"· edge {(parlay.get('edge') or 0) * 100:+.2f}pts"
+        ),
+    }
+    return add_pick(row, path=path)
+
+
+def _settle_leg(leg: dict, final: dict) -> None:
+    """Settle one parlay leg against its own game's ESPN final.
+
+    Delegates to the same per-market helpers that grade standalone picks
+    (h2h / totals / spreads / btts / draw_no_bet / prop), so parlay-leg
+    grading tracks straight-pick grading exactly.
+    """
+    market = (leg.get("market") or "h2h").lower()
+    # Normalise the alt-prop suffix so _settle_prop dispatches correctly.
+    if market.endswith("_alternate"):
+        market = market[:-len("_alternate")]
+        leg["market"] = market  # update in-place so the ledger reads cleanly
+    leg_pick = {
+        "market": market,
+        "selection": leg.get("selection"),
+        "point": leg.get("point"),
+        "player": leg.get("player"),
+        "market_family": "prop" if leg.get("is_prop") else "game",
+        "source": "agent-auto",  # so _settle_prop doesn't refuse a manual-row
+        "sport": leg.get("sport"),
+        "event_id": leg.get("event_id"),
+        "status": "open",
+    }
+    if leg_pick["market_family"] == "prop":
+        _settle_prop(leg_pick, final)
+    elif market == "h2h":
+        _settle_h2h(leg_pick, final)
+    elif market == "totals":
+        _settle_totals(leg_pick, final)
+    elif market == "spreads":
+        _settle_spreads(leg_pick, final)
+    elif market == "btts":
+        _settle_btts(leg_pick, final)
+    elif market == "draw_no_bet":
+        _settle_dnb(leg_pick, final)
+    leg["status"] = leg_pick.get("status") or "open"
+    leg["result_payload"] = {
+        "home_score": final.get("home_score"),
+        "away_score": final.get("away_score"),
+        "home_won": final.get("home_won"),
+        "settled_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+    }
+
+
+def _settle_parlay(parlay_pick: dict, finals_memo: dict) -> bool:
+    """Settle a parlay by grading each leg against its own ESPN final.
+
+    Returns True when the overall parlay status has moved out of 'open'.
+    Push/void legs drop without killing the parlay; a single loss wins
+    the whole thing for the book; every surviving leg must win for the
+    parlay to win. See calc.parlay.settle_parlay for the resolution.
+    """
+    legs = parlay_pick.get("legs") or []
+    if not legs:
+        return False
+    date_hint = None
+    created = parlay_pick.get("created_at") or ""
+    if len(created) >= 10:
+        try:
+            dt = datetime.fromisoformat(created.replace("Z", "+00:00"))
+            date_hint = dt.strftime("%Y%m%d")
+        except ValueError:
+            date_hint = None
+    for leg in legs:
+        leg_status = (leg.get("status") or "open").lower()
+        if leg_status in ("win", "loss", "push", "void"):
+            continue  # already graded in an earlier sweep
+        sport = leg.get("sport")
+        event_id = leg.get("event_id")
+        if not sport or not event_id:
+            continue
+        memo_key = (str(sport).lower(), str(event_id), date_hint)
+        if memo_key in finals_memo:
+            final = finals_memo[memo_key]
+        else:
+            final = espn.is_event_final(sport, event_id, date=date_hint)
+            if not final:
+                final = espn.is_event_final(sport, event_id)
+            finals_memo[memo_key] = final
+        if not final or not final.get("is_final"):
+            continue
+        _settle_leg(leg, final)
+    # Combine the leg statuses into the parlay's own status.
+    from calc import parlay as parlay_math
+    overall, effective_combined = parlay_math.settle_parlay(
+        [leg.get("status") for leg in legs],
+        [leg.get("price_american") for leg in legs],
+    )
+    parlay_pick["status"] = overall
+    if effective_combined is not None:
+        parlay_pick["effective_combined_american"] = effective_combined
+        # Recompute win_units at the effective (post-push) combined price
+        # so pushes correctly shrink the payout.
+        risk_units = float(parlay_pick.get("risk_units") or 0)
+        if overall == "win" and risk_units > 0 and effective_combined is not None:
+            d = parlay_math.combined_decimal([effective_combined])
+            if d is not None:
+                parlay_pick["win_units"] = round(risk_units * (d - 1.0), 2)
+    parlay_pick["result_payload"] = {
+        "leg_statuses": [leg.get("status") for leg in legs],
+        "effective_combined_american": effective_combined,
+        "settled_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+    }
+    return overall in ("win", "loss", "push")
+
+
 def auto_settle(path: Optional[str] = None) -> int:
     """Query ESPN for each open pick's event; settle finals. Returns # settled.
 
@@ -793,8 +949,9 @@ def auto_settle(path: Optional[str] = None) -> int:
     Game lines (h2h / spreads / totals) grade from the scoreboard. Agent-logged
     player props (market_family == "prop") grade from the ESPN box score via
     _settle_prop once the same final check passes; manually logged props are
-    the user's own records and are never auto-graded. Idempotent: only rows
-    still 'open' are considered.
+    the user's own records and are never auto-graded. Parlays (market ==
+    "parlay") grade each leg via its own game's final, then combine. Idempotent:
+    only rows still 'open' are considered.
     """
     file_path = path or _default_path()
     picks = _load(file_path)
@@ -804,6 +961,12 @@ def auto_settle(path: Optional[str] = None) -> int:
     finals_memo: dict = {}
     for p in picks:
         if p.get("status") not in (None, "open"):
+            continue
+        # Parlay rows resolve by walking each leg's own game, so they
+        # don't share the single-event lookup path below.
+        if (p.get("market") or "").lower() == "parlay":
+            if _settle_parlay(p, finals_memo):
+                settled += 1
             continue
         is_prop = (p.get("market_family") or "game") == "prop"
         sport = p.get("sport")
