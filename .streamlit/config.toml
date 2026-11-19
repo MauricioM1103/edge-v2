@@ -6,10 +6,10 @@ runOnSave = true
 gatherUsageStats = false
 
 [theme]
-# Dark base; our custom CSS layers over this.
-base = "dark"
-primaryColor = "#28CC95"
-backgroundColor = "#0B0D12"
-secondaryBackgroundColor = "#12151C"
-textColor = "#F5F7FA"
+# Light base; our custom CSS layers over this.
+base = "light"
+primaryColor = "#0A8F63"
+backgroundColor = "#FFFFFF"
+secondaryBackgroundColor = "#F7F8FA"
+textColor = "#0E1116"
 font = "sans serif"

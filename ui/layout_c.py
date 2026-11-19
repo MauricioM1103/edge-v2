@@ -241,5 +241,16 @@ section.bento{ margin-top:14px; }
   [data-testid="stSidebarCollapsedControl"],
   button[aria-label="Expand sidebar"]{ padding:9px 11px !important; bottom:12px !important; left:12px !important; }
 }
+
+/* ---------- board column balance (desktop) ----------
+   The pick itself gets the room; the book name wraps instead of pushing
+   the Methodology column out of view. */
+@media (min-width: 900px){
+  table.board-table{ width:100%; }
+  table.board-table thead th:nth-child(4), table.board-table tbody td:nth-child(4){ min-width:172px; }
+  table.board-table .book-cell{ white-space:normal; max-width:132px; line-height:1.35; }
+  table.board-table thead th:nth-child(1), table.board-table .rank-cell{ width:30px; padding-left:10px; padding-right:4px; }
+  table.board-table thead th, table.board-table tbody td{ padding-left:12px; padding-right:12px; }
+}
 </style>
 """

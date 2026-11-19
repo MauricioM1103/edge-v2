@@ -1851,7 +1851,7 @@ def render_dashboard(settings: dict):
     loading.step(3)
     # Board on the left, a narrow rail on the right for the parlay builder
     # and the credit budget. On a phone the rail stacks under the board.
-    board_col, rail_col = st.columns([3.6, 1], gap="medium")
+    board_col, rail_col = st.columns([4.2, 1], gap="medium")
     with board_col:
         top_picks = _render_agent_panel(
             odds_games, kalshi_cash, settings,
@@ -2015,6 +2015,11 @@ def render_analysis(settings: dict):
 def _render_matchups_grid(merged, sports_list, settings, unit_pct, bankroll_units, multi_sport_mode):
     """Game card grid - per-sport sections in all-sports mode, flat grid otherwise."""
     st.markdown('### Today\'s matchups')
+    _total_games = len(merged)
+    _GRID_FIRST = 6
+    if _total_games > _GRID_FIRST:
+        if not st.toggle(f"Show all {_total_games} games", value=False, key="analysis_all_games"):
+            merged = merged[:_GRID_FIRST]
     primary_book = settings.get("primary_book") or "kalshi"
     extra_sources = set(settings.get("extra_sources") or [])
     visible_sources = {"kalshi"} | extra_sources
@@ -2975,7 +2980,20 @@ def _render_analysis_boards(top_picks, settings, kalshi_cash):
         'alternate venues, and current ESPN state.</p>'
     )
 
-    for i, e in enumerate(top_picks):
+    # One full breakdown is ~1,400 px tall. Rendering all of them made this
+    # page tens of thousands of pixels long and slow enough to stall tab
+    # switches, so show a few and let the reader ask for more.
+    _n = len(top_picks)
+    _opts = ["Top 3"] + (["Top 10"] if _n > 3 else []) + ([f"All {_n}"] if _n > 10 else [])
+    _show = st.segmented_control(
+        "Breakdowns to show", options=_opts, default=_opts[0],
+        key="analysis_show_n", selection_mode="single", label_visibility="collapsed",
+    ) or _opts[0]
+    _limit = 3 if _show == "Top 3" else (10 if _show == "Top 10" else _n)
+    if _n > _limit:
+        html(f'<p style="color:var(--muted); font-size:12.5px; margin:2px 0 10px;">'
+             f'Showing {_limit} of {_n} picks, highest ranked first.</p>')
+    for i, e in enumerate(top_picks[:_limit]):
         _render_single_pick_analysis(e, i + 1, len(top_picks), unit_dollars,
                                      _units_rounded, kelly_mult, max_bet, daily_cap_pct,
                                      unit_pct)

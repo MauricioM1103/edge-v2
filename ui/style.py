@@ -19,31 +19,32 @@ CUSTOM_CSS = r"""
 @font-face{font-family:'Open Sauce One';font-style:normal;font-display:swap;font-weight:600;src:url(https://cdn.jsdelivr.net/npm/@fontsource/open-sauce-one@5.2.5/files/open-sauce-one-latin-600-normal.woff2) format('woff2');}
 @font-face{font-family:'Open Sauce One';font-style:normal;font-display:swap;font-weight:700;src:url(https://cdn.jsdelivr.net/npm/@fontsource/open-sauce-one@5.2.5/files/open-sauce-one-latin-700-normal.woff2) format('woff2');}
 :root {
-  /* Blend palette: neutral charcoal canvas (Polymarket / Kalshi), softer
-     Kalshi green for edge and primary actions, Polymarket blue for info
-     tags, amber for warnings, rose for losses and live. */
-  --bg: #0B0D12;
-  --surface: #12151C;
-  --card: #171B24;
-  --card-elev: #1D222D;
-  --rule: #242A36;
-  --rule-strong: #343C4C;
+  /* Light palette (Kalshi / Polymarket light mode): white canvas, soft gray
+     surfaces, hairline rules. Green and red are darkened from the dark-theme
+     values so text and numbers keep contrast on white. */
+  --bg: #FFFFFF;
+  --surface: #F7F8FA;
+  --card: #FFFFFF;
+  --card-elev: #F7F8FA;
+  --rule: #E3E6EB;
+  --rule-strong: #CDD2DA;
   /* Text ladder */
-  --ink: #F5F7FA;
-  --ink-dim: #C2C8D2;
-  --muted: #808897;
-  --muted-dim: #565E6D;
-  /* Emerald accent — electric, pops on navy without the "neon crypto" vibe. */
-  --accent: #28CC95;
-  --accent-ink: #04130D;
+  --ink: #0E1116;
+  --ink-dim: #3C4350;
+  --muted: #6B7280;
+  --muted-dim: #9AA1AD;
+  --accent: #0A8F63;
+  --accent-ink: #FFFFFF;
   /* Semantic */
-  --good: #28CC95;
-  --warn: #F5A524;
-  --bad: #F0506E;
-  --info: #4C82FB;
-  --live: #FF4D6A;
-  --chip: #1D222D;
-  --card-shadow: 0 1px 2px rgba(0,0,0,.4), 0 18px 40px rgba(0,0,0,.45);
+  --good: #0A8F63;
+  --warn: #B7791F;
+  --bad: #D93654;
+  --info: #2F6BFF;
+  --live: #E5484D;
+  --chip: #EEF0F3;
+  --card-shadow: 0 1px 2px rgba(16,24,40,.05), 0 8px 24px rgba(16,24,40,.06);
+  /* News tiles and the ticker stay dark, image-style panels in any theme. */
+  --tile-ink: #FFFFFF;
 }
 
 /* Court Side is dark-only. Light-mode prefers-color-scheme override was swapping
@@ -748,7 +749,7 @@ button[kind="headerDeploy"] { display: none !important; }
   transform: translateY(-50%);
   width:1px; height:18px; background: rgba(40,204,149,.35);
 }
-.ticker-run .matchup{color:#fff; font-weight:600; letter-spacing:0.06em}
+.ticker-run .matchup{color:var(--ink); font-weight:600; letter-spacing:0.06em}
 .ticker-run .up{color: var(--good); font-weight:700; text-shadow: 0 0 10px rgba(40,204,149,.5);}
 .ticker-run .dn{color: var(--bad); font-weight:700; text-shadow: 0 0 10px rgba(255,68,119,.5);}
 .ticker-run .pm{color: var(--muted)}
