@@ -120,3 +120,14 @@ def format_american(a) -> str:
         return "-"
     i = int(round(v))
     return f"+{i}" if i > 0 else f"{i}"
+
+
+def format_decimal(a) -> str:
+    """Display helper: an American price shown as decimal odds (-110 -> 1.91,
+    +150 -> 2.50), or '-' for missing. Prices are still stored and computed
+    in American; only what the user reads is decimal."""
+    d = american_to_decimal(a)
+    if d is None:
+        return "-"
+    return f"{d:.2f}"
+

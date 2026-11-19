@@ -217,7 +217,7 @@ def _capper_rationale(legs: List[dict], parlay: dict) -> str:
     )
     return (
         f"Capper's {n}-leg parlay ({sport_mix}): {bullets}. Combined "
-        f"{sign}{combined}, joint fair {joint_fair_pct:.1f} % vs market "
+        f"{_dec(combined)}, joint fair {joint_fair_pct:.1f} % vs market "
         f"{joint_imp_pct:.1f} % → edge {edge_pct:+.2f} pts. "
         f"{verdict}."
     )
@@ -320,3 +320,12 @@ def build_capper_parlay(
     out["ev_dollars"] = parlay_math.parlay_ev_dollars(stake, fairs, prices)
     out["rationale"] = _capper_rationale(legs_edges, out)
     return out
+
+
+def _dec(american) -> str:
+    """Combined American price as decimal odds for the write-up."""
+    try:
+        a = float(american)
+        return f"{(1.0 + a / 100.0) if a > 0 else (1.0 + 100.0 / abs(a)):.2f}"
+    except (TypeError, ValueError, ZeroDivisionError):
+        return "-"

@@ -263,7 +263,7 @@ def render_board_png(
         side = str(p.get("side_label") or "")
         price = p.get("price")
         try:
-            price_s = f"{int(price):+d}" if price is not None else "—"
+            price_s = _decimal_price(price) if price is not None else "—"
         except (TypeError, ValueError):
             price_s = str(price)
         stake_u = p.get("_stake_units")
@@ -519,3 +519,11 @@ def send_board_snapshot(
     )
     payload = {"username": "Edge · Board", "content": content}
     return _multipart_post(url, payload, png, filename="edge-board.png", timeout=timeout)
+
+
+def _decimal_price(american) -> str:
+    """American price as decimal odds for alert text (-110 -> 1.91)."""
+    a = float(american)
+    if a == 0:
+        raise ValueError("zero price")
+    return f"{(1.0 + a / 100.0) if a > 0 else (1.0 + 100.0 / abs(a)):.2f}"

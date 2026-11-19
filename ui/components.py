@@ -6,7 +6,7 @@ from typing import Optional
 from zoneinfo import ZoneInfo
 
 from calc.odds import (
-    format_american, implied_prob_american, american_to_decimal, american_to_fractional
+    format_american, format_decimal, implied_prob_american, american_to_decimal, american_to_fractional
 )
 from calc.ev import ev_percent
 from calc.clv import line_move_prob_delta, classify_move
@@ -97,7 +97,7 @@ def metric_row(items):
 
 
 def _format_price_with_imp(american) -> str:
-    s = format_american(american)
+    s = format_decimal(american)
     p = implied_prob_american(american)
     if p is None:
         return f'<span class="price">{s}</span>'
@@ -406,7 +406,7 @@ def odds_table_row(american):
     imp_s = f"{imp*100:.2f}%" if imp is not None else "—"
     return (
         "<tr>"
-        f'<td class="mono">{format_american(american)}</td>'
+        f'<td class="mono">{format_decimal(american)}</td>'
         f'<td class="mono num">{dec_s}</td>'
         f'<td class="mono">{frac or "—"}</td>'
         f'<td class="mono num">{imp_s}</td>'

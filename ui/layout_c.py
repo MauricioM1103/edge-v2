@@ -120,23 +120,23 @@ table.board-table .method-tag{ white-space:nowrap; }
 table.board-table tbody td{ padding-top:9px; padding-bottom:9px; }
 
 /* price pill + fair-vs-book bar */
-table.board-table td.pb-cell{ min-width:150px; }
+table.board-table td.pb-cell{ min-width:184px; }
 .pb-cell .px{
-  display:inline-block; min-width:62px; text-align:center; padding:4px 10px; border-radius:8px;
-  font-family:"Geist Mono", monospace; font-variant-numeric:tabular-nums; font-weight:700; font-size:12.5px;
+  display:inline-block; min-width:70px; text-align:center; padding:5px 12px; border-radius:8px;
+  font-family:"Geist Mono", monospace; font-variant-numeric:tabular-nums; font-weight:700; font-size:14.5px;
   background:var(--chip); color:var(--ink-dim); border:1px solid var(--rule);
 }
 .pb-cell.pos .px{
   background: color-mix(in oklab, var(--accent) 14%, transparent); color:var(--accent);
   border-color: color-mix(in oklab, var(--accent) 38%, transparent);
 }
-.pb-cell .pb-bar{ display:flex; height:4px; border-radius:2px; overflow:hidden; background:var(--rule); margin:6px 0 3px; }
+.pb-cell .pb-bar{ display:flex; height:6px; border-radius:3px; overflow:hidden; background:var(--rule); margin:8px 0 5px; }
 .pb-cell .pb-bar i{ display:block; background:var(--muted-dim); }
 .pb-cell.pos .pb-bar i{ background: color-mix(in oklab, var(--accent) 55%, var(--rule)); }
 .pb-cell .pb-bar u{ display:block; background:var(--accent); }
 .pb-cell .pb-nums{
   display:flex; justify-content:space-between; gap:8px; white-space:nowrap;
-  font-family:"Geist Mono", monospace; font-size:10px; color:var(--muted);
+  font-family:"Geist Mono", monospace; font-size:12px; color:var(--muted);
 }
 .pb-cell .pb-nums .accent{ color:var(--accent); }
 
@@ -230,7 +230,7 @@ section.bento{ margin-top:14px; }
   .kpi-strip .v{ font-size:15px; }
   .board-hero-head .board-title{ flex-wrap:wrap; gap:8px; }
   .board-hero-head .board-title .board-count{ white-space:nowrap; font-size:9.5px; padding:4px 9px; }
-  table.board-table td.pb-cell{ min-width:138px; }
+  table.board-table td.pb-cell{ min-width:160px; }
   /* Phone: the sidebar opener shrinks to an icon so it covers less of the board. */
   [data-testid="stExpandSidebarButton"]::after,
   [data-testid="collapsedControl"]::after,

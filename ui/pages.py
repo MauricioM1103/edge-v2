@@ -12,7 +12,7 @@ from apis.book_filter import book_market
 from apis.kalshi_match import find_event_markets, home_implied_prob
 from calc.odds import (
     american_to_decimal, american_to_fractional, decimal_to_american,
-    implied_prob_american, format_american, profit_on_win, no_vig_two_way,
+    implied_prob_american, format_american, format_decimal, profit_on_win, no_vig_two_way,
 )
 from calc.ev import expected_value, ev_percent, edge as calc_edge
 from calc.kelly import kelly_fraction, kelly_stake
@@ -676,7 +676,7 @@ def _fmt_price(v) -> str:
     bad upstream average can never reach a tile."""
     if not isinstance(v, (int, float)) or abs(float(v)) < 100:
         return ""
-    return f"{int(round(float(v))):+d}"
+    return format_decimal(v)
 
 
 def _market_tail_for(ev: dict, meta: dict) -> str:
@@ -1310,7 +1310,7 @@ def _render_capper_rail(top: list, kalshi_cash: float, settings: dict):
     _ev = _parlay.get("ev_dollars") or 0
     _legs_html = "".join(
         f'<li><span>{_esc(leg.get("selection") or "")}</span>'
-        f'<span class="mono">{format_american(leg.get("price_american"))}</span></li>'
+        f'<span class="mono">{format_decimal(leg.get("price_american"))}</span></li>'
         for leg in _legs
     )
 
@@ -1321,7 +1321,7 @@ def _render_capper_rail(top: list, kalshi_cash: float, settings: dict):
         '<div class="rail-card">'
         f'<ul class="legs">{_legs_html}</ul>'
         '<ul class="stats">'
-        + _stat("Combined", format_american(_combined))
+        + _stat("Combined", format_decimal(_combined))
         + _stat("Joint fair", f'{(_parlay.get("joint_fair_prob") or 0) * 100:.1f}%')
         + _stat("Market", f'{(_parlay.get("joint_implied_prob") or 0) * 100:.1f}%')
         + _stat("Edge", f"{_edge:+.2f} pts", "good" if _edge > 0 else "bad")
@@ -2607,9 +2607,7 @@ def _render_agent_panel(odds_games, kalshi_cash, settings,
             p = max(0.01, min(0.99, float(cents) / 100.0))
         except (TypeError, ValueError):
             return "—"
-        if p >= 0.5:
-            return f"-{round(100 * p / (1 - p))}"
-        return f"+{round(100 * (1 - p) / p)}"
+        return f"{1.0 / p:.2f}"  # decimal odds
 
     def _book_cell_for(e: dict) -> tuple:
         """Return (book_cell_html, price_display, price_american_or_none)
@@ -2623,7 +2621,7 @@ def _render_agent_panel(odds_games, kalshi_cash, settings,
         # best-book fallback (always used in "best" mode, and in "kalshi" mode
         # whenever Kalshi doesn't have the market)
         best_book = _esc_row(e.get("book", "?"))
-        best_price = format_american(e.get("price"))
+        best_price = format_decimal(e.get("price"))
         return (f'{best_book} <span class="n">{best_price}</span>', best_price)
 
     def _row(e, highlight: bool = False, rank: int = 0):
@@ -2998,7 +2996,7 @@ def _render_single_pick_analysis(e, idx, total, unit_dollars, _units_fn, kelly_m
     market_label = e.get("market_label") or agent_calc.MARKET_LABELS.get(e.get("market", "h2h"), "Moneyline")
     side_label = e.get("side_label") or ""
     best_book = e.get("book") or "?"
-    best_price = format_american(e.get("price"))
+    best_price = format_decimal(e.get("price"))
     best_imp = e.get("book_implied") or 0
     fair_prob = e.get("fair_prob") or 0
     edge_pct = (e.get("edge") or 0) * 100
@@ -3105,7 +3103,7 @@ def _render_single_pick_analysis(e, idx, total, unit_dollars, _units_fn, kelly_m
         f'<tr><td>Risk</td><td class="num mono">${stake_1u:,.2f}</td>'
         f'<td class="mono" style="color:var(--muted); font-size:11px;">1u = {unit_pct*100:.1f}% of roll</td></tr>'
         f'<tr><td>Decimal odds</td><td class="num mono">{dec:.4f}</td>'
-        f'<td class="mono" style="color:var(--muted); font-size:11px;">{best_price} American</td></tr>'
+        f'<td class="mono" style="color:var(--muted); font-size:11px;">{best_price} decimal</td></tr>'
         f'<tr><td>Profit if win</td><td class="num mono good">${profit_1u:,.2f}</td>'
         f'<td class="mono" style="color:var(--muted); font-size:11px;">(dec − 1) × risk</td></tr>'
         f'<tr><td>Loss if miss</td><td class="num mono bad">−${stake_1u:,.2f}</td>'
@@ -3850,7 +3848,7 @@ def render_picks(settings: dict):
                       <td>{p.get('event_name') or '-'}</td>
                       <td class="mono" style="color:var(--muted);">{_ledger_market_label(p)}</td>
                       <td>{_ledger_selection_html(p)}</td>
-                      <td class="num mono">{format_american(p.get('price_american'))}</td>
+                      <td class="num mono">{format_decimal(p.get('price_american'))}</td>
                       <td class="num mono">{(p.get('implied_prob') or 0)*100:.1f}%</td>
                       <td class="num mono">{(p.get('projected_prob') or 0)*100:.1f}%</td>
                       <td class="num mono">{risk_u:.2f}u</td>
@@ -3903,7 +3901,7 @@ def render_picks(settings: dict):
           <td>{p.get('event_name') or '-'}</td>
           <td class="mono" style="color:var(--muted);">{_ledger_market_label(p)}</td>
           <td>{_ledger_selection_html(p)}</td>
-          <td class="num mono">{format_american(p.get('price_american'))}</td>
+          <td class="num mono">{format_decimal(p.get('price_american'))}</td>
           <td class="num mono">{(p.get('implied_prob') or 0)*100:.1f}%</td>
           <td class="num mono">{(p.get('projected_prob') or 0)*100:.1f}%</td>
           <td><span class="tag {tag_cls}">{meth}</span></td>
@@ -3917,7 +3915,7 @@ def render_picks(settings: dict):
 
     with st.expander("Pick notes & manual actions"):
         for p in sorted(rows, key=lambda x: x.get("created_at") or "", reverse=True):
-            st.markdown(f"**{p.get('event_name') or '-'}** — {p.get('selection')} ({format_american(p.get('price_american'))})")
+            st.markdown(f"**{p.get('event_name') or '-'}** — {p.get('selection')} ({format_decimal(p.get('price_american'))})")
             if p.get("notes"):
                 st.caption(p.get("notes"))
             c1, c2, c3, c4 = st.columns([2, 1, 1, 1])
@@ -4145,7 +4143,7 @@ def render_results(settings: dict):
                     f'<td>{type_chip}</td>'
                     f'<td class="mono" style="color:var(--muted); font-size:11px;">{mk}</td>'
                     f'<td><strong>{side}</strong></td>'
-                    f'<td class="num mono">{format_american(p.get("price_american"))}</td>'
+                    f'<td class="num mono">{format_decimal(p.get("price_american"))}</td>'
                     f'<td class="num mono" style="color:var(--muted);">{book_imp:.1f}%</td>'
                     f'<td class="num mono {proj_tone}"><strong>{fair*100:.1f}%</strong></td>'
                     f'<td>{result_chip}</td>'
@@ -5168,7 +5166,7 @@ def render_backtest(settings: dict):
             f'<td>{p.matchup}</td>'
             f'<td class="mono" style="color:var(--muted);">{p.market.upper()}</td>'
             f'<td><strong>{p.side_label}</strong>{(" "+str(p.point)) if p.point is not None else ""}</td>'
-            f'<td class="num mono">{format_american(p.price)}</td>'
+            f'<td class="num mono">{format_decimal(p.price)}</td>'
             f'<td class="mono" style="color:var(--muted);">{p.book}</td>'
             f'<td class="num mono">{p.edge_pct:+.2f}</td>'
             f'<td class="num mono">${p.stake:,.2f}</td>'
