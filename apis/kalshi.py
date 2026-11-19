@@ -452,6 +452,33 @@ def market_implied_yes_prob(market: dict) -> Optional[float]:
     return max(0.0, min(1.0, mid))
 
 
+#: Kalshi's general taker fee: 7 % of price x (1 - price) per contract.
+TAKER_FEE_RATE = 0.07
+
+
+def market_yes_ask_prob(market: dict) -> Optional[float]:
+    """Price to BUY one Yes contract right now, as a probability 0-1.
+
+    This is the ask. None when nobody is offering (no ask, or an ask of 0 or
+    100 cents, which is an empty book rather than a price).
+    """
+    if not market:
+        return None
+    ya = _coerce_price(market.get("yes_ask_dollars"))
+    if ya is None:
+        ya = _coerce_price(market.get("yes_ask"))
+    if ya is None or not (0.0 < ya < 1.0):
+        return None
+    return ya
+
+
+def taker_fee_prob(price: Optional[float]) -> float:
+    """Taker fee per contract, in the same 0-1 units as the price."""
+    if price is None or not (0.0 < price < 1.0):
+        return 0.0
+    return TAKER_FEE_RATE * price * (1.0 - price)
+
+
 # ---------------------------------------------------------------------------
 # authed: balance
 # ---------------------------------------------------------------------------

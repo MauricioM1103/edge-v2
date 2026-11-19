@@ -2372,13 +2372,15 @@ def _render_agent_panel(odds_games, kalshi_cash, settings,
         if prev is None:
             grouped[gk] = e
             continue
-        # Keep the side with the higher Pinnacle fair prob (the no-vig
-        # favorite). Ties fall back to the larger edge.
-        prev_fp = float(prev.get("fair_prob") or 0)
-        cur_fp = float(e.get("fair_prob") or 0)
-        if cur_fp > prev_fp + 1e-9:
+        # Keep the side with the bigger EDGE; fair prob only breaks ties.
+        # This used to keep the no-vig favorite, which hid the underdog
+        # exactly when the underdog was the mispriced side (the usual case
+        # for a moneyline edge) and showed the -EV favorite in its place.
+        prev_edge = float(prev.get("edge") or 0)
+        cur_edge = float(e.get("edge") or 0)
+        if cur_edge > prev_edge + 1e-9:
             grouped[gk] = e
-        elif abs(cur_fp - prev_fp) <= 1e-9 and float(e.get("edge") or 0) > float(prev.get("edge") or 0):
+        elif abs(cur_edge - prev_edge) <= 1e-9 and float(e.get("fair_prob") or 0) > float(prev.get("fair_prob") or 0):
             grouped[gk] = e
     # Rank the board by Pinnacle fair prob (highest first) — the "most
     # confident this side wins" ordering. Edge magnitude is the tiebreaker.
@@ -2614,15 +2616,18 @@ def _render_agent_panel(odds_games, kalshi_cash, settings,
         honoring the sidebar book-mode choice. Falls back to shop book when
         Kalshi has no market for this edge."""
         kcents = e.get("kalshi_price_cents")
-        if board_book_mode == "kalshi" and kcents is not None:
-            price_disp = _kalshi_cents_to_american(kcents)
-            cell = f'<span style="color:var(--accent); font-weight:600;">Kalshi</span> <span class="n">{price_disp}</span> <span style="color:var(--muted); font-size:10.5px;">({int(kcents)}¢)</span>'
-            return (cell, price_disp)
-        # best-book fallback (always used in "best" mode, and in "kalshi" mode
-        # whenever Kalshi doesn't have the market)
-        best_book = _esc_row(e.get("book", "?"))
         best_price = format_decimal(e.get("price"))
-        return (f'{best_book} <span class="n">{best_price}</span>', best_price)
+        # The row's edge, fair bar and stake belong to e["book"], so that is
+        # the book named here. Labelling the row "Kalshi" whenever Kalshi
+        # merely listed the market put a shop book's edge under Kalshi's name.
+        if (e.get("book") or "") == "Kalshi" and kcents is not None:
+            cell = ('<span style="color:var(--accent); font-weight:600;">Kalshi</span> '
+                    f'<span style="color:var(--muted); font-size:10.5px;">({int(kcents)}¢ ask + fee)</span>')
+            return (cell, best_price)
+        best_book = _esc_row(e.get("book", "?"))
+        ref = (f' <span style="color:var(--muted); font-size:10.5px;">· Kalshi {int(kcents)}¢</span>'
+               if kcents is not None else "")
+        return (f'{best_book}{ref}', best_price)
 
     def _row(e, highlight: bool = False, rank: int = 0):
         edge_val = float(e.get("edge") or 0)

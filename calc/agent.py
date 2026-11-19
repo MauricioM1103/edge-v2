@@ -152,6 +152,34 @@ def _find_espn_ev(espn_events_by_game: Optional[dict], home_name, away_name) -> 
     return {}
 
 
+def _side_of(name, home, away, loose=None) -> Optional[str]:
+    """Which side of a game an outcome name refers to: "home", "away" or None.
+
+    Exact (case-insensitive) equality wins: inside one Odds API event every
+    book spells the two teams exactly as home_team / away_team. The loose
+    alias matcher is only a fallback, and only counts when it picks ONE
+    side. It matches on a shared last word, so it cannot tell Rice Owls
+    from Temple Owls, Inter Milan from AC Milan or Toronto FC from Atlanta
+    United FC; an ambiguous name is refused rather than guessed, because a
+    wrong guess prices one team against the other team's fair value.
+    """
+    n = (name or "").strip().lower()
+    if not n:
+        return None
+    if n == (home or "").strip().lower():
+        return "home"
+    if n == (away or "").strip().lower():
+        return "away"
+    if loose is None:
+        from apis.team_mapping import same_team as loose
+    mh, ma = bool(loose(name, home)), bool(loose(name, away))
+    if mh and not ma:
+        return "home"
+    if ma and not mh:
+        return "away"
+    return None
+
+
 def _consensus_fair(prices_pairs: List[Tuple[float, float]]) -> Tuple[Optional[float], Optional[float]]:
     hs, as_ = [], []
     for h, a in prices_pairs:
@@ -529,9 +557,11 @@ def scan_kalshi_vs_pinnacle(
                         continue
                     if (o.get("name") or "").strip().lower() == "draw":
                         dp = price
-                    elif same_team(o.get("name"), game.get("home_team")):
+                        continue
+                    which = _side_of(o.get("name"), game.get("home_team"), game.get("away_team"), same_team)
+                    if which == "home":
                         hp = price
-                    elif same_team(o.get("name"), game.get("away_team")):
+                    elif which == "away":
                         ap = price
             break
         return hp, ap, dp
@@ -586,16 +616,23 @@ def scan_kalshi_vs_pinnacle(
                         continue
                     if (o.get("name") or "").strip().lower() == "draw":
                         dp = price
-                    elif same_team(o.get("name"), pin_home_name):
+                        continue
+                    which = _side_of(o.get("name"), pin_home_name, pin_away_name, same_team)
+                    if which == "home":
                         hp = price
-                    elif same_team(o.get("name"), pin_away_name):
+                    elif which == "away":
                         ap = price
                 shop_prices[btitle] = {"home": hp, "away": ap, "draw": dp}
 
         # Build per-outcome candidate list: (book, american_price, implied_prob, kalshi_ticker_or_None)
         # One iteration per Kalshi market (yes side); fair prob derived from side.
         for market in markets:
-            yes_prob = kalshi_api.market_implied_yes_prob(market)
+            # What it costs to BUY Yes: the ask plus Kalshi's taker fee. The
+            # bid/ask midpoint is not a price anyone can trade at, and on a
+            # 2-4 cent spread it overstated every Kalshi edge by 1-2 points.
+            yes_ask = kalshi_api.market_yes_ask_prob(market)
+            yes_fee = kalshi_api.taker_fee_prob(yes_ask)
+            yes_prob = (yes_ask + yes_fee) if yes_ask is not None else None
             yes_team = (market.get("yes_sub_title") or "").strip()
             if not yes_team:
                 continue
@@ -605,11 +642,11 @@ def scan_kalshi_vs_pinnacle(
                 fair_for_yes = fair_draw
                 yes_side_name = "Draw"
                 side_key = "draw"
-            elif same_team(yes_team, pin_home_name):
+            elif _side_of(yes_team, pin_home_name, pin_away_name, same_team) == "home":
                 fair_for_yes = fair_home
                 yes_side_name = pin_home_name
                 side_key = "home"
-            elif same_team(yes_team, pin_away_name):
+            elif _side_of(yes_team, pin_home_name, pin_away_name, same_team) == "away":
                 fair_for_yes = fair_away
                 yes_side_name = pin_away_name
                 side_key = "away"
@@ -727,7 +764,8 @@ def scan_kalshi_vs_pinnacle(
                 "kelly_frac": kf,
                 "stake_dollars": stake,
                 # Kalshi comparison
-                "kalshi_price_cents": int(round(yes_prob * 100)) if yes_prob else None,
+                "kalshi_price_cents": int(round(yes_ask * 100)) if yes_ask else None,
+                "kalshi_fee_cents": round(yes_fee * 100, 2) if yes_ask else None,
                 "kalshi_implied": kalshi_implied,
                 "kalshi_ticker": kalshi_ticker,
                 "kalshi_url": kalshi_url,
@@ -850,10 +888,12 @@ def scan_offshore_markets_vs_pinnacle(
                         ap = price; alabel = "No"
                     elif name_l == "draw":
                         dp = price
-                    elif same_team(name, home_team):
-                        hp = price; hpt = point; hlabel = home_team
-                    elif same_team(name, away_team):
-                        ap = price; apt = point; alabel = away_team
+                    else:
+                        which = _side_of(name, home_team, away_team, same_team)
+                        if which == "home":
+                            hp = price; hpt = point; hlabel = home_team
+                        elif which == "away":
+                            ap = price; apt = point; alabel = away_team
                 if hp is not None and ap is not None:
                     out[bk_title] = {
                         "home": hp, "away": ap, "draw": dp,
@@ -1125,7 +1165,7 @@ def scan_player_props_vs_pinnacle(
     espn_events_by_game: Optional[dict] = None,
     min_consensus_books: int = 3,
     consensus_min_edge_pct: float = 0.03,
-    alt_min_edge_pct: float = 0.05,
+    alt_min_edge_pct: float = 0.03,
 ) -> List[dict]:
     """Shop offshore books vs a fair line on player Over/Under props.
 
@@ -1175,6 +1215,32 @@ def scan_player_props_vs_pinnacle(
         espn_ev = _find_espn_ev(espn_events_by_game, home_name, away_name)
         for mk in prop_markets:
             is_alt = _is_alternate_market(mk)
+            # Alt ladders are Over-only, so their vig cannot be measured
+            # directly. Estimate it from this game's two-way primary market
+            # (Over implied + Under implied at reference books) and divide
+            # it out of the alt consensus below; assume 7 % when the primary
+            # market was not fetched.
+            alt_overround = 1.07
+            if is_alt:
+                _prim = _primary_market_key(mk)
+                _ov = []
+                for b in (g.get("bookmakers") or []):
+                    if (b.get("title") or b.get("key") or "").lower() in shop_lower:
+                        continue
+                    for m in (b.get("markets") or []):
+                        if m.get("key") != _prim:
+                            continue
+                        _pair: Dict[tuple, dict] = {}
+                        for o in (m.get("outcomes") or []):
+                            _s = (o.get("name") or "").strip().lower()
+                            if _s in ("over", "under"):
+                                _pair.setdefault(((o.get("description") or ""), o.get("point")), {})[_s] = o.get("price")
+                        for d in _pair.values():
+                            io, iu = implied_prob_american(d.get("over")), implied_prob_american(d.get("under"))
+                            if io is not None and iu is not None and 1.0 < io + iu < 1.25:
+                                _ov.append(io + iu)
+                if _ov:
+                    alt_overround = sum(_ov) / len(_ov)
             # lines[(player, point)] = {book_title: {"over": price, "under": price}}
             lines: Dict[tuple, Dict[str, dict]] = {}
             for b in (g.get("bookmakers") or []):
@@ -1232,7 +1298,7 @@ def scan_player_props_vs_pinnacle(
                         p for p in (implied_prob_american(x) for x in pool_overs) if p is not None
                     )
                     if len(implieds) >= min_consensus_books:
-                        mid = implieds[len(implieds) // 2]
+                        mid = implieds[len(implieds) // 2] / alt_overround
                         fair_over = mid
                         fair_under = 1.0 - mid  # not actually shoppable
                         fair_source = f"{len(implieds)}-book alt consensus"

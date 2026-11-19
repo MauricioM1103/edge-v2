@@ -232,6 +232,43 @@ def test_ledger_safety():
             pass
 
 
+def test_edge_audit_fixes():
+    """Regressions from the 2026-11-19 edge audit."""
+    print("== edge audit regressions")
+    from calc import agent as agent_calc
+    from apis import kalshi as kalshi_api
+    side = agent_calc._side_of
+    check("exact name beats the loose matcher (Owls vs Owls)",
+          side("Rice Owls", "Temple Owls", "Rice Owls") == "away"
+          and side("Temple Owls", "Temple Owls", "Rice Owls") == "home")
+    check("a name that fits both sides is refused, not guessed",
+          side("Milan", "Inter Milan", "AC Milan") is None)
+    check("an alias that fits one side still resolves",
+          side("Lakers", "Los Angeles Lakers", "Boston Celtics") == "home")
+    # Same-nickname game used to be skipped entirely (both names -> home).
+    def _bk(title, hp, ap):
+        return {"title": title, "markets": [{"key": "h2h", "outcomes": [
+            {"name": "Temple Owls", "price": hp}, {"name": "Rice Owls", "price": ap}]}]}
+    g = {"id": "owls", "home_team": "Temple Owls", "away_team": "Rice Owls",
+         "bookmakers": [_bk("Pinnacle", -150, 130), _bk("Bovada", -160, 150)]}
+    rows = agent_calc.scan_offshore_markets_vs_pinnacle(
+        [g], 500.0, sport_key="ncaaf", markets=["h2h"], shop_books=["Bovada"], min_edge_pct=-1.0)
+    by = {r["side_label"]: r for r in rows}
+    check("same-nickname game is priced on both sides", set(by) == {"Temple Owls", "Rice Owls"}, str(list(by)))
+    if "Rice Owls" in by:
+        check("underdog edge uses the underdog's own fair and price",
+              abs(by["Rice Owls"]["fair_prob"] - (100/230) / (150/250 + 100/230)) < 1e-9
+              and by["Rice Owls"]["price"] == 150)
+    # Kalshi: cost to buy is the ask plus the taker fee, never the midpoint.
+    m = {"yes_bid_dollars": "0.56", "yes_ask_dollars": "0.60"}
+    ask = kalshi_api.market_yes_ask_prob(m)
+    check("Kalshi buy price is the ask", ask == 0.60, str(ask))
+    check("Kalshi taker fee is 7% of p(1-p)", abs(kalshi_api.taker_fee_prob(0.60) - 0.0168) < 1e-9)
+    check("an empty book (ask 0 or 1) is not a price",
+          kalshi_api.market_yes_ask_prob({"yes_ask_dollars": "1.00"}) is None
+          and kalshi_api.market_yes_ask_prob({"yes_bid_dollars": "0.40"}) is None)
+
+
 if __name__ == "__main__":
     test_math_and_names()
     test_matching()
@@ -239,5 +276,6 @@ if __name__ == "__main__":
     test_line_matching()
     test_settlement()
     test_ledger_safety()
+    test_edge_audit_fixes()
     print(f"\n{'ALL PASS' if FAILS == 0 else f'{FAILS} FAILED'}")
     sys.exit(1 if FAILS else 0)

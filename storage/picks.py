@@ -433,7 +433,8 @@ def upsert_agent_pick(pick: dict, path: Optional[str] = None) -> Optional[dict]:
 
     exact = _dedup_key(p)
     slot = _market_slot(p)
-    new_fp = float(p.get("projected_prob") or 0)
+    if p.get("implied_prob") is None and p.get("price_american") is not None:
+        p["implied_prob"] = implied_prob_american(p["price_american"])
 
     for i, existing in enumerate(picks):
         # Only compare against still-open or just-settled agent rows; manually
@@ -453,8 +454,10 @@ def upsert_agent_pick(pick: dict, path: Optional[str] = None) -> Optional[dict]:
             continue
         # Opposing-side hit on the same market slot. Keep the Pinnacle-favored
         # side; if it's already there, drop the incoming pick.
-        existing_fp = float(existing.get("projected_prob") or 0)
-        if new_fp > existing_fp + 1e-9:
+        # Keep the side with the bigger edge; a settled row is never replaced.
+        if (existing.get("status") or "open") != "open":
+            return None
+        if _edge_from_pick(p) > _edge_from_pick(existing) + 1e-9:
             # Replace in place so dates/CLV history continue to live under one id.
             picks[i] = {**existing, **p, "id": existing.get("id") or p.get("id")}
             _save(file_path, picks)

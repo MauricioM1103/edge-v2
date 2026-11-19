@@ -267,7 +267,7 @@ def unit_tests():
             _mk_book("DraftKings", [_mk_outcome("Malik Nabers", 4.5, -288)]),  # imp ~74.2%
             _mk_book("FanDuel",    [_mk_outcome("Malik Nabers", 4.5, -260)]),  # imp ~72.2%
             _mk_book("Caesars",    [_mk_outcome("Malik Nabers", 4.5, -275)]),  # imp ~73.3%
-            _mk_book("BetOnline.ag", [_mk_outcome("Malik Nabers", 4.5, -200)]),  # imp ~66.7%
+            _mk_book("BetOnline.ag", [_mk_outcome("Malik Nabers", 4.5, -150)]),  # imp 60.0%
         ],
     }
     out = agent_calc.scan_player_props_vs_pinnacle(
