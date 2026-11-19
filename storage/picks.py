@@ -105,19 +105,41 @@ def _read_ledger(path, attempts: int = 10, delay: float = 0.12) -> List[dict]:
     """
     import time as _time
     last_err = None
+    # "Missing" and "empty" are only believed after several looks in a row.
+    # While another session swaps a new file in, Windows can briefly report
+    # the ledger as absent (os.path.exists also returns False on ANY stat
+    # error, including a sharing violation) or hand back zero bytes. Taking
+    # one such glimpse at face value is what emptied the ledger on
+    # 2026-11-19 even with the shrink guard in place: the load and the
+    # guard's own re-read both landed inside the same swap.
+    blank_streak = 0
+    confirm = min(4, max(1, attempts))
     for _ in range(max(1, attempts)):
-        if not os.path.exists(path):
-            return []
         try:
             with open(path, "r", encoding="utf-8") as f:
                 text = f.read()
-            if not text.strip():
+        except FileNotFoundError:
+            text = None
+        except OSError as ex:
+            last_err = ex
+            blank_streak = 0
+            _time.sleep(delay)
+            continue
+        if text is None or not text.strip():
+            blank_streak += 1
+            if blank_streak >= confirm:
                 return []
+            _time.sleep(delay)
+            continue
+        try:
             data = json.loads(text)
             return data if isinstance(data, list) else []
-        except (OSError, json.JSONDecodeError, ValueError) as ex:
+        except (json.JSONDecodeError, ValueError) as ex:
             last_err = ex
+            blank_streak = 0
             _time.sleep(delay)
+    if blank_streak:
+        return []
     raise LedgerUnavailable(f"could not read ledger {path}: {last_err}")
 
 
@@ -169,6 +191,36 @@ def _daily_backup(path) -> None:
         pass
 
 
+def _backup_row_count(path) -> int:
+    """Rows in the newest dated backup of the app's own ledger (0 if none,
+    or if `path` is not the app's ledger, e.g. a test's temp file)."""
+    try:
+        if os.path.abspath(path) != os.path.abspath(_default_path()):
+            return 0
+        folder = os.path.dirname(os.path.abspath(path))
+        names = sorted(f for f in os.listdir(folder) if f.startswith("picks.backup-") and f.endswith(".json"))
+        if not names:
+            return 0
+        with open(os.path.join(folder, names[-1]), "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return len(data) if isinstance(data, list) else 0
+    except (OSError, ValueError):
+        return 0
+
+
+def _rebase_backup(path) -> None:
+    """After a deliberate large delete, point the newest backup at the new
+    ledger so the half-of-backup guard does not block every later save."""
+    try:
+        folder = os.path.dirname(os.path.abspath(path))
+        names = sorted(f for f in os.listdir(folder) if f.startswith("picks.backup-") and f.endswith(".json"))
+        if names:
+            import shutil
+            shutil.copyfile(path, os.path.join(folder, names[-1]))
+    except OSError:
+        pass
+
+
 def _save(path, picks, allow_shrink: bool = False) -> None:
     """Write the ledger atomically.
 
@@ -190,6 +242,10 @@ def _save(path, picks, allow_shrink: bool = False) -> None:
             return  # cannot verify, so do not overwrite
         if len(picks) < on_disk:
             return
+        # Third line: an ordinary save never takes the real ledger below
+        # half of today's backup. Only delete / collapse may do that.
+        if len(picks) * 2 < _backup_row_count(path):
+            return
     import time as _time
     tmp = f"{path}.{os.getpid()}.tmp"
     try:
@@ -201,6 +257,8 @@ def _save(path, picks, allow_shrink: bool = False) -> None:
         for attempt in range(8):
             try:
                 os.replace(tmp, path)
+                if allow_shrink and len(picks) * 2 < _backup_row_count(path):
+                    _rebase_backup(path)  # a deliberate big delete; keep later saves unblocked
                 return
             except OSError:
                 if attempt == 7:
