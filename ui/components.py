@@ -31,36 +31,34 @@ def html(s: str):
 
 
 def brand_bar(subtitle: str = ""):
-    """Court Side brand bar (spec §10). Right side shows a pulsing live dot,
-    'Live · CT H:MM AM/PM', and a formatted date. The credits chip moves
-    to the sidebar, not the brand bar.
+    """Kept for the page renderers that still call it; draws nothing.
 
-    `subtitle` is accepted for callers that still pass a page-specific label,
-    but it is intentionally not rendered in the Court Side layout — the right
-    side is strictly live time + date per the mockup.
+    The brand, page tabs and live clock now live in one top bar rendered by
+    app.main(), so a second per-page brand row would only push content down.
     """
+    return None
+
+
+def top_bar_brand_html() -> str:
+    return (
+        '<div class="topbar-brand"><span class="mark">E</span>'
+        '<span class="name">Edge<i>.</i></span></div>'
+    )
+
+
+def top_bar_clock_html() -> str:
+    """Right side of the top bar: pulsing live dot, Central time, date."""
     try:
         dt = datetime.now(CENTRAL)
         hour12 = dt.hour % 12 or 12
-        live_time = f"Live · CT {hour12}:{dt.strftime('%M %p')}"
-        day = str(dt.day)  # strip leading zero manually (Windows-safe)
-        date_line = f"{dt.strftime('%a')} · {dt.strftime('%b')} {day}, {dt.strftime('%Y')}"
+        clock = f"CT {hour12}:{dt.strftime('%M %p')}"
+        date_line = f"{dt.strftime('%a')} {dt.strftime('%b')} {dt.day}"
     except Exception:
-        live_time = "Live"
-        date_line = ""
-    html(f"""
-    <div class="brand-bar">
-      <div class="brand">
-        <span class="dot"></span>
-        <span class="name">Edge</span>
-        <span class="ver">v2.1 · Court Side</span>
-      </div>
-      <div class="brand-right">
-        <span><span class="pulse-dot"></span>{live_time}</span>
-        <span>{date_line}</span>
-      </div>
-    </div>
-    """)
+        clock, date_line = "", ""
+    return (
+        '<div class="topbar-clock"><span class="pulse-dot"></span>'
+        f'<span>{clock}</span><span class="date">{date_line}</span></div>'
+    )
 
 
 def credits_chip_html() -> str:

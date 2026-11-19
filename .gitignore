@@ -25,3 +25,8 @@ Thumbs.db
 # IDE
 .vscode/
 .idea/
+
+# ledger backups (local data)
+picks.backup-*.json
+picks.before-restore-*.json
+*.tmp

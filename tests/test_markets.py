@@ -134,6 +134,26 @@ def test_scanners():
     check("two-way: level final still pushes", grade("h2h", "home", None, 1, 1, is_final=True) == "push")
 
 
+def test_line_matching():
+    print("== spreads and totals shop only at the sharp line")
+    def sp(title, key, home_pt, home_px, away_px):
+        return {"title": title, "key": key, "markets": [{"key": "spreads", "outcomes": [
+            {"name": "Pittsburgh Penguins", "point": home_pt, "price": home_px},
+            {"name": "St Louis Blues", "point": -home_pt, "price": away_px}]}]}
+    g = {"id": "n1", "home_team": "Pittsburgh Penguins", "away_team": "St Louis Blues",
+         "commence_time": "2099-01-01T00:00:00Z",
+         "bookmakers": [sp("Pinnacle", "pinnacle", 1.5, -263, 225),
+                        sp("BetUS", "betus", -1.5, 236, -280),      # other side of the puck line
+                        sp("Bovada", "bovada", 1.5, -270, 220)]}    # same line as Pinnacle
+    e = agent.scan_offshore_markets_vs_pinnacle([g], 500.0, sport_key="nhl", markets=["spreads"],
+                                                min_edge_pct=-1.0)
+    check("a book hanging the opposite puck line is not shopped",
+          all(x["book"] != "BetUS" for x in e), [(x["book"], x["side_label"]) for x in e])
+    check("no phantom double-digit edge", all(abs(x["edge"]) < 0.05 for x in e),
+          [round(x["edge"], 3) for x in e])
+    check("the book on the same line is still shopped", any(x["book"] == "Bovada" for x in e))
+
+
 def test_settlement():
     print("== settlement")
     level = {"home_name": "Tottenham Hotspur", "away_name": "Fulham",
@@ -169,10 +189,55 @@ def test_settlement():
         kalshi.market_result = real
 
 
+def test_ledger_safety():
+    print("== ledger cannot be wiped by a failed read")
+    import json, tempfile
+    fd, path = tempfile.mkstemp(prefix="ledger_safe_", suffix=".json")
+    os.close(fd)
+    try:
+        rows = [{"id": f"r{i}", "selection": f"Pick {i}", "status": "win"} for i in range(5)]
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(rows, f)
+        # A save with fewer rows than the file holds is refused.
+        picks_store._save(path, rows[:1])
+        check("shrinking save is refused", len(picks_store.list_picks(path)) == 5)
+        # An explicit delete may shrink it.
+        picks_store.delete_pick("r0", path=path)
+        check("explicit delete still works", len(picks_store.list_picks(path)) == 4)
+        # Unreadable file: writers refuse, display code sees empty, file untouched.
+        good = open(path, encoding="utf-8").read()
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(good[: len(good) // 2])  # torn write
+        raised = False
+        try:
+            picks_store.add_pick({"selection": "New pick"}, path=path)
+        except picks_store.LedgerUnavailable:
+            raised = True
+        check("adding to an unreadable ledger raises instead of saving", raised)
+        check("the unreadable file was not overwritten",
+              open(path, encoding="utf-8").read() == good[: len(good) // 2])
+        check("display read of an unreadable ledger is just empty", picks_store.list_picks(path) == [])
+        # Once readable again, everything is still there.
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(good)
+        picks_store.add_pick({"selection": "New pick"}, path=path)
+        check("rows survive and the new pick is appended", len(picks_store.list_picks(path)) == 5)
+        check("set_status edits in place",
+              picks_store.set_status("r1", "void", path=path)
+              and any(p.get("id") == "r1" and p.get("status") == "void" for p in picks_store.list_picks(path)))
+    finally:
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+
+
 if __name__ == "__main__":
     test_math_and_names()
     test_matching()
     test_scanners()
+    test_line_matching()
     test_settlement()
+    test_ledger_safety()
     print(f"\n{'ALL PASS' if FAILS == 0 else f'{FAILS} FAILED'}")
     sys.exit(1 if FAILS else 0)

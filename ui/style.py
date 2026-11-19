@@ -1198,6 +1198,16 @@ def inject(theme: str = "dark"):
     import streamlit as st
     # Emit the Google Fonts <link> BEFORE the stylesheet so the browser starts
     # font fetches early and the @import in CUSTOM_CSS has a warm connection.
-    st.markdown(FONT_LINK, unsafe_allow_html=True)
-    st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
-    st.markdown(RESPONSIVE_CSS, unsafe_allow_html=True)
+    # Each st.markdown call is its own row in Streamlit's layout and takes a
+    # row gap even when it only holds a <style> tag; four of them left ~70px
+    # of dead space above the top bar. Every stylesheet row carries an
+    # anchor div so CSS can collapse those rows to nothing. (They stay
+    # separate calls: concatenating them into one markdown block makes the
+    # markdown parser swallow the base stylesheet.)
+    from ui.layout_c import LAYOUT_C_CSS
+    anchor = chr(10) + '<div class="edge-css-anchor"></div>'
+    st.markdown(FONT_LINK + anchor, unsafe_allow_html=True)
+    st.markdown(CUSTOM_CSS + anchor, unsafe_allow_html=True)
+    st.markdown(RESPONSIVE_CSS + anchor, unsafe_allow_html=True)
+    # Layout C overrides load last so they win the cascade.
+    st.markdown(LAYOUT_C_CSS + anchor, unsafe_allow_html=True)

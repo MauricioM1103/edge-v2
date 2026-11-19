@@ -18,7 +18,7 @@ import streamlit as st
 
 # Dev-only: force fresh reimport of local modules so edits land on rerun.
 for _m in [
-    "ui.style", "ui.components", "ui.pages",
+    "ui.style", "ui.layout_c", "ui.loading", "ui.components", "ui.pages",
     "apis.espn", "apis.odds", "apis.team_mapping",
     "calc.odds", "calc.ev", "calc.kelly", "calc.units", "calc.clv",
     "storage.picks",
@@ -32,6 +32,8 @@ for _m in [
 from apis import espn, odds as odds_api, kalshi
 from storage import picks as picks_store, settings as settings_store
 from ui.style import inject as inject_style
+from ui import loading
+from ui.components import top_bar_brand_html, top_bar_clock_html
 from ui.pages import (
     render_dashboard, render_analysis, render_pro_tools, render_picks,
     render_settings, render_backtest, load_kalshi_balance,
@@ -310,50 +312,56 @@ def main():
     saved_theme = settings_store.load().get("theme", "dark")
     inject_style(theme=saved_theme)
 
-    # Navigation moved out of the top tab bar into the sidebar: on a laptop it
-    # saves vertical space (the news hero + board now reach higher on the
-    # viewport), and on phone it collapses into the hamburger menu so the
-    # board is the only thing on screen. Board stays the default view.
-    with st.sidebar:
-        st.markdown(
-            '<div class="nav-head">'
-            '<span class="nav-kicker">◆ View</span>'
-            '<h3 style="margin:2px 0 8px;">Pages</h3>'
-            '</div>',
-            unsafe_allow_html=True,
+    # Loading overlay: painted first so a cold start or a wake-up shows a
+    # branded progress screen instead of a half-drawn page.
+    loading.begin()
+
+    # Top bar: brand, page tabs, live clock. Pages used to live in a sidebar
+    # radio; tabs in the top bar keep every page one click away and leave
+    # the sidebar for filters and settings only.
+    pages = ["Board", "Results", "Analysis", "Tools", "Ledger",
+             "Performance", "Calibration", "Backtest", "Settings"]
+    tb1, tb2, tb3 = st.columns([1.1, 6.2, 1.7], vertical_alignment="center")
+    with tb1:
+        st.markdown(top_bar_brand_html(), unsafe_allow_html=True)
+    with tb2:
+        picked = st.segmented_control(
+            "Page", options=pages, default="Board", key="nav_page",
+            selection_mode="single", label_visibility="collapsed",
         )
-        page = st.radio(
-            "Page", options=[
-                "Board", "Results", "Analysis", "Tools", "Ledger",
-                "Performance", "Calibration", "Backtest", "Settings",
-            ],
-            index=0, key="nav_page", label_visibility="collapsed",
-        )
-        st.markdown("---")
+    with tb3:
+        st.markdown(top_bar_clock_html(), unsafe_allow_html=True)
+    # Clicking the active tab deselects it; keep showing the last page then.
+    page = picked or st.session_state.get("_nav_last") or "Board"
+    st.session_state["_nav_last"] = page
+    st.markdown('<div class="topbar-rule"></div>', unsafe_allow_html=True)
 
     settings = _sidebar_settings()
 
-    # Only the selected page renders. Board is the default and the only view
-    # with a "tab" in the top chrome (via a styled brand bar inside its
-    # renderer); everything else shows only when picked from the sidebar.
-    if page == "Board":
-        render_dashboard(settings)
-    elif page == "Results":
-        render_results(settings)
-    elif page == "Analysis":
-        render_analysis(settings)
-    elif page == "Tools":
-        render_pro_tools(settings)
-    elif page == "Ledger":
-        render_picks(settings)
-    elif page == "Performance":
-        render_performance(settings)
-    elif page == "Calibration":
-        render_calibration(settings)
-    elif page == "Backtest":
-        render_backtest(settings)
-    elif page == "Settings":
-        render_settings(settings)
+    # Only the selected page renders. The overlay is always cleared, even if
+    # a page stops early or raises.
+    try:
+        if page == "Board":
+            render_dashboard(settings)
+        elif page == "Results":
+            render_results(settings)
+        elif page == "Analysis":
+            render_analysis(settings)
+        elif page == "Tools":
+            render_pro_tools(settings)
+        elif page == "Ledger":
+            render_picks(settings)
+        elif page == "Performance":
+            render_performance(settings)
+        elif page == "Calibration":
+            render_calibration(settings)
+        elif page == "Backtest":
+            render_backtest(settings)
+        elif page == "Settings":
+            render_settings(settings)
+
+    finally:
+        loading.end()
 
 
 if __name__ == "__main__":

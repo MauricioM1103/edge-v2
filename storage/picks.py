@@ -85,25 +85,132 @@ def _default_path() -> str:
     return os.path.join(here, "picks.json")
 
 
+class LedgerUnavailable(OSError):
+    """The ledger file exists but could not be read right now."""
+
+
+def _read_ledger(path, attempts: int = 10, delay: float = 0.12) -> List[dict]:
+    """Read the ledger, retrying through transient failures.
+
+    Returns [] only when the file genuinely does not exist or is genuinely
+    empty. Raises LedgerUnavailable when the file is there but cannot be
+    read or parsed after several tries.
+
+    This distinction is the whole point. The dashboard can run in several
+    sessions at once (two tabs, a reload while a scan is in flight). On
+    Windows a read that lands while another session is swapping the file in
+    fails with a sharing violation. The old loader returned [] for ANY
+    failure, so the caller believed the ledger was empty, appended its one
+    new pick, and saved - wiping every other row.
+    """
+    import time as _time
+    last_err = None
+    for _ in range(max(1, attempts)):
+        if not os.path.exists(path):
+            return []
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                text = f.read()
+            if not text.strip():
+                return []
+            data = json.loads(text)
+            return data if isinstance(data, list) else []
+        except (OSError, json.JSONDecodeError, ValueError) as ex:
+            last_err = ex
+            _time.sleep(delay)
+    raise LedgerUnavailable(f"could not read ledger {path}: {last_err}")
+
+
 def _load(path) -> List[dict]:
-    if not os.path.exists(path):
-        return []
+    """Read-only load for display code: an unreadable ledger shows as empty
+    for this one render. Never use the result as the basis for a save."""
     try:
-        with open(path, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        if isinstance(data, list):
-            return data
-        return []
-    except (OSError, json.JSONDecodeError, ValueError):
+        return _read_ledger(path)
+    except LedgerUnavailable:
         return []
 
 
-def _save(path, picks) -> None:
+def _load_for_write(path) -> List[dict]:
+    """Load for a read-modify-write cycle. Raises LedgerUnavailable instead
+    of returning an empty list, so a failed read can never be saved back."""
+    return _read_ledger(path)
+
+
+#: How many dated ledger backups to keep beside picks.json.
+_BACKUP_KEEP = 7
+
+
+def _daily_backup(path) -> None:
+    """Copy the real ledger to picks.backup-YYYY-MM-DD.json once per day.
+
+    Taken before the first save of each day, so there is always a copy of
+    yesterday's closing ledger to fall back on. Only the app's own ledger
+    is backed up (never a test's temp file), and only the newest
+    _BACKUP_KEEP copies are kept.
+    """
     try:
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(picks, f, indent=2, default=str)
+        if os.path.abspath(path) != os.path.abspath(_default_path()) or not os.path.exists(path):
+            return
+        if os.path.getsize(path) < 3:
+            return  # nothing worth keeping ("[]")
+        folder = os.path.dirname(os.path.abspath(path))
+        target = os.path.join(folder, f"picks.backup-{datetime.now().strftime('%Y-%m-%d')}.json")
+        if os.path.exists(target):
+            return
+        import shutil
+        shutil.copyfile(path, target)
+        old = sorted(f for f in os.listdir(folder) if f.startswith("picks.backup-") and f.endswith(".json"))
+        for name in old[:-_BACKUP_KEEP]:
+            try:
+                os.remove(os.path.join(folder, name))
+            except OSError:
+                pass
     except OSError:
         pass
+
+
+def _save(path, picks, allow_shrink: bool = False) -> None:
+    """Write the ledger atomically.
+
+    The dashboard can be open in two tabs (phone and desktop) and each one
+    rewrites this file on every scan. Writing in place let a second reader
+    catch the file half-written, parse nothing, and treat the ledger as
+    empty; its next save would then have wiped every pick. Writing to a
+    temp file and swapping it in means a reader only ever sees a complete
+    file.
+    """
+    # Second line of defence: a save may add rows or change them, but only
+    # an explicit delete / collapse may make the ledger shorter. If the list
+    # in hand has fewer rows than the file on disk, something upstream lost
+    # rows; refuse to write rather than make the loss permanent.
+    if not allow_shrink:
+        try:
+            on_disk = len(_read_ledger(path, attempts=4))
+        except LedgerUnavailable:
+            return  # cannot verify, so do not overwrite
+        if len(picks) < on_disk:
+            return
+    import time as _time
+    tmp = f"{path}.{os.getpid()}.tmp"
+    try:
+        _daily_backup(path)
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(picks, f, indent=2, default=str)
+        # Windows refuses the swap while another session has the file open
+        # for reading; that clears in milliseconds, so retry briefly.
+        for attempt in range(8):
+            try:
+                os.replace(tmp, path)
+                return
+            except OSError:
+                if attempt == 7:
+                    raise
+                _time.sleep(0.1)
+    except OSError:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
 
 
 def list_picks(path: Optional[str] = None) -> List[dict]:
@@ -125,7 +232,7 @@ def add_pick(pick: dict, path: Optional[str] = None) -> dict:
         if sd:
             p["pick_date"] = sd
     file_path = path or _default_path()
-    picks = _load(file_path)
+    picks = _load_for_write(file_path)
     picks.append(p)
     _save(file_path, picks)
     return p
@@ -138,7 +245,7 @@ def backfill_pick_dates(path: Optional[str] = None) -> int:
     pick_date are untouched, so this is safe to call on every dashboard load.
     """
     file_path = path or _default_path()
-    picks = _load(file_path)
+    picks = _load_for_write(file_path)
     changed = 0
     for p in picks:
         if p.get("pick_date"):
@@ -264,7 +371,7 @@ def upsert_agent_pick(pick: dict, path: Optional[str] = None) -> Optional[dict]:
     p.setdefault("first_seen_on_board", now_iso)
     p.setdefault("last_seen_on_board", now_iso)
     file_path = path or _default_path()
-    picks = _load(file_path)
+    picks = _load_for_write(file_path)
 
     exact = _dedup_key(p)
     slot = _market_slot(p)
@@ -308,7 +415,7 @@ def collapse_duplicate_sides(path: Optional[str] = None) -> int:
     Returns the number of rows removed.
     """
     file_path = path or _default_path()
-    picks = _load(file_path)
+    picks = _load_for_write(file_path)
     by_slot: dict = {}
     others: list = []
     for p in picks:
@@ -328,7 +435,7 @@ def collapse_duplicate_sides(path: Optional[str] = None) -> int:
     kept_agent = list(by_slot.values())
     removed = len(picks) - len(others) - len(kept_agent)
     if removed > 0:
-        _save(file_path, others + kept_agent)
+        _save(file_path, others + kept_agent, allow_shrink=True)
     return removed
 
 
@@ -492,11 +599,11 @@ def auto_log_agent_edges(edges: list, settings: dict, path: Optional[str] = None
 
 def delete_pick(pick_id: str, path: Optional[str] = None) -> bool:
     file_path = path or _default_path()
-    picks = _load(file_path)
+    picks = _load_for_write(file_path)
     new = [p for p in picks if p.get("id") != pick_id]
     if len(new) == len(picks):
         return False
-    _save(file_path, new)
+    _save(file_path, new, allow_shrink=True)
     return True
 
 
@@ -1014,7 +1121,7 @@ def auto_settle(path: Optional[str] = None) -> int:
     only rows still 'open' are considered.
     """
     file_path = path or _default_path()
-    picks = _load(file_path)
+    picks = _load_for_write(file_path)
     settled = 0
     # One scoreboard lookup per (sport, event, date) per sweep — several props
     # on the same game would otherwise each re-fetch the same scoreboard.
@@ -1093,10 +1200,22 @@ def auto_settle(path: Optional[str] = None) -> int:
     return settled
 
 
+def set_status(pick_id: str, status: str, path: Optional[str] = None) -> bool:
+    """Set one pick's status in place (used by the Ledger's "Mark void")."""
+    file_path = path or _default_path()
+    picks = _load_for_write(file_path)
+    for p in picks:
+        if p.get("id") == pick_id:
+            p["status"] = status
+            _save(file_path, picks)
+            return True
+    return False
+
+
 def update_closing_price(pick_id: str, closing_american, path: Optional[str] = None) -> bool:
     """Record a closing American price on an existing pick for CLV tracking."""
     file_path = path or _default_path()
-    picks = _load(file_path)
+    picks = _load_for_write(file_path)
     changed = False
     for p in picks:
         if p.get("id") == pick_id:

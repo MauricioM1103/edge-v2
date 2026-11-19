@@ -927,6 +927,18 @@ def scan_offshore_markets_vs_pinnacle(
                     price = data.get(side_key)
                     if price is None:
                         continue
+                    # A spread or total is only the same bet at the same
+                    # number. Books split on which side of a puck line or
+                    # run line they hang (PIT +1.5 at one, PIT -1.5 at
+                    # another); pricing one against the other's fair
+                    # manufactures a 40-point "edge".
+                    if mk in ("spreads", "spreads_h1", "totals", "totals_h1"):
+                        pin_pt, bk_pt = pin_entry.get(point_key), data.get(point_key)
+                        try:
+                            if pin_pt is None or bk_pt is None or abs(float(pin_pt) - float(bk_pt)) > 1e-9:
+                                continue
+                        except (TypeError, ValueError):
+                            continue
                     imp = implied_prob_american(price)
                     if imp is None:
                         continue

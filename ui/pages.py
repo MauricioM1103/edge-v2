@@ -1159,7 +1159,7 @@ def _render_breaking_news(sports_list: list, merged: list):
     html(
         '<div class="news-head">'
         '<div class="news-title">'
-        "<div class=\"h1\">Breaking · Today's Slate</div>"
+        "<div class=\"h1\">News and line moves</div>"
         f'<span class="count-pill"><span class="cdot"></span>{tile_cap} live updates</span>'
         '</div>'
         '<div class="news-filters">'
@@ -1233,12 +1233,157 @@ def _render_snapshot_strip(bankroll_display: str, bankroll_source: str, unit_pct
     )
 
 
+def _kpi_strip_html(bankroll: str, tier_a: str, exposure: str, record: str) -> str:
+    """Four-number strip under the top bar: the figures worth a glance
+    before reading the board."""
+    def cell(label, value, cls=""):
+        return f'<div class="kpi"><span class="k">{label}</span><span class="v {cls}">{_esc(value)}</span></div>'
+    return (
+        '<div class="kpi-strip">'
+        + cell("Bankroll", bankroll)
+        + cell("Tier A now", tier_a, "good")
+        + cell("Exposure", exposure)
+        + cell("30-day tier A", record)
+        + '</div>'
+    )
+
+
+def _tier_a_record_30d() -> str:
+    """W-L of tier-A agent picks over the Results window, e.g. "23-19"."""
+    try:
+        from datetime import timedelta as _td
+        from zoneinfo import ZoneInfo as _ZI
+        today_c = datetime.now(_ZI("America/Chicago")).date()
+        window = {(today_c - _td(days=n)).strftime("%Y-%m-%d") for n in range(30)}
+        w = l = 0
+        for p in picks_store.list_picks():
+            if (p.get("source") or "manual") != "agent-auto":
+                continue
+            if (p.get("pick_date") or "")[:10] not in window or not picks_store.is_tier_a(p):
+                continue
+            if p.get("status") == "win":
+                w += 1
+            elif p.get("status") == "loss":
+                l += 1
+        return f"{w}-{l}" if (w or l) else "—"
+    except Exception:
+        return "—"
+
+
+def _render_capper_rail(top: list, kalshi_cash: float, settings: dict):
+    """Right-rail box: manual Capper's Parlay builder.
+
+    Kept behind a button, never auto-run: parlays compound the bookmaker
+    margin on every leg and lose money on average, so this is a one-off
+    tool rather than a strategy. The card shows the legs, the combined
+    price, joint fair versus market, expected dollars and a quarter-Kelly
+    stake, then offers to log it.
+    """
+    from calc import capper as capper_calc
+    saved_cfg = settings_store.load()
+    html('<div class="rail-box-head">Capper&#39;s parlay</div>')
+    if st.button(
+        "Build parlay", key="build_parlay_btn", use_container_width=True,
+        help="Hand-picks today's tier-A edges into a 2 to 5 leg parlay. One leg per game, "
+             "no in-play legs, quarter-Kelly stake. The note says whether this "
+             "combination stays +EV after the margin stacks.",
+    ):
+        try:
+            st.session_state["_capper_parlay"] = capper_calc.build_capper_parlay(
+                edges=top, bankroll=float(kalshi_cash or 500.0),
+                kelly_mult=float(saved_cfg.get("agent_kelly") or 0.25),
+            )
+        except Exception as _ex:
+            st.warning(f"Could not build parlay: {_ex}")
+            st.session_state["_capper_parlay"] = None
+    _parlay = st.session_state.get("_capper_parlay")
+    if not _parlay:
+        html('<div class="rail-note">Combines today&#39;s tier-A picks, one per game. '
+             'Parlays stack the margin on every leg, so treat it as a one-off.</div>')
+        return
+    _legs = _parlay.get("legs") or []
+    if not _legs:
+        html(f'<div class="rail-note">{_esc(_parlay.get("rationale") or "")}</div>')
+        return
+    _combined = _parlay.get("combined_american")
+    _edge = (_parlay.get("edge") or 0) * 100.0
+    _ev = _parlay.get("ev_dollars") or 0
+    _legs_html = "".join(
+        f'<li><span>{_esc(leg.get("selection") or "")}</span>'
+        f'<span class="mono">{format_american(leg.get("price_american"))}</span></li>'
+        for leg in _legs
+    )
+
+    def _stat(k, v, cls=""):
+        return f'<li><span class="k">{k}</span><span class="mono {cls}">{v}</span></li>'
+
+    html(
+        '<div class="rail-card">'
+        f'<ul class="legs">{_legs_html}</ul>'
+        '<ul class="stats">'
+        + _stat("Combined", format_american(_combined))
+        + _stat("Joint fair", f'{(_parlay.get("joint_fair_prob") or 0) * 100:.1f}%')
+        + _stat("Market", f'{(_parlay.get("joint_implied_prob") or 0) * 100:.1f}%')
+        + _stat("Edge", f"{_edge:+.2f} pts", "good" if _edge > 0 else "bad")
+        + _stat("Quarter-Kelly", f'${float(_parlay.get("stake_dollars") or 0):,.2f}')
+        + _stat("Expected", f'{"+" if _ev >= 0 else "-"}${abs(_ev):.2f}', "good" if _ev > 0 else "bad")
+        + _stat("If it hits", f'+${float(_parlay.get("profit_on_win") or 0):,.2f}', "good")
+        + '</ul>'
+        f'<p class="why">{_esc(_parlay.get("rationale") or "")}</p>'
+        '</div>'
+    )
+    if st.button("Log this parlay", key="log_parlay_btn", use_container_width=True, type="primary",
+                 help="Writes the parlay to the ledger as its own row. Each leg grades against "
+                      "its own game; a pushed leg drops out without killing the parlay."):
+        unit_pct = settings.get("unit_pct") or 0.01
+        unit_dollars = (kalshi_cash or 500.0) * unit_pct
+        try:
+            stored = picks_store.log_capper_parlay(
+                _parlay, bankroll=float(kalshi_cash or 500.0), unit_dollars=float(unit_dollars or 1.0),
+            )
+        except Exception as _ex:
+            st.warning(f"Could not log parlay: {_ex}")
+            stored = None
+        if stored:
+            st.success("Parlay logged to the ledger.")
+            st.session_state["_capper_parlay"] = None
+        else:
+            st.warning("A parlay needs at least two legs.")
+
+
+def _render_credits_rail():
+    """Right-rail box: Odds API budget at a glance."""
+    cs = odds_api.get_credit_status() or {}
+    rem = cs.get("remaining")
+    ps = st.session_state.get("_props_status") or {}
+    spent = int(ps.get("spent_today") or odds_api.props_spend_today() or 0)
+    cap = int(ps.get("cap") or 0)
+    floor = int(ps.get("plan_floor") or 0)
+    tripped = bool(ps.get("plan_guard_tripped"))
+    rows = [("Plan left", f"{rem:,}" if rem is not None else "—", "bad" if tripped else "")]
+    if cap:
+        rows.append(("Props today", f"{spent} / {cap}", "warn" if spent >= cap else ""))
+    if floor:
+        rows.append(("Pause below", f"{floor:,}", ""))
+    html(
+        '<div class="rail-box-head">API credits</div><div class="rail-card"><ul class="stats">'
+        + "".join(f'<li><span class="k">{k}</span><span class="mono {c}">{v}</span></li>' for k, v, c in rows)
+        + '</ul>'
+        + ('<p class="why">Plan floor reached. Props and per-game markets are paused.</p>' if tripped else '')
+        + '</div>'
+    )
+
+
 # ============================================================================
 # TAB 1 - Dashboard / Live Daily Slate
 # ============================================================================
 
 def render_dashboard(settings: dict):
-    brand_bar("Live Daily Slate")
+    from ui import loading
+    # KPI strip sits directly under the top bar. Its numbers come out of the
+    # scan further down, so reserve the slot now and fill it when they exist.
+    kpi_slot = st.empty()
+    kpi_slot.markdown(_kpi_strip_html("—", "—", "—", "—"), unsafe_allow_html=True)
 
     # Live-score auto-refresh. We rerun the whole dashboard on an interval
     # so ESPN score fetches (20s TTL) get a chance to pick up new goals /
@@ -1402,6 +1547,7 @@ def render_dashboard(settings: dict):
     all_events_tagged: List[tuple] = []     # list of (sport_key, event)
     all_odds_games_tagged: List[tuple] = [] # list of (sport_key, odds_game)
     all_merged = []                          # list of (ev, odds_meta, exch_probs)
+    loading.step(1)
     for sp in sports_list:
         events_sp = load_espn_scoreboard(sp, date_str=date_str_api)
         for ev in events_sp or []:
@@ -1564,7 +1710,8 @@ def render_dashboard(settings: dict):
     # Hero: Breaking News & Injuries bento (scoped to today's sports), fed by
     # ESPN's news feed. Replaces the two metric cards (bankroll + slate) that
     # used to live here; those move to a compact strip at the bottom.
-    _render_breaking_news(sports_list, merged)
+    # (News used to lead the page here. The board is the priority now, so the
+    # news section renders below it.)
 
     # First-timer welcome: if no API key and no picks yet, surface a 3-step
     # onboarding so new users know what to do before they stare at an empty board.
@@ -1623,6 +1770,7 @@ def render_dashboard(settings: dict):
     # then looped sports_list and re-tagged each edge with whatever sport came first.
     # Teams like "Giants" (SF Giants MLB vs NY Giants NFL) could even collide.
     # Fix: split everything per-sport so each scan sees only that sport's data.
+    loading.step(2)
     kalshi_markets_by_sport: Dict[str, dict] = {}
     espn_events_by_sport: Dict[str, dict] = {}
     pinnacle_games_by_sport: Dict[str, list] = {}
@@ -1700,13 +1848,38 @@ def render_dashboard(settings: dict):
     if _new_markets and _new_markets != list(saved_board_markets):
         settings_store.save({"board_markets": _new_markets})
 
-    top_picks = _render_agent_panel(
-        odds_games, kalshi_cash, settings,
-        kalshi_markets_by_sport=kalshi_markets_by_sport,
-        espn_events_by_sport=espn_events_by_sport,
-        pinnacle_games_by_sport=pinnacle_games_by_sport,
-        sports_list=sports_list,
-    ) or []
+    loading.step(3)
+    # Board on the left, a narrow rail on the right for the parlay builder
+    # and the credit budget. On a phone the rail stacks under the board.
+    board_col, rail_col = st.columns([3.6, 1], gap="medium")
+    with board_col:
+        top_picks = _render_agent_panel(
+            odds_games, kalshi_cash, settings,
+            kalshi_markets_by_sport=kalshi_markets_by_sport,
+            espn_events_by_sport=espn_events_by_sport,
+            pinnacle_games_by_sport=pinnacle_games_by_sport,
+            sports_list=sports_list,
+        ) or []
+    with rail_col:
+        _render_capper_rail(top_picks, kalshi_cash, settings)
+        _render_credits_rail()
+
+    # Fill the KPI strip now that the scan has run.
+    try:
+        _open_picks = [p for p in top_picks if isinstance(p, dict)
+                       and p.get("status_state") != "post"
+                       and p.get("grade") not in ("win", "loss", "push")]
+        _tier_a_n = sum(1 for p in _open_picks if float(p.get("edge") or 0) >= picks_store.TIER_A_EDGE)
+        _expo = sum(float(p.get("stake_dollars") or 0.0) for p in _open_picks)
+        _expo_pct = (_expo / kalshi_cash * 100.0) if kalshi_cash else 0.0
+        kpi_slot.markdown(_kpi_strip_html(
+            kalshi_display,
+            f"{_tier_a_n} pick{'s' if _tier_a_n != 1 else ''}",
+            f"${_expo:,.0f} · {_expo_pct:.1f}%",
+            _tier_a_record_30d(),
+        ), unsafe_allow_html=True)
+    except Exception:
+        pass
 
     # Stash board context for the Analysis / Explore tabs. The main Board stays
     # clean — users opt into the deep dive explicitly by switching tabs. We
@@ -1784,6 +1957,12 @@ def render_dashboard(settings: dict):
                 f'<span class="mono" style="font-size:10px; opacity:0.8;">({chip})</span></div>'
             )
 
+    # News and line moves, under the board.
+    try:
+        _render_breaking_news(sports_list, merged)
+    except Exception:
+        pass
+
     if not merged:
         html('<div class="hint">No games on the slate for this sport right now. Try another sport in the sidebar, or check back later.</div>')
         return
@@ -1797,28 +1976,6 @@ def render_dashboard(settings: dict):
             '</div>'
         )
 
-    # Bottom snapshot strip: Bankroll + Slate + Qualifying picks + Daily exposure.
-    # Demoted from the top of the page (replaced by the Breaking News hero);
-    # still visible at a glance without competing with the news/injury feed.
-    # Agent panel stores dollar stake under `stake_dollars` (our bug earlier
-    # was looking for `stake`), so this now reflects actual exposure.
-    try:
-        total_exposure = sum(
-            (float(p.get("stake_dollars") or p.get("stake") or 0.0))
-            for p in (top_picks or []) if isinstance(p, dict)
-        )
-    except Exception:
-        total_exposure = 0.0
-    exposure_pct = (total_exposure / kalshi_cash * 100.0) if kalshi_cash else 0.0
-    _render_snapshot_strip(
-        bankroll_display=kalshi_display,
-        bankroll_source=kalshi_source or "not set",
-        unit_pct=unit_pct,
-        slate_count=len(merged),
-        qual_count=len(top_picks or []),
-        exposure_usd=total_exposure,
-        exposure_pct=exposure_pct,
-    )
 
 
 def render_analysis(settings: dict):
@@ -1939,7 +2096,7 @@ def _render_agent_panel(odds_games, kalshi_cash, settings,
         html(
             '<div class="board-hero-head">'
             '<div class="board-title">'
-            '<div class="h1">The Board · Full Slate</div>'
+            '<div class="h1">Board</div>'
             f'<span class="board-count">{total_games} games · '
             f'<b>{actionable}</b> actionable · {watch} watch</span>'
             '<span class="refresh-pill"><span class="dot"></span>Refreshing</span>'
@@ -2518,9 +2675,12 @@ def _render_agent_panel(odds_games, kalshi_cash, settings,
             f'<td><div class="side-cell"><span class="mkt">{_esc_row(market_label)}</span>'
             f'<span class="pick">{side_label}</span></div></td>'
             f'<td class="book-cell">{book_cell_html}</td>'
-            f'<td class="num-cell">{price_disp}</td>'
-            f'<td class="num-cell muted">{book_imp_pct:.1f}%</td>'
-            f'<td class="num-cell {fair_cls}">{fair_pct:.1f}%</td>'
+            f'<td class="pb-cell {"pos" if edge_val > 0 else "neg"}">'
+            f'<span class="px">{price_disp}</span>'
+            f'<div class="pb-bar"><i style="width:{min(book_imp_pct, 100):.1f}%"></i>'
+            f'<u style="width:{max(0.0, min(edge_pct, 100 - book_imp_pct)):.1f}%"></u></div>'
+            f'<div class="pb-nums"><span>book {book_imp_pct:.1f}%</span>'
+            f'<span class="{fair_cls}">fair {fair_pct:.1f}%</span></div></td>'
             f'<td class="num-cell {edge_cls}">{edge_pct:+.1f}%</td>'
             f'<td><div class="stake-cell"><span class="{stake_classes}">{stake_value}</span>'
             f'<span class="d">{stake_detail}</span></div></td>'
@@ -2539,9 +2699,7 @@ def _render_agent_panel(odds_games, kalshi_cash, settings,
         '<th>Matchup · Start</th>'
         '<th>Side · Market</th>'
         f'<th>{_book_col_label}</th>'
-        '<th class="num">Price</th>'
-        '<th class="num" title="What this book implies (vig-inclusive)">Book Prob %</th>'
-        '<th class="num" title="Pinnacle no-vig fair probability (sharpest book stripped of vig)">Sharp/Fair Prob %</th>'
+        '<th title="Best price. The bar is the chance the book implies; the bright tip is the extra chance the sharp line gives it.">Price · Fair vs book</th>'
         '<th class="num">Edge</th>'
         '<th class="num">Stake</th>'
         '<th>Methodology</th>'
@@ -2635,7 +2793,7 @@ def _render_agent_panel(odds_games, kalshi_cash, settings,
         parts = []
         if pos_items:
             parts.append(
-                f'<tr class="row-divider divider-good"><td colspan="10">'
+                f'<tr class="row-divider divider-good"><td colspan="9">'
                 f'◆ Actionable picks · {len(pos_items)}'
                 f'</td></tr>'
             )
@@ -2643,7 +2801,7 @@ def _render_agent_panel(odds_games, kalshi_cash, settings,
                 parts.append(_row(e, rank=i))
         if watch_items:
             parts.append(
-                f'<tr class="row-divider divider-neutral"><td colspan="10">'
+                f'<tr class="row-divider divider-neutral"><td colspan="9">'
                 f'◇ Full slate · {len(watch_items)}'
                 f'</td></tr>'
             )
@@ -2651,7 +2809,7 @@ def _render_agent_panel(odds_games, kalshi_cash, settings,
                 parts.append(_row(e, rank=i))
         if settled_items:
             parts.append(
-                '<tr class="row-divider divider-neutral"><td colspan="10">'
+                '<tr class="row-divider divider-neutral"><td colspan="9">'
                 f'— Finished picks · {len(settled_items)} on the board as record —'
                 '</td></tr>'
             )
@@ -2701,123 +2859,6 @@ def _render_agent_panel(odds_games, kalshi_cash, settings,
         + (f" · {inserted} new this scan" if inserted else " · no new rows this scan")
     )
     html(f'<div class="auto-log-caption">{_caption_line}</div>')
-
-    # ------------------------------------------------------------------
-    # Capper's Parlay button — manual trigger that asks the agent to pick
-    # a small set of tier-A legs and combine them. Kept behind a button,
-    # not auto-run, because parlays compound vig and are a losing
-    # expectation on average; a one-off capper pick is a tool, not a
-    # strategy. The card below the button shows the legs, combined
-    # price, joint fair vs market, EV and a Kelly stake (quarter-Kelly
-    # by default — parlay variance is strictly higher than any single
-    # leg's).
-    # ------------------------------------------------------------------
-    from calc import capper as capper_calc
-    pc1, pc2 = st.columns([1, 4])
-    with pc1:
-        _build_parlay = st.button(
-            "🎯 Build Capper's Parlay",
-            key="build_parlay_btn",
-            use_container_width=True,
-            help="Hand-picks today's tier-A edges into a 2–5 leg parlay. "
-                 "One leg per game, no in-play legs, quarter-Kelly stake. "
-                 "Parlays compound vig — the rationale shows whether the "
-                 "specific combination stays +EV after the stack.",
-        )
-    if _build_parlay:
-        try:
-            parlay_build = capper_calc.build_capper_parlay(
-                edges=top, bankroll=float(kalshi_cash or 500.0),
-                kelly_mult=float(saved_cfg.get("agent_kelly") or 0.25),
-            )
-        except Exception as _ex:
-            st.warning(f"Could not build parlay: {_ex}")
-            parlay_build = None
-        st.session_state["_capper_parlay"] = parlay_build
-    _parlay = st.session_state.get("_capper_parlay")
-    if _parlay:
-        _legs = _parlay.get("legs") or []
-        if not _legs:
-            html(
-                f'<div class="hint" style="margin-top:8px;">'
-                f'<strong>Capper</strong> · {_esc(_parlay.get("rationale") or "")}'
-                f'</div>'
-            )
-        else:
-            _combined = _parlay.get("combined_american")
-            _jf = (_parlay.get("joint_fair_prob") or 0) * 100.0
-            _ji = (_parlay.get("joint_implied_prob") or 0) * 100.0
-            _edge = (_parlay.get("edge") or 0) * 100.0
-            _stake = float(_parlay.get("stake_dollars") or 0)
-            _ev = _parlay.get("ev_dollars")
-            _profit = _parlay.get("profit_on_win")
-            _edge_cls = "good" if _edge > 0 else "bad"
-            _ev_cls = "good" if (_ev or 0) > 0 else ("bad" if (_ev or 0) < 0 else "muted")
-            _legs_html = "".join(
-                f'<li><strong>{_esc(leg.get("selection") or "")}</strong>'
-                f' <span class="mono" style="color:var(--muted);">'
-                f'{_esc((leg.get("sport") or "").upper())} · '
-                f'{format_american(leg.get("price_american"))} · '
-                f'fair {(leg.get("fair_prob") or 0) * 100:.1f}%</span></li>'
-                for leg in _legs
-            )
-            _price_disp = f"+{_combined}" if (_combined or 0) >= 0 else f"{_combined}"
-            html(
-                '<div class="hint" style="margin-top:12px; padding:12px; '
-                'border:1px solid color-mix(in oklab, var(--accent) 30%, transparent); '
-                'border-radius:10px;">'
-                f'<div style="font-size:11px; letter-spacing:0.08em; '
-                f'color:var(--accent); text-transform:uppercase;">'
-                f'Capper\'s {len(_legs)}-leg parlay</div>'
-                f'<ul style="margin:6px 0 8px 18px; padding:0;">{_legs_html}</ul>'
-                '<div style="display:flex; gap:18px; flex-wrap:wrap; '
-                'font-size:12px;">'
-                f'<div><span style="color:var(--muted);">Combined</span> '
-                f'<strong class="mono">{_price_disp}</strong></div>'
-                f'<div><span style="color:var(--muted);">Joint fair</span> '
-                f'<strong class="mono">{_jf:.1f}%</strong></div>'
-                f'<div><span style="color:var(--muted);">Market</span> '
-                f'<strong class="mono">{_ji:.1f}%</strong></div>'
-                f'<div><span style="color:var(--muted);">Edge</span> '
-                f'<strong class="mono {_edge_cls}">{_edge:+.2f}pts</strong></div>'
-                f'<div><span style="color:var(--muted);">¼-Kelly stake</span> '
-                f'<strong class="mono">${_stake:,.2f}</strong></div>'
-                f'<div><span style="color:var(--muted);">Expected $</span> '
-                f'<strong class="mono {_ev_cls}">'
-                f'{("+" if (_ev or 0) >= 0 else "")}{(_ev or 0):.2f}</strong></div>'
-                f'<div><span style="color:var(--muted);">Profit if hit</span> '
-                f'<strong class="mono good">+${(_profit or 0):.2f}</strong></div>'
-                '</div>'
-                f'<p style="margin:10px 0 0; font-size:12px; color:var(--muted); '
-                f'line-height:1.5;">{_esc(_parlay.get("rationale") or "")}</p>'
-                '</div>'
-            )
-            _bc1, _bc2 = st.columns([1, 4])
-            with _bc1:
-                if st.button(
-                    "📝 Log this parlay",
-                    key="log_parlay_btn",
-                    use_container_width=True,
-                    type="primary",
-                    help="Writes the parlay to the ledger as its own row. "
-                         "Each leg grades against its own game's ESPN final; "
-                         "pushes drop legs without killing the parlay.",
-                ):
-                    unit_pct = settings.get("unit_pct") or 0.01
-                    unit_dollars = (kalshi_cash or 500.0) * unit_pct
-                    try:
-                        stored = picks_store.log_capper_parlay(
-                            _parlay, bankroll=float(kalshi_cash or 500.0),
-                            unit_dollars=float(unit_dollars or 1.0),
-                        )
-                    except Exception as _ex:
-                        st.warning(f"Could not log parlay: {_ex}")
-                        stored = None
-                    if stored:
-                        st.success(f"Parlay logged: {stored.get('event_name')}")
-                        st.session_state["_capper_parlay"] = None
-                    else:
-                        st.warning("Parlay needs at least two legs to log.")
 
     # Props status line: what the per-event fetch did this refresh and where
     # today's prop credit spend sits against the daily ceiling.
@@ -3890,14 +3931,9 @@ def render_picks(settings: dict):
                 st.cache_data.clear()
                 st.success("CLV saved.")
             if c3.button("Mark void", key=f"void_{p.get('id')}"):
-                p["status"] = "void"
-                import json as _j, os as _o
-                here = _o.path.dirname(_o.path.dirname(_o.path.abspath(__file__)))
-                with open(_o.path.join(here, "picks.json"), "w", encoding="utf-8") as f:
-                    _j.dump(picks_store.list_picks(), f, indent=2, default=str)
-                # safer: just use delete+add
-                picks_store.delete_pick(p.get("id"))
-                picks_store.add_pick(p)
+                # In-place status change through the store, which never
+                # rewrites the file from a failed read.
+                picks_store.set_status(p.get("id"), "void")
                 st.cache_data.clear()
                 st.success("Marked void.")
             if c4.button("Delete", key=f"del_{p.get('id')}"):
