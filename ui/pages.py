@@ -51,6 +51,17 @@ def _central_today_str() -> str:
 def load_odds(sport_key: str, regions: str = "eu", markets: str = "h2h", cache_ttl: int = 3600):
     """Fetch live odds for one sport. Default: Pinnacle only (eu), moneyline only (h2h)
     = 1 credit per sport. Set regions/markets wider in Settings for more coverage."""
+    if sport_key in _TENNIS_PREFIX:
+        # Tennis is keyed per tournament on The Odds API; fetch whichever
+        # tour-level events are in season. Moneyline only: 1 market keeps a
+        # tournament to regions x 1 credits per refresh.
+        out = []
+        for key in _tennis_keys(sport_key):
+            try:
+                out.extend(odds_api.get_odds(key, regions=regions, markets="h2h", cache_ttl=cache_ttl) or [])
+            except Exception:
+                continue
+        return out
     odds_sport = espn.ODDS_API_SPORT_KEYS.get(sport_key)
     if not odds_sport:
         return []
@@ -58,6 +69,46 @@ def load_odds(sport_key: str, regions: str = "eu", markets: str = "h2h", cache_t
         return odds_api.get_odds(odds_sport, regions=regions, markets=markets, cache_ttl=cache_ttl)
     except Exception:
         return []
+
+
+#: Odds API key prefixes for the two tennis tours.
+_TENNIS_PREFIX = {"atp": "tennis_atp_", "wta": "tennis_wta_"}
+
+
+def _tennis_keys(sport_key: str) -> list:
+    try:
+        return odds_api.active_sport_keys(_TENNIS_PREFIX[sport_key])
+    except Exception:
+        return []
+
+
+@st.cache_data(ttl=1800, show_spinner=False)
+def load_slate_today(sport_key: str) -> bool:
+    """True when a player / fighter sport has an event starting today (CT).
+
+    ESPN's scoreboard does not list tennis match-by-match, so the usual
+    "ESPN shows games today" credit guard would block these sports forever.
+    This asks The Odds API's free /events endpoint instead (0 credits).
+    """
+    from zoneinfo import ZoneInfo
+    ct = ZoneInfo("America/Chicago")
+    today = datetime.now(ct).date()
+    keys = _tennis_keys(sport_key) if sport_key in _TENNIS_PREFIX else [espn.ODDS_API_SPORT_KEYS.get(sport_key)]
+    for key in keys:
+        if not key:
+            continue
+        try:
+            events = odds_api.list_events(key)
+        except Exception:
+            events = []
+        for ev in events or []:
+            try:
+                start = datetime.fromisoformat(str(ev.get("commence_time")).replace("Z", "+00:00"))
+            except ValueError:
+                continue
+            if start.astimezone(ct).date() == today:
+                return True
+    return False
 
 
 @st.cache_data(ttl=6 * 3600, show_spinner=False)
@@ -1357,6 +1408,8 @@ def render_dashboard(settings: dict):
             all_events_tagged.append((sp, ev))
         # Skip Odds API fetch entirely when ESPN shows no games on this date for this sport.
         has_games = bool(events_sp)
+        if not has_games and is_today and sp in kalshi.INDIVIDUAL_SPORTS:
+            has_games = load_slate_today(sp)
         odds_games_sp = load_odds(sp, regions=regions, markets=markets_cfg, cache_ttl=live_ttl) if (is_today and has_games) else []
         # Per-event alt-market enrichment: fetch 1H / BTTS lines for THIS sport's
         # events and merge them into the bookmakers list so the agent scanner
@@ -1600,6 +1653,19 @@ def render_dashboard(settings: dict):
             )
             if event_markets:
                 kalshi_by_game[(home_name, away_name)] = event_markets
+        # Name-based pass against the sharp-book slate. Tennis and combat
+        # sports have no ESPN abbreviations to match on, and soccer clubs
+        # are spelled differently per feed; any Kalshi event the ESPN pass
+        # did not already claim is matched by contestant name instead.
+        if all_markets_sp and (sp in kalshi.INDIVIDUAL_SPORTS or sp in kalshi.THREE_WAY_SPORTS):
+            claimed = {m.get("event_ticker") for ms in kalshi_by_game.values() for m in ms}
+            free_markets = [m for m in all_markets_sp if m.get("event_ticker") not in claimed]
+            sp_odds_games = [og for og in odds_games if og.get("_sport") == sp]
+            try:
+                from apis.kalshi_match import match_markets_to_games
+                kalshi_by_game.update(match_markets_to_games(free_markets, sp_odds_games))
+            except Exception:
+                pass
         kalshi_markets_by_sport[sp] = kalshi_by_game
 
         # Partition the already-fetched pinnacle games by their sport tag,

@@ -82,6 +82,26 @@ def no_vig_two_way(american_a, american_b):
     return (pa / total, pb / total)
 
 
+def no_vig_multi(american_prices):
+    """Remove the overround from an N-outcome market (N >= 2).
+
+    Soccer moneylines are three-way (home / draw / away); stripping the vig
+    from only two of the three prices overstates both teams by the whole
+    draw probability. Returns a list of fair probs in the same order that
+    sums to 1.0, or None when any price is missing or unusable.
+    """
+    probs = []
+    for a in american_prices or []:
+        p = implied_prob_american(a)
+        if p is None:
+            return None
+        probs.append(p)
+    total = sum(probs)
+    if len(probs) < 2 or total <= 0:
+        return None
+    return [p / total for p in probs]
+
+
 def profit_on_win(stake, american) -> Optional[float]:
     """Dollars won on a winning bet of `stake` at American `american`."""
     s = _coerce(stake)

@@ -168,3 +168,101 @@ def home_implied_prob_from_market(market, home_name):
     if yes_sub_canon == hc or yes_sub_canon.split()[-1] == hc.split()[-1]:
         return p_yes
     return 1.0 - p_yes
+
+
+# ---------------------------------------------------------------------------
+# Name-based matching (tennis / combat sports / soccer)
+# ---------------------------------------------------------------------------
+# Team sports are matched through ESPN abbreviations in the event ticker.
+# Players and fighters have no abbreviation table, and ESPN's scoreboard does
+# not list tennis match-by-match, so these are matched straight against the
+# sharp-book slate: a Kalshi event belongs to an Odds API game when each of
+# its "<name> wins" markets names one of the two contestants.
+
+_DATE_PREFIX_RE = re.compile(r"^(\d{2}[A-Z]{3}\d{2})")
+_TIE_NAMES = {"tie", "draw"}
+
+
+def is_tie_market(market: dict) -> bool:
+    """True for the "Tie is the result" market of a three-way soccer event."""
+    return canonical(market.get("yes_sub_title") or "") in _TIE_NAMES
+
+
+def _ticker_date(event_ticker: str):
+    parts = (event_ticker or "").split("-", 1)
+    if len(parts) != 2:
+        return None
+    m = _DATE_PREFIX_RE.match(parts[1])
+    if not m:
+        return None
+    try:
+        return datetime.strptime(m.group(1), "%y%b%d").date()
+    except ValueError:
+        return None
+
+
+def same_contestant(a: str, b: str) -> bool:
+    """Loose person / club name equality across feeds.
+
+    Handles "Frances Tiafoe" vs "F. Tiafoe" vs "Tiafoe", accents, and club
+    short names ("Tottenham" vs "Tottenham Hotspur"). Requires the surname
+    (last token) to agree, and first initials to agree when both are given,
+    so two different players who share a surname on one card stay apart.
+    """
+    ca, cb = canonical(a), canonical(b)
+    if not ca or not cb:
+        return False
+    if ca == cb:
+        return True
+    ta, tb = ca.split(), cb.split()
+    # One name is a leading slice of the other: "tottenham" / "tottenham hotspur".
+    n = min(len(ta), len(tb))
+    if ta[:n] == tb[:n]:
+        return True
+    if ta[-1] != tb[-1]:
+        return False
+    if len(ta) > 1 and len(tb) > 1 and ta[0][0] != tb[0][0]:
+        return False
+    return True
+
+
+def match_markets_to_games(kalshi_markets: List[dict], odds_games: List[dict],
+                           max_day_gap: int = 1) -> Dict[tuple, List[dict]]:
+    """Group Kalshi markets under the Odds API game they price.
+
+    Returns {(home_team, away_team): [markets]} keyed by the Odds API names,
+    which is the key shape scan_kalshi_vs_pinnacle looks games up by. The
+    tie market of a three-way event rides along in the list. An event is
+    only attached when BOTH contestants are named by its markets and the
+    ticker date is within `max_day_gap` days of the game's start, so a
+    rematch next week cannot borrow this week's prices.
+    """
+    out: Dict[tuple, List[dict]] = {}
+    if not kalshi_markets or not odds_games:
+        return out
+    grouped = _group_markets_by_event(kalshi_markets)
+    for g in odds_games:
+        home = g.get("home_team") or ""
+        away = g.get("away_team") or ""
+        if not home or not away:
+            continue
+        game_date = None
+        ct = g.get("commence_time")
+        if ct:
+            try:
+                game_date = datetime.fromisoformat(str(ct).replace("Z", "+00:00")).date()
+            except ValueError:
+                game_date = None
+        for event_ticker, markets in grouped.items():
+            names = [m.get("yes_sub_title") or "" for m in markets if not is_tie_market(m)]
+            if len(names) < 2:
+                continue
+            if not (any(same_contestant(n, home) for n in names)
+                    and any(same_contestant(n, away) for n in names)):
+                continue
+            tdate = _ticker_date(event_ticker)
+            if game_date and tdate and abs((game_date - tdate).days) > max_day_gap:
+                continue
+            out[(home, away)] = markets
+            break
+    return out

@@ -31,7 +31,7 @@ def _no_vig(home_price, away_price) -> Tuple[Optional[float], Optional[float]]:
 
 
 def _grade_offshore_pick(market, side_key, point, home_score, away_score,
-                         is_final=False, is_live=False) -> Optional[str]:
+                         is_final=False, is_live=False, three_way=False) -> Optional[str]:
     """Grade a non-h2h pick against a running or final score.
 
     Returns one of win / loss / push for finals, winning / losing / tied for
@@ -55,6 +55,15 @@ def _grade_offshore_pick(market, side_key, point, home_score, away_score,
             return final_label
         return live_label
 
+    if mk == "h2h" and (three_way or side_key == "draw"):
+        # Three-way moneyline: a level score wins the Draw and beats both teams.
+        if side_key == "draw":
+            winning = home_score == away_score
+        else:
+            winning = home_score != away_score and ((home_score > away_score) == (side_key == "home"))
+        return _label("win" if winning else "loss",
+                      "winning" if winning else "losing",
+                      "tied")
     if mk == "h2h":
         if home_score == away_score:
             return "push" if is_final else "tied"
@@ -463,9 +472,17 @@ def scan_kalshi_vs_pinnacle(
         when Kalshi had a quote on this market, even if not the best price)
       * `kalshi_url` for direct-click when Kalshi is the best book
     """
-    from apis.team_mapping import canonical, same_team
+    from apis.team_mapping import canonical, same_team as _same_team_strict
     from apis import kalshi as kalshi_api
-    from calc.odds import decimal_to_american, implied_prob_american
+    from apis.kalshi_match import is_tie_market, same_contestant
+    from calc.odds import decimal_to_american, implied_prob_american, no_vig_multi
+
+    three_way_sport = sport_key in kalshi_api.THREE_WAY_SPORTS
+
+    def same_team(a, b):
+        # Team aliases first; fall back to the person/club matcher so
+        # "F. Tiafoe" and "Tottenham" resolve against the sharp-book names.
+        return _same_team_strict(a, b) or same_contestant(a, b)
 
     out = []
     if not pinnacle_games or not kalshi_markets_by_game:
@@ -491,9 +508,9 @@ def scan_kalshi_vs_pinnacle(
             pin_by_key[(canonical(home), canonical(away))] = g
 
     def _book_h2h_prices(game, book_name_or_key):
-        """Return (home_price, away_price) for one book in h2h, or (None, None)."""
+        """Return (home_price, away_price, draw_price) for one book in h2h."""
         target = book_name_or_key.lower()
-        hp = ap = None
+        hp = ap = dp = None
         for b in (game.get("bookmakers") or []):
             bk = (b.get("key") or "").lower()
             bt = (b.get("title") or "").lower()
@@ -510,12 +527,14 @@ def scan_kalshi_vs_pinnacle(
                         price = None
                     if price is None:
                         continue
-                    if same_team(o.get("name"), game.get("home_team")):
+                    if (o.get("name") or "").strip().lower() == "draw":
+                        dp = price
+                    elif same_team(o.get("name"), game.get("home_team")):
                         hp = price
                     elif same_team(o.get("name"), game.get("away_team")):
                         ap = price
             break
-        return hp, ap
+        return hp, ap, dp
 
     for (home_name, away_name), markets in kalshi_markets_by_game.items():
         if not markets:
@@ -526,12 +545,24 @@ def scan_kalshi_vs_pinnacle(
             if not pin_game:
                 continue
         # Pinnacle fair prob.
-        pin_h, pin_a = _book_h2h_prices(pin_game, "Pinnacle")
+        pin_h, pin_a, pin_d = _book_h2h_prices(pin_game, "Pinnacle")
         if pin_h is None or pin_a is None:
             continue
-        fair_home, fair_away = no_vig_two_way(pin_h, pin_a)
-        if fair_home is None:
-            continue
+        fair_draw = None
+        if pin_d is not None:
+            # Three-way moneyline: strip the vig across all three outcomes.
+            # Normalising only home/away would hand both teams the draw's
+            # share of probability and invent an edge on every side.
+            fairs = no_vig_multi([pin_h, pin_a, pin_d])
+            if not fairs:
+                continue
+            fair_home, fair_away, fair_draw = fairs
+        elif three_way_sport:
+            continue  # soccer without a sharp draw price cannot be priced
+        else:
+            fair_home, fair_away = no_vig_two_way(pin_h, pin_a)
+            if fair_home is None:
+                continue
         pin_home_name = pin_game.get("home_team") or home_name
         pin_away_name = pin_game.get("away_team") or away_name
 
@@ -544,7 +575,7 @@ def scan_kalshi_vs_pinnacle(
             for m in (b.get("markets") or []):
                 if m.get("key") != "h2h":
                     continue
-                hp = ap = None
+                hp = ap = dp = None
                 for o in (m.get("outcomes") or []):
                     price = o.get("price")
                     try:
@@ -553,11 +584,13 @@ def scan_kalshi_vs_pinnacle(
                         price = None
                     if price is None:
                         continue
-                    if same_team(o.get("name"), pin_home_name):
+                    if (o.get("name") or "").strip().lower() == "draw":
+                        dp = price
+                    elif same_team(o.get("name"), pin_home_name):
                         hp = price
                     elif same_team(o.get("name"), pin_away_name):
                         ap = price
-                shop_prices[btitle] = (hp, ap)
+                shop_prices[btitle] = {"home": hp, "away": ap, "draw": dp}
 
         # Build per-outcome candidate list: (book, american_price, implied_prob, kalshi_ticker_or_None)
         # One iteration per Kalshi market (yes side); fair prob derived from side.
@@ -566,7 +599,13 @@ def scan_kalshi_vs_pinnacle(
             yes_team = (market.get("yes_sub_title") or "").strip()
             if not yes_team:
                 continue
-            if same_team(yes_team, pin_home_name):
+            if is_tie_market(market):
+                if fair_draw is None:
+                    continue
+                fair_for_yes = fair_draw
+                yes_side_name = "Draw"
+                side_key = "draw"
+            elif same_team(yes_team, pin_home_name):
                 fair_for_yes = fair_home
                 yes_side_name = pin_home_name
                 side_key = "home"
@@ -594,8 +633,8 @@ def scan_kalshi_vs_pinnacle(
                         "price": kalshi_price_american,
                         "implied": yes_prob,
                     })
-            for bname, (hp, ap) in shop_prices.items():
-                price = hp if side_key == "home" else ap
+            for bname, sp_prices in shop_prices.items():
+                price = sp_prices.get(side_key)
                 if price is None:
                     continue
                 imp = implied_prob_american(price)
@@ -633,7 +672,17 @@ def scan_kalshi_vs_pinnacle(
                     hs, as_ = int(home_score), int(away_score)
                 except (TypeError, ValueError):
                     hs, as_ = None, None
-                if hs is not None:
+                if hs is not None and (side_key == "draw" or fair_draw is not None):
+                    # Three-way: a level score wins the Draw and beats both teams.
+                    if side_key == "draw":
+                        ahead = hs == as_
+                    else:
+                        ahead = hs != as_ and ((hs > as_) == (side_key == "home"))
+                    if espn_ev.get("is_final"):
+                        grade = "win" if ahead else "loss"
+                    elif espn_ev.get("is_live"):
+                        grade = "winning" if ahead else "losing"
+                elif hs is not None:
                     picked_home = side_key == "home"
                     if espn_ev.get("is_final"):
                         if hs == as_:
@@ -657,10 +706,15 @@ def scan_kalshi_vs_pinnacle(
                 "espn_event_id": espn_ev.get("id") if espn_ev else None,
                 "home_team": pin_home_name,
                 "away_team": pin_away_name,
-                "matchup": f"{pin_away_name} @ {pin_home_name}",
+                "matchup": (
+                    f"{pin_away_name} vs {pin_home_name}"
+                    if sport_key in kalshi_api.INDIVIDUAL_SPORTS
+                    else f"{pin_away_name} @ {pin_home_name}"
+                ),
                 "market": "h2h",
-                "side_label": f"{yes_side_name} wins",
+                "side_label": "Draw" if side_key == "draw" else f"{yes_side_name} wins",
                 "point": None,
+                "three_way": fair_draw is not None,
                 # Headline numbers point to the BEST book
                 "price": best["price"],
                 "price_cents": int(round(best["implied"] * 100)),
@@ -732,7 +786,8 @@ def scan_offshore_markets_vs_pinnacle(
     (outcome_A, outcome_B) structure that no_vig_two_way works on.
     """
     from apis.team_mapping import same_team
-    from calc.odds import implied_prob_american
+    from apis.kalshi import THREE_WAY_SPORTS
+    from calc.odds import implied_prob_american, no_vig_multi
 
     out = []
     if not pinnacle_games or not markets:
@@ -767,7 +822,7 @@ def scan_offshore_markets_vs_pinnacle(
             for m in (b.get("markets") or []):
                 if m.get("key") != market_key:
                     continue
-                hp = ap = None
+                hp = ap = dp = None
                 hpt = apt = None
                 hlabel = alabel = None
                 for o in (m.get("outcomes") or []):
@@ -793,13 +848,15 @@ def scan_offshore_markets_vs_pinnacle(
                         hp = price; hlabel = "Yes"
                     elif name_l == "no":
                         ap = price; alabel = "No"
+                    elif name_l == "draw":
+                        dp = price
                     elif same_team(name, home_team):
                         hp = price; hpt = point; hlabel = home_team
                     elif same_team(name, away_team):
                         ap = price; apt = point; alabel = away_team
                 if hp is not None and ap is not None:
                     out[bk_title] = {
-                        "home": hp, "away": ap,
+                        "home": hp, "away": ap, "draw": dp,
                         "home_pt": hpt, "away_pt": apt,
                         "home_label": hlabel or "home",
                         "away_label": alabel or "away",
@@ -822,9 +879,21 @@ def scan_offshore_markets_vs_pinnacle(
                     break
             if not pin_entry:
                 continue
-            fair_home, fair_away = no_vig_two_way(pin_entry["home"], pin_entry["away"])
-            if fair_home is None:
-                continue
+            fair_draw = None
+            if mk in ("h2h", "h2h_h1") and pin_entry.get("draw") is not None:
+                # Three-way moneyline (soccer): strip the vig across home /
+                # draw / away. Normalising only the two teams would hand
+                # them the draw's share and invent double-digit "edges".
+                fairs = no_vig_multi([pin_entry["home"], pin_entry["away"], pin_entry["draw"]])
+                if not fairs:
+                    continue
+                fair_home, fair_away, fair_draw = fairs
+            elif mk in ("h2h", "h2h_h1") and sport_key in THREE_WAY_SPORTS:
+                continue  # soccer moneyline without a sharp draw price
+            else:
+                fair_home, fair_away = no_vig_two_way(pin_entry["home"], pin_entry["away"])
+                if fair_home is None:
+                    continue
             # For totals / spreads, require half-point lines (no push risk).
             if mk in ("spreads", "totals", "totals_h1", "spreads_h1") and half_points_only:
                 if not (_is_half_pt(pin_entry.get("home_pt")) or _is_half_pt(pin_entry.get("away_pt"))):
@@ -844,10 +913,13 @@ def scan_offshore_markets_vs_pinnacle(
             is_final = bool(espn_ev.get("is_final")) if espn_ev else False
             is_live = bool(espn_ev.get("is_live")) if espn_ev else False
             # Shop best price per side across offshore books.
-            for side_key, fair_prob, label_fallback, point_key in [
+            _sides = [
                 ("home", fair_home, pin_entry.get("home_label"), "home_pt"),
                 ("away", fair_away, pin_entry.get("away_label"), "away_pt"),
-            ]:
+            ]
+            if fair_draw is not None:
+                _sides.append(("draw", fair_draw, "Draw", "draw_pt"))
+            for side_key, fair_prob, label_fallback, point_key in _sides:
                 candidates = []
                 for bk_name, data in all_books.items():
                     if bk_name.lower() not in shop_books_lower:
@@ -891,6 +963,7 @@ def scan_offshore_markets_vs_pinnacle(
                 grade = _grade_offshore_pick(
                     mk, side_key, pt, hs_i, as_i,
                     is_final=is_final, is_live=is_live,
+                    three_way=fair_draw is not None,
                 )
                 out.append({
                     "_sport": sport_key,
@@ -902,6 +975,7 @@ def scan_offshore_markets_vs_pinnacle(
                     "market": mk,
                     "market_label": MARKET_LABELS.get(mk, mk),
                     "side_label": side_label,
+                    "three_way": fair_draw is not None,
                     "point": pt,
                     "price": best["price"],
                     "price_cents": int(round(best["implied"] * 100)),

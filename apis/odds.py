@@ -183,6 +183,25 @@ def list_sports() -> List[dict]:
     return data if isinstance(data, list) else []
 
 
+def active_sport_keys(prefix: str) -> List[str]:
+    """In-season Odds API sport keys starting with `prefix` (free lookup).
+
+    Tennis is listed per tournament ("tennis_atp_us_open",
+    "tennis_atp_finals", ...) and only the tournaments being played right
+    now are active, so the key has to be resolved at fetch time rather than
+    hard-coded. Outright-only keys (tournament winner) are excluded.
+    """
+    out = []
+    for sp in list_sports():
+        key = sp.get("key") or ""
+        if not key.startswith(prefix):
+            continue
+        if not sp.get("active") or sp.get("has_outrights"):
+            continue
+        out.append(key)
+    return out
+
+
 def get_odds(
     sport: str,
     regions: str = "us,eu",

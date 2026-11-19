@@ -327,18 +327,70 @@ def list_events(series_ticker: Optional[str] = None, status: str = "open",
     return data.get("events", []) or []
 
 
-# Kalshi series tickers for sports (the ones with per-game "winner" markets).
-# Covers the US-majors cleanly; soccer and the long-tail sports are rarely on
-# Kalshi so we focus on NFL/NBA/MLB/NHL/NCAAF/NCAAB where the exchange is active.
+# Kalshi series tickers for sports with per-game / per-match "winner" markets.
+# Only series that (a) Kalshi actually lists open markets on and (b) we can
+# price a fair for (Pinnacle on The Odds API) are mapped; the long tail of
+# minor leagues has no sharp reference, so an "edge" there would be noise.
 SERIES_TICKERS: Dict[str, List[str]] = {
     "nfl": ["KXNFLGAME"],
     "nba": ["KXNBAGAME"],
     "mlb": ["KXMLBGAME"],
     "nhl": ["KXNHLGAME"],
     "ncaaf": ["KXNCAAFGAME"],
-    "ncaab": ["KXNCAABGAME"],
+    # Kalshi renamed the men's college series; keep the old ticker for safety.
+    "ncaab": ["KXNCAAMBGAME", "KXNCAABGAME"],
+    "ncaaw": ["KXNCAAWBGAME"],
     "wnba": ["KXWNBAGAME"],
+    "cfl": ["KXCFLGAME"],
+    # Tennis: tour-level match winners. Challenger / ITF series exist on
+    # Kalshi but no sharp book prices them on The Odds API, so they are out.
+    "atp": ["KXATPMATCH"],
+    "wta": ["KXWTAMATCH"],
+    # Combat sports: one yes/no market per fighter.
+    "ufc": ["KXUFCFIGHT"],
+    "boxing": ["KXBOXINGFIGHT"],
+    # Soccer: three markets per game (home wins / away wins / tie).
+    "epl": ["KXEPLGAME"],
+    "la_liga": ["KXLALIGAGAME"],
+    "bundesliga": ["KXBUNDESLIGAGAME"],
+    "serie_a": ["KXSERIEAGAME"],
+    "ligue_1": ["KXLIGUE1GAME"],
+    "ucl": ["KXUCLGAME"],
+    "uel": ["KXUELGAME"],
+    "mls": ["KXMLSGAME"],
+    "nwsl": ["KXNWSLGAME"],
+    "liga_mx": ["KXLIGAMXGAME"],
 }
+
+#: Sports whose contestants are people, not teams. ESPN's scoreboard does not
+#: expose these match-by-match, so they are matched to Kalshi by name off the
+#: sharp-book slate and settled from Kalshi's own market result.
+INDIVIDUAL_SPORTS = {"atp", "wta", "ufc", "boxing"}
+
+#: Sports whose moneyline is three-way (a draw is its own outcome).
+THREE_WAY_SPORTS = {
+    "epl", "la_liga", "bundesliga", "serie_a", "ligue_1",
+    "ucl", "uel", "mls", "nwsl", "liga_mx",
+}
+
+
+def get_market(ticker: str) -> Optional[dict]:
+    """One market by ticker (public endpoint). None on error / unknown."""
+    if not ticker:
+        return None
+    data = _get(f"/markets/{ticker}")
+    if not data:
+        return None
+    return data.get("market") or None
+
+
+def market_result(ticker: str) -> Optional[str]:
+    """Settled result of a market: "yes" | "no", or None while unresolved."""
+    m = get_market(ticker)
+    if not m:
+        return None
+    res = (m.get("result") or "").strip().lower()
+    return res if res in ("yes", "no") else None
 
 
 def fetch_sport_markets(sport_key: str) -> List[dict]:

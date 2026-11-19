@@ -453,6 +453,9 @@ def auto_log_agent_edges(edges: list, settings: dict, path: Optional[str] = None
             # Results carries this forward so in-play agent decisions stay
             # visually distinct from pre-game ones in the audit trail.
             "pick_type": "live_pick" if (e.get("status_state") == "in") else "pre_game",
+            # Three-way moneyline (soccer): tells the settler a level final
+            # loses a team pick and wins the Draw.
+            "three_way": bool(e.get("three_way")),
             # Board-presence timestamps: every scan that still finds this
             # pick in the A-tier set bumps last_seen_on_board. Results uses
             # a stale last_seen on an open row to flag "removed from board".
@@ -538,16 +541,73 @@ def _match_side(team, home_name, away_name) -> Optional[str]:
     return None
 
 
+#: Sports whose moneyline is three-way: a draw is its own outcome, so a level
+#: final LOSES a "Team wins" pick instead of leaving it open or pushing it.
+_THREE_WAY_SPORTS = {
+    "epl", "la_liga", "bundesliga", "serie_a", "ligue_1",
+    "ucl", "uel", "mls", "nwsl", "liga_mx",
+}
+_DRAW_LABELS = {"draw", "tie", "the draw"}
+
+
 def _settle_h2h(pick, final):
-    """Set status on a moneyline pick given ESPN final scores."""
+    """Set status on a moneyline pick given ESPN final scores.
+
+    Two-way sports: a level final leaves the pick untouched (no winner).
+    Three-way sports (soccer): "Draw" wins on a level final and loses
+    otherwise; a team pick loses on a level final.
+    """
+    sel_team = _h2h_team(pick.get("selection"))
+    three_way = bool(pick.get("three_way")) or (pick.get("sport") or "").lower() in _THREE_WAY_SPORTS
+    hs, ascore = final.get("home_score"), final.get("away_score")
+    if three_way and hs is not None and ascore is not None:
+        level = hs == ascore
+        if sel_team.strip().lower() in _DRAW_LABELS:
+            pick["status"] = "win" if level else "loss"
+            return
+        if level:
+            if _match_side(sel_team, final.get("home_name"), final.get("away_name")):
+                pick["status"] = "loss"
+            return
     home_won = final.get("home_won")
     if home_won is None:
         return
-    side = _match_side(_h2h_team(pick.get("selection")), final.get("home_name"), final.get("away_name"))
+    side = _match_side(sel_team, final.get("home_name"), final.get("away_name"))
     if side == "home":
         pick["status"] = "win" if home_won else "loss"
     elif side == "away":
         pick["status"] = "win" if not home_won else "loss"
+
+
+def _settle_from_kalshi(pick) -> bool:
+    """Settle a "<name> wins" pick from the Kalshi market's own result.
+
+    Tennis and combat sports have no match-by-match ESPN final to grade
+    against, but every such pick was matched to a Kalshi yes/no market on
+    that exact outcome, and Kalshi publishes the result once it resolves.
+    Returns True when the pick left 'open'.
+    """
+    ticker = pick.get("kalshi_ticker")
+    if not ticker:
+        return False
+    try:
+        from apis import kalshi as kalshi_api
+        result = kalshi_api.market_result(ticker)
+    except Exception:
+        return False
+    if result not in ("yes", "no"):
+        return False
+    pick["status"] = "win" if result == "yes" else "loss"
+    pick["result_payload"] = {
+        "kalshi_ticker": ticker,
+        "kalshi_result": result,
+        "settled_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+    }
+    return True
+
+
+#: Sports graded from Kalshi's market result rather than an ESPN scoreboard.
+_KALSHI_SETTLED_SPORTS = {"atp", "wta", "ufc", "boxing"}
 
 
 def _settle_totals(pick, final):
@@ -972,6 +1032,12 @@ def auto_settle(path: Optional[str] = None) -> int:
         sport = p.get("sport")
         event_id = p.get("event_id")
         if not sport or not event_id:
+            continue
+        # Player / fighter sports: no ESPN final per match, grade off Kalshi.
+        if (str(sport).lower() in _KALSHI_SETTLED_SPORTS
+                and (p.get("market") or "h2h").lower() == "h2h"):
+            if _settle_from_kalshi(p):
+                settled += 1
             continue
         if is_prop:
             if (p.get("source") or "manual") != "agent-auto":
