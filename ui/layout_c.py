@@ -20,7 +20,7 @@ LAYOUT_C_CSS = r"""
 section.main > div.block-container,
 [data-testid="stMainBlockContainer"]{ padding-top: 14px !important; max-width: 1440px; }
 h1, h2, h3, h4{
-  font-family: "Inter", -apple-system, "Segoe UI", sans-serif !important;
+  font-family: "Open Sauce One", "Inter", -apple-system, "Segoe UI", sans-serif !important;
   font-style: normal !important; font-weight: 700 !important; letter-spacing: -0.02em;
 }
 h2{ font-size: 19px; } h3{ font-size: 15.5px; }
@@ -37,7 +37,7 @@ h2{ font-size: 19px; } h3{ font-size: 15.5px; }
 .topbar-brand .name i{ color:var(--accent); font-style:normal; }
 .topbar-clock{
   display:flex; align-items:center; justify-content:flex-end; gap:8px;
-  font-family:"JetBrains Mono", monospace; font-size:11px; color:var(--muted); white-space:nowrap;
+  font-family:"Geist Mono", monospace; font-size:11px; color:var(--muted); white-space:nowrap;
 }
 .topbar-clock .date{ color:var(--muted-dim); }
 .topbar-clock .pulse-dot{
@@ -97,7 +97,7 @@ button[aria-label="Expand sidebar"]::after{
 .kpi-strip .kpi{ background:var(--surface); padding:11px 16px; display:flex; flex-direction:column; gap:2px; min-width:0; }
 .kpi-strip .k{ font-size:10px; letter-spacing:.09em; text-transform:uppercase; color:var(--muted); font-weight:600; }
 .kpi-strip .v{
-  font-family:"JetBrains Mono", monospace; font-variant-numeric:tabular-nums; font-size:17px; font-weight:600;
+  font-family:"Geist Mono", monospace; font-variant-numeric:tabular-nums; font-size:17px; font-weight:600;
   color:var(--ink); white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
 }
 .kpi-strip .v.good{ color:var(--accent); }
@@ -123,7 +123,7 @@ table.board-table tbody td{ padding-top:9px; padding-bottom:9px; }
 table.board-table td.pb-cell{ min-width:150px; }
 .pb-cell .px{
   display:inline-block; min-width:62px; text-align:center; padding:4px 10px; border-radius:8px;
-  font-family:"JetBrains Mono", monospace; font-variant-numeric:tabular-nums; font-weight:700; font-size:12.5px;
+  font-family:"Geist Mono", monospace; font-variant-numeric:tabular-nums; font-weight:700; font-size:12.5px;
   background:var(--chip); color:var(--ink-dim); border:1px solid var(--rule);
 }
 .pb-cell.pos .px{
@@ -136,7 +136,7 @@ table.board-table td.pb-cell{ min-width:150px; }
 .pb-cell .pb-bar u{ display:block; background:var(--accent); }
 .pb-cell .pb-nums{
   display:flex; justify-content:space-between; gap:8px; white-space:nowrap;
-  font-family:"JetBrains Mono", monospace; font-size:10px; color:var(--muted);
+  font-family:"Geist Mono", monospace; font-size:10px; color:var(--muted);
 }
 .pb-cell .pb-nums .accent{ color:var(--accent); }
 
@@ -174,8 +174,8 @@ table.board-table td.pb-cell{ min-width:150px; }
 [data-testid="stElementContainer"]:has(iframe[title*="autorefresh"]){ position:absolute; height:0; overflow:hidden; }
 
 /* news now follows the board; headlines drop the italic serif */
-section.bento *, .news-head .news-title .h1{ font-family:"Inter", -apple-system, "Segoe UI", sans-serif !important; font-style:normal !important; }
-section.bento .mono, section.bento code{ font-family:"JetBrains Mono", monospace !important; }
+section.bento *, .news-head .news-title .h1{ font-family:"Open Sauce One", "Inter", -apple-system, "Segoe UI", sans-serif !important; font-style:normal !important; }
+section.bento .mono, section.bento code{ font-family:"Geist Mono", monospace !important; }
 section.bento{ margin-top:14px; }
 .news-head{ margin-top:26px; }
 .news-head .news-title .h1{ font-size:18px !important; font-weight:700 !important; letter-spacing:-0.02em; }

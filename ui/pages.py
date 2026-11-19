@@ -319,7 +319,7 @@ def _tile_bg_colors(teams: list) -> tuple:
         primary = (teams[0].get("color") or "").strip().lstrip("#")
     if primary and len(primary) in (3, 6):
         return (f"#{primary}", f"#{primary}22")
-    return ("#131F35", "#0a1220")
+    return ("#171B24", "#0B0D12")
 
 
 # Team color lookup for tile gradients + board chips. Hex strings without leading
@@ -794,9 +794,9 @@ def _render_news_tile(item: dict, size: str = "mid", validated: dict = None) -> 
     # Weather / line-move tiles get the mockup's exact palette. Team-colored
     # tiles derive c1/c2 from the primary team.
     if sev == "weather":
-        c1, c2, team_color = ("#001a3a", "#00265f", "#5AB7FF")
+        c1, c2, team_color = ("#001a3a", "#00265f", "#4C82FB")
     elif sev == "line":
-        c1, c2, team_color = ("#041E42", "#021022", "#10E0A1")
+        c1, c2, team_color = ("#041E42", "#021022", "#28CC95")
     else:
         c1, c2, team_color = _team_color_pair(teams, league_key)
 
@@ -860,7 +860,7 @@ def _render_news_tile(item: dict, size: str = "mid", validated: dict = None) -> 
     _meta_bits.append(f"· {_esc(_source)}")
     if _market_tail:
         _meta_bits.append(_esc(_market_tail))
-    meta_tail = f'<span style="color:#9fb0ce">{" ".join(b for b in _meta_bits if b)}</span>'
+    meta_tail = f'<span style="color:#A3ABB8">{" ".join(b for b in _meta_bits if b)}</span>'
     # team-line used both in featured text-col and mid/wide foot. Composed once
     # so both placements stay in sync.
     if _chip_a and _chip_b:
@@ -1728,7 +1728,7 @@ def render_dashboard(settings: dict):
             'box-shadow:var(--card-shadow);">'
             '<div style="display:flex; align-items:center; gap:10px; margin-bottom:12px;">'
             '<span class="chip accent" style="padding:3px 10px;">GET STARTED</span>'
-            '<span style="font-family:Fraunces,serif; font-style:italic; font-size:17px;">'
+            '<span style="font-family:Open Sauce One,Inter,sans-serif; font-style:normal; font-size:17px;">'
             'Three steps and the agent is working for you.</span>'
             '</div>'
             '<div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(220px, 1fr)); gap:12px;">'
@@ -2546,7 +2546,7 @@ def _render_agent_panel(odds_games, kalshi_cash, settings,
         return last[:4].upper() if len(last) <= 4 else last[:3].upper()
 
     def _matchup_chips(e: dict) -> str:
-        """Spec §13: two team chips carrying team colors, with an italic Fraunces
+        """Spec §13: two team chips carrying team colors, with a plain
         'at'/'vs' between. Falls back to a single chip with the raw matchup for
         edges that don't parse cleanly (international soccer, odd punctuation)."""
         sport_key = (e.get("_sport") or "").lower()
@@ -2932,7 +2932,7 @@ def _render_agent_panel(odds_games, kalshi_cash, settings,
         nav_links = " ".join(
             f'<a href="#{e["_anchor"]}" style="padding:3px 10px; background:var(--card-elev); '
             f'border:1px solid var(--rule); border-radius:999px; text-decoration:none; '
-            f'color:var(--ink); font-family:JetBrains Mono,monospace; font-size:11px;">'
+            f'color:var(--ink); font-family:Geist Mono,monospace; font-size:11px;">'
             f'#{i+1}</a>'
             for i, e in enumerate(top)
         )
@@ -2940,7 +2940,7 @@ def _render_agent_panel(odds_games, kalshi_cash, settings,
             '<div style="margin-top:14px; padding:10px 14px; background:var(--card); '
             'border:1px solid var(--rule); border-radius:10px; display:flex; align-items:center; '
             'gap:10px; flex-wrap:wrap;">'
-            '<span style="font-family:JetBrains Mono,monospace; font-size:10px; letter-spacing:0.14em; '
+            '<span style="font-family:Geist Mono,monospace; font-size:10px; letter-spacing:0.14em; '
             'text-transform:uppercase; color:var(--muted);">Jump to analysis →</span>'
             f'{nav_links}'
             '</div>'
@@ -3190,7 +3190,7 @@ def _render_single_pick_analysis(e, idx, total, unit_dollars, _units_fn, kelly_m
         '<div style="margin-top:14px; display:grid; grid-template-columns:1fr; gap:10px;">'
         '<div style="padding:14px 16px; background:var(--card-elev); border-radius:8px; '
         'font-size:13px; color:var(--ink-dim); line-height:1.65;">'
-        f'<div style="margin-bottom:8px; font-family:JetBrains Mono,monospace; font-size:10px; '
+        f'<div style="margin-bottom:8px; font-family:Geist Mono,monospace; font-size:10px; '
         f'letter-spacing:0.14em; text-transform:uppercase; color:var(--muted);">'
         f'Agent rationale · {tier_name} edge</div>'
         # Market paragraph
@@ -3264,7 +3264,7 @@ def _render_single_pick_analysis(e, idx, total, unit_dollars, _units_fn, kelly_m
         f'<span class="chip" style="padding:3px 10px;">{market_label}</span>'
         f'{status_chip}'
         f'</div>'
-        f'<div style="font-family:Fraunces,serif; font-style:italic; font-size:22px; margin-top:4px;">{matchup}</div>'
+        f'<div style="font-family:Open Sauce One,Inter,sans-serif; font-style:normal; font-size:22px; margin-top:4px;">{matchup}</div>'
         f'<div style="font-size:15px; color:var(--ink); margin-top:4px;"><strong>{side_label}</strong></div>'
         f'</div>'
         f'<div style="text-align:right;">'

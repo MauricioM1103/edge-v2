@@ -9,35 +9,41 @@ up like a trading screen.
 CUSTOM_CSS = r"""
 <style>
 /* Font import MUST be the first rule in the stylesheet - CSS silently ignores
-   @import that follows any other rule. Includes Inter (body), Fraunces (serifs),
-   JetBrains Mono 400/500/600/700 (team chips need 700), Material Symbols. */
-@import url('https://fonts.googleapis.com/css2?family=Fraunces:ital,wght@0,400;0,500;1,400&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&family=Material+Symbols+Rounded:opsz,wght,FILL,GRAD@24,400,0,0&display=swap');
+   @import that follows any other rule. Inter is the fallback UI face, Geist
+   Mono 400-700 carries numbers (team chips need 700), plus Material Symbols.
+   The main face, Open Sauce One (Polymarket's UI font, OFL licensed), is
+   declared with @font-face just below and served by Fontsource. */
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Geist+Mono:wght@400;500;600;700&family=Material+Symbols+Rounded:opsz,wght,FILL,GRAD@24,400,0,0&display=swap');
+@font-face{font-family:'Open Sauce One';font-style:normal;font-display:swap;font-weight:400;src:url(https://cdn.jsdelivr.net/npm/@fontsource/open-sauce-one@5.2.5/files/open-sauce-one-latin-400-normal.woff2) format('woff2');}
+@font-face{font-family:'Open Sauce One';font-style:normal;font-display:swap;font-weight:500;src:url(https://cdn.jsdelivr.net/npm/@fontsource/open-sauce-one@5.2.5/files/open-sauce-one-latin-500-normal.woff2) format('woff2');}
+@font-face{font-family:'Open Sauce One';font-style:normal;font-display:swap;font-weight:600;src:url(https://cdn.jsdelivr.net/npm/@fontsource/open-sauce-one@5.2.5/files/open-sauce-one-latin-600-normal.woff2) format('woff2');}
+@font-face{font-family:'Open Sauce One';font-style:normal;font-display:swap;font-weight:700;src:url(https://cdn.jsdelivr.net/npm/@fontsource/open-sauce-one@5.2.5/files/open-sauce-one-latin-700-normal.woff2) format('woff2');}
 :root {
-  /* Court Side v2.1 — deep navy canvas, electric emerald accent, magenta for live.
-     Reads as a premium sports analytics product; distinct from the red/green
-     semantics used for P&L and win/loss. */
-  --bg: #0A1220;
-  --surface: #0F1A2E;
-  --card: #131F35;
-  --card-elev: #192842;
-  --rule: #1E2E4C;
-  --rule-strong: #2B4068;
+  /* Blend palette: neutral charcoal canvas (Polymarket / Kalshi), softer
+     Kalshi green for edge and primary actions, Polymarket blue for info
+     tags, amber for warnings, rose for losses and live. */
+  --bg: #0B0D12;
+  --surface: #12151C;
+  --card: #171B24;
+  --card-elev: #1D222D;
+  --rule: #242A36;
+  --rule-strong: #343C4C;
   /* Text ladder */
-  --ink: #F1F6FF;
-  --ink-dim: #C6D1E4;
-  --muted: #7A8CAA;
-  --muted-dim: #4F5D7A;
+  --ink: #F5F7FA;
+  --ink-dim: #C2C8D2;
+  --muted: #808897;
+  --muted-dim: #565E6D;
   /* Emerald accent — electric, pops on navy without the "neon crypto" vibe. */
-  --accent: #10E0A1;
-  --accent-ink: #06180F;
+  --accent: #28CC95;
+  --accent-ink: #04130D;
   /* Semantic */
-  --good: #10E0A1;
-  --warn: #FFB84D;
-  --bad: #FF4477;
-  --info: #5AB7FF;
-  --live: #FF3D7F;
-  --chip: #1A2745;
-  --card-shadow: 0 1px 2px rgba(0,0,0,.4), 0 18px 40px rgba(6,16,32,.45);
+  --good: #28CC95;
+  --warn: #F5A524;
+  --bad: #F0506E;
+  --info: #4C82FB;
+  --live: #FF4D6A;
+  --chip: #1D222D;
+  --card-shadow: 0 1px 2px rgba(0,0,0,.4), 0 18px 40px rgba(0,0,0,.45);
 }
 
 /* Court Side is dark-only. Light-mode prefers-color-scheme override was swapping
@@ -49,7 +55,7 @@ CUSTOM_CSS = r"""
 section.main > div.block-container { padding-top: 22px; padding-bottom: 60px; padding-left: 28px; padding-right: 28px; max-width: 1360px; }
 body, .stApp, [data-testid="stAppViewContainer"],
 .stMarkdown, .stText, .stCaption, p, div, label, li {
-  font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-family: "Open Sauce One", "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   color: var(--ink);
 }
 /* Hand Streamlit's icon spans back to the Material Symbols font.
@@ -76,9 +82,9 @@ button[data-testid*="baseButton"] svg + span {
    (lowercase_with_underscores) and is one word gets the icon font too. */
 span:is(:not([class]), [class=""]) { font-family: inherit; }
 h1, h2, h3, h4 {
-  font-family: "Fraunces", "Playfair Display", Georgia, serif !important;
-  letter-spacing: -0.015em; color: var(--ink);
-  font-weight: 500;
+  font-family: "Open Sauce One", "Inter", sans-serif !important;
+  letter-spacing: -0.02em; color: var(--ink);
+  font-weight: 600;
 }
 h1 { font-size: clamp(28px, 3.6vw, 44px); line-height: 1.1; }
 h2 { font-size: 22px; }
@@ -86,7 +92,7 @@ h3 { font-size: 17px; }
 
 /* mono numbers everywhere that matters */
 .vsin, code, .mono {
-  font-family: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace !important;
+  font-family: "Geist Mono", ui-monospace, "SF Mono", Menlo, monospace !important;
   font-variant-numeric: tabular-nums;
 }
 
@@ -106,7 +112,7 @@ h3 { font-size: 17px; }
   color: var(--muted); font-weight: 500;
   border-radius: 8px;
   border: 1px solid transparent;
-  font-family: "Inter", -apple-system, sans-serif;
+  font-family: "Open Sauce One", "Inter", -apple-system, sans-serif;
   font-size: 13.5px; letter-spacing: 0.005em;
   transition: color 160ms ease, background 160ms ease;
 }
@@ -133,12 +139,12 @@ h3 { font-size: 17px; }
   box-shadow: 0 0 12px color-mix(in oklab, var(--accent) 50%, transparent);
 }
 .brand .name {
-  font-family: "Fraunces", Georgia, serif !important;
-  font-style: italic; font-size: 30px; font-weight: 400;
+  font-family: "Open Sauce One", "Inter", sans-serif !important;
+  font-style:normal; font-size: 30px; font-weight: 400;
   color: var(--ink); letter-spacing: -0.015em;
 }
 .brand .ver {
-  font-family: "JetBrains Mono", monospace;
+  font-family: "Geist Mono", monospace;
   font-size: 10px; letter-spacing: 0.14em;
   color: var(--muted); padding: 3px 10px;
   border: 1px solid var(--rule); border-radius: 999px;
@@ -147,7 +153,7 @@ h3 { font-size: 17px; }
 }
 .brand-right {
   display: flex; align-items: center; gap: 14px;
-  font-family: "JetBrains Mono", monospace;
+  font-family: "Geist Mono", monospace;
   font-size: 11px; letter-spacing: 0.12em;
   color: var(--muted); text-transform: uppercase;
 }
@@ -176,20 +182,20 @@ h3 { font-size: 17px; }
 }
 .metric-card:hover { border-color: var(--rule-strong); }
 .metric-card .label {
-  font-family: "JetBrains Mono", monospace;
+  font-family: "Geist Mono", monospace;
   font-size: 10px; letter-spacing: 0.14em;
   text-transform: uppercase; color: var(--muted);
   margin-bottom: 6px;
 }
 .metric-card .value {
-  font-family: "JetBrains Mono", monospace;
+  font-family: "Geist Mono", monospace;
   font-size: 24px; font-weight: 500; color: var(--ink);
   font-variant-numeric: tabular-nums; letter-spacing: -0.01em;
 }
 .metric-card .value.good { color: var(--good); }
 .metric-card .value.bad { color: var(--bad); }
 .metric-card .value.accent { color: var(--accent); }
-.metric-card .foot { color: var(--muted); font-size: 11px; margin-top: 4px; font-family: "JetBrains Mono", monospace; }
+.metric-card .foot { color: var(--muted); font-size: 11px; margin-top: 4px; font-family: "Geist Mono", monospace; }
 
 /* ===== game card ===== */
 .game-card {
@@ -203,9 +209,9 @@ h3 { font-size: 17px; }
   display: flex; justify-content: space-between; align-items: center;
   gap: 8px; flex-wrap: wrap;
 }
-.gc-time { font-family: "JetBrains Mono", monospace; font-size: 12.5px; font-weight: 500; color: var(--ink); font-variant-numeric: tabular-nums; }
+.gc-time { font-family: "Geist Mono", monospace; font-size: 12.5px; font-weight: 500; color: var(--ink); font-variant-numeric: tabular-nums; }
 .chip {
-  font-family: "JetBrains Mono", monospace;
+  font-family: "Geist Mono", monospace;
   font-size: 10px; letter-spacing: 0.1em;
   text-transform: uppercase;
   color: var(--muted); padding: 3px 8px;
@@ -226,10 +232,10 @@ h3 { font-size: 17px; }
   display: flex; flex-direction: column; gap: 2px;
 }
 .gc-team .name { font-size: 17px; font-weight: 600; color: var(--ink); letter-spacing: -0.01em; }
-.gc-team .record { font-family: "JetBrains Mono", monospace; font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.gc-team .record { font-family: "Geist Mono", monospace; font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
 .gc-team.away { text-align: left; }
 .gc-team.home { text-align: right; align-items: flex-end; }
-.gc-at { color: var(--muted); font-family: "Fraunces", serif; font-style: italic; font-size: 13px; padding: 0 6px; }
+.gc-at { color: var(--muted); font-family: "Open Sauce One", "Inter", sans-serif; font-style:normal; font-size: 13px; padding: 0 6px; }
 
 .gc-lines {
   display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px;
@@ -240,8 +246,8 @@ h3 { font-size: 17px; }
   border-radius: 8px; padding: 8px 10px;
   display: flex; flex-direction: column; gap: 2px;
 }
-.gc-line .label { font-family: "JetBrains Mono", monospace; font-size: 9px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--muted); }
-.gc-line .row { display: flex; justify-content: space-between; align-items: baseline; gap: 6px; font-family: "JetBrains Mono", monospace; font-size: 12.5px; color: var(--ink); font-variant-numeric: tabular-nums; }
+.gc-line .label { font-family: "Geist Mono", monospace; font-size: 9px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--muted); }
+.gc-line .row { display: flex; justify-content: space-between; align-items: baseline; gap: 6px; font-family: "Geist Mono", monospace; font-size: 12.5px; color: var(--ink); font-variant-numeric: tabular-nums; }
 .gc-line .row .side { color: var(--muted); font-size: 10.5px; }
 .gc-line .row .price { font-weight: 500; }
 .gc-line .row .imp { color: var(--muted); font-size: 10.5px; margin-left: 4px; }
@@ -264,7 +270,7 @@ h3 { font-size: 17px; }
 /* badges & tags */
 .tag {
   display: inline-block; padding: 2px 8px; border-radius: 4px;
-  font-size: 10px; font-family: "JetBrains Mono", monospace;
+  font-size: 10px; font-family: "Geist Mono", monospace;
   letter-spacing: 0.08em; text-transform: uppercase; font-weight: 500;
 }
 .tag.model { background: color-mix(in oklab, var(--accent) 20%, transparent); color: var(--accent); }
@@ -293,7 +299,7 @@ table.ledger thead th {
   border-bottom: 1px solid var(--rule-strong);
 }
 table.ledger td.num {
-  font-family: "JetBrains Mono", monospace;
+  font-family: "Geist Mono", monospace;
   font-variant-numeric: tabular-nums; text-align: right;
 }
 table.ledger tbody tr {
@@ -400,7 +406,7 @@ button[aria-label="Expand sidebar"] svg {
 [data-testid="stSidebarCollapsedControl"]::after,
 button[aria-label="Expand sidebar"]::after {
   content: "Open Settings/Tools" !important;
-  font-family: "Inter", -apple-system, sans-serif !important;
+  font-family: "Open Sauce One", "Inter", -apple-system, sans-serif !important;
   font-size: 13px !important;
   font-weight: 600 !important;
   letter-spacing: 0.02em !important;
@@ -449,12 +455,12 @@ button[kind="headerDeploy"] { display: none !important; }
 }
 .news-head .news-title{display:flex; align-items:center; gap:14px}
 .news-head .news-title .h1{
-  font-family:"Fraunces", serif; font-weight:500; font-size:34px;
+  font-family:"Open Sauce One", "Inter", sans-serif; font-weight:500; font-size:34px;
   margin:0; padding:0; letter-spacing:-0.02em; color:var(--ink);
   line-height:1.05;
 }
 .news-head .news-title .count-pill{
-  font-family:"JetBrains Mono", monospace; font-size:10.5px;
+  font-family:"Geist Mono", monospace; font-size:10.5px;
   letter-spacing:0.16em; text-transform:uppercase;
   color: var(--accent); background: color-mix(in oklab, var(--accent) 12%, transparent);
   border:1px solid color-mix(in oklab, var(--accent) 40%, transparent);
@@ -467,7 +473,7 @@ button[kind="headerDeploy"] { display: none !important; }
 }
 .news-head .news-filters{display:flex; gap:6px; flex-wrap:wrap;}
 .news-head .chip-filter{
-  font-family:"JetBrains Mono", monospace; font-size:10.5px;
+  font-family:"Geist Mono", monospace; font-size:10.5px;
   letter-spacing:0.08em; text-transform:uppercase;
   color: var(--muted); background: var(--chip);
   border:1px solid var(--rule); border-radius:8px;
@@ -486,11 +492,11 @@ button[kind="headerDeploy"] { display: none !important; }
 }
 .board-hero-head .board-title{display:flex; align-items:center; gap:12px}
 .board-hero-head .board-title .h1{
-  font-family:"Fraunces", serif; font-weight:500; font-size:26px;
+  font-family:"Open Sauce One", "Inter", sans-serif; font-weight:500; font-size:26px;
   margin:0; padding:0; letter-spacing:-0.015em; color:var(--ink);
 }
 .board-hero-head .board-title .board-count{
-  font-family:"JetBrains Mono", monospace; font-size:10.5px;
+  font-family:"Geist Mono", monospace; font-size:10.5px;
   letter-spacing:0.16em; text-transform:uppercase;
   color: var(--ink-dim); background: var(--chip);
   border:1px solid var(--rule-strong);
@@ -498,7 +504,7 @@ button[kind="headerDeploy"] { display: none !important; }
 }
 .board-hero-head .board-title .board-count b{color: var(--accent); font-weight:600;}
 .board-hero-head .sort-select{
-  font-family:"JetBrains Mono", monospace; font-size:11px;
+  font-family:"Geist Mono", monospace; font-size:11px;
   letter-spacing:0.06em; color: var(--ink-dim); background: var(--card);
   border:1px solid var(--rule); border-radius:8px;
   padding:7px 32px 7px 11px; cursor:pointer; appearance:none;
@@ -519,7 +525,7 @@ button[kind="headerDeploy"] { display: none !important; }
   transition: border-color 200ms, transform 200ms;
   min-height:150px;
   isolation:isolate;
-  background: linear-gradient(135deg, var(--c1, #131F35) 0%, var(--c2, #0a1220) 100%);
+  background: linear-gradient(135deg, var(--c1, #171B24) 0%, var(--c2, #0B0D12) 100%);
 }
 .news-tile:hover{border-color: var(--rule-strong); transform: translateY(-2px);}
 .news-tile .portrait{
@@ -540,16 +546,16 @@ button[kind="headerDeploy"] { display: none !important; }
 .news-tile .scrim-left{
   position:absolute; inset:0; z-index:0;
   background: linear-gradient(90deg,
-    color-mix(in oklab, var(--c1, #0a1220) 92%, transparent) 0%,
-    color-mix(in oklab, var(--c1, #0a1220) 80%, transparent) 20%,
-    color-mix(in oklab, var(--c1, #0a1220) 50%, transparent) 40%,
+    color-mix(in oklab, var(--c1, #0B0D12) 92%, transparent) 0%,
+    color-mix(in oklab, var(--c1, #0B0D12) 80%, transparent) 20%,
+    color-mix(in oklab, var(--c1, #0B0D12) 50%, transparent) 40%,
     transparent 70%);
 }
 .news-tile.featured .scrim-left{
   background: linear-gradient(90deg,
-    color-mix(in oklab, var(--c1, #0a1220) 92%, transparent) 0%,
-    color-mix(in oklab, var(--c1, #0a1220) 82%, transparent) 25%,
-    color-mix(in oklab, var(--c1, #0a1220) 55%, transparent) 50%,
+    color-mix(in oklab, var(--c1, #0B0D12) 92%, transparent) 0%,
+    color-mix(in oklab, var(--c1, #0B0D12) 82%, transparent) 25%,
+    color-mix(in oklab, var(--c1, #0B0D12) 55%, transparent) 50%,
     transparent 80%);
 }
 .news-tile .scrim-bottom{
@@ -570,7 +576,7 @@ button[kind="headerDeploy"] { display: none !important; }
 .news-tile .team-logos img{width:92px; height:92px; object-fit:contain;}
 .news-tile .team-logos.league img{width:120px; height:120px; opacity:.85;}
 .news-tile .team-logos .vs{
-  font-family:"Fraunces", serif; font-style:italic;
+  font-family:"Open Sauce One", "Inter", sans-serif; font-style:normal;
   font-size:22px; color: rgba(255,255,255,.4);
 }
 .news-tile .body{
@@ -585,14 +591,14 @@ button[kind="headerDeploy"] { display: none !important; }
    table's matchup-cell; promoted so news tiles can use them too. */
 .team-chip{
   display:inline-block; padding:2px 7px; border-radius:4px;
-  font-family:"JetBrains Mono", monospace; font-size:10px; font-weight:700;
+  font-family:"Geist Mono", monospace; font-size:10px; font-weight:700;
   color:#fff; background: var(--team-color, #334);
   letter-spacing:0.04em; box-shadow: 0 2px 6px rgba(0,0,0,.4);
 }
 .team-chip.light{color:#002D62}
 .team-line{
   display:flex; align-items:center; gap:8px;
-  color:#dbe3f1; font-size:12.5px;
+  color:#DDE1E8; font-size:12.5px;
 }
 
 /* Featured tile 4-cell line-movement matrix (spec §7). */
@@ -603,39 +609,39 @@ button[kind="headerDeploy"] { display: none !important; }
   max-width:100%;
 }
 .news-tile.featured .matrix .cell{
-  background: rgba(10,18,32,.6);
+  background: rgba(11,13,18,.6);
   border:1px solid rgba(255,255,255,.08);
   border-radius:8px; padding:8px 10px;
   backdrop-filter: blur(10px);
 }
 .news-tile.featured .matrix .k{
-  font-family:"JetBrains Mono", monospace; font-size:9px;
-  letter-spacing:0.16em; text-transform:uppercase; color:#8fa0c2;
+  font-family:"Geist Mono", monospace; font-size:9px;
+  letter-spacing:0.16em; text-transform:uppercase; color:#959DAB;
 }
 .news-tile.featured .matrix .v{
-  font-family:"JetBrains Mono", monospace; font-size:13.5px; color:#fff;
+  font-family:"Geist Mono", monospace; font-size:13.5px; color:#fff;
   font-variant-numeric: tabular-nums; margin-top:2px; letter-spacing:-0.01em;
 }
-.news-tile.featured .matrix .v.good{color:#67f0c7}
-.news-tile.featured .matrix .v.bad{color:#ff8aad}
+.news-tile.featured .matrix .v.good{color:#6FE0BB}
+.news-tile.featured .matrix .v.bad{color:#F58BA0}
 .news-tile.featured .matrix .v.accent{color:var(--accent)}
 
 .news-tile .sev{
   display:inline-flex; align-items:center; gap:7px;
   padding:4px 10px; border-radius:999px;
-  font-family:"JetBrains Mono", monospace; font-size:9.5px;
+  font-family:"Geist Mono", monospace; font-size:9.5px;
   letter-spacing:0.18em; text-transform:uppercase; font-weight:600;
   white-space:nowrap; backdrop-filter: blur(8px);
 }
-.news-tile .sev.out{background: rgba(255,68,119,.2); color:#ff8aad; border:1px solid rgba(255,68,119,.5);}
-.news-tile .sev.gtd{background: rgba(255,184,77,.2); color:#ffd08a; border:1px solid rgba(255,184,77,.5);}
-.news-tile .sev.weather{background: rgba(90,183,255,.2); color:#a8d4ff; border:1px solid rgba(90,183,255,.5);}
-.news-tile .sev.line{background: rgba(16,224,161,.2); color:#67f0c7; border:1px solid rgba(16,224,161,.5);}
+.news-tile .sev.out{background: rgba(255,68,119,.2); color:#F58BA0; border:1px solid rgba(255,68,119,.5);}
+.news-tile .sev.gtd{background: rgba(255,184,77,.2); color:#F8C56B; border:1px solid rgba(255,184,77,.5);}
+.news-tile .sev.weather{background: rgba(90,183,255,.2); color:#9DB9FD; border:1px solid rgba(90,183,255,.5);}
+.news-tile .sev.line{background: rgba(40,204,149,.2); color:#6FE0BB; border:1px solid rgba(40,204,149,.5);}
 .news-tile .sev.news{background: rgba(255,255,255,.12); color: var(--ink-dim); border:1px solid rgba(255,255,255,.2);}
 .news-tile .ts{
-  font-family:"JetBrains Mono", monospace; font-size:10px;
-  color:#cbd6ea; letter-spacing:0.08em;
-  background: rgba(10,18,32,.55); padding:2px 8px; border-radius:4px;
+  font-family:"Geist Mono", monospace; font-size:10px;
+  color:#CDD2DA; letter-spacing:0.08em;
+  background: rgba(11,13,18,.55); padding:2px 8px; border-radius:4px;
   backdrop-filter: blur(8px);
 }
 .news-tile .text-col{max-width:52%; display:flex; flex-direction:column; gap:10px; flex:1; min-height:0;}
@@ -646,7 +652,7 @@ button[kind="headerDeploy"] { display: none !important; }
    renderer wraps real <h3> tags in stHeadingWithActionElements and adds anchor
    icons + extra padding. The headline shows as a styled div instead. */
 .news-tile .h3{
-  font-family:"Fraunces", serif; font-weight:500;
+  font-family:"Open Sauce One", "Inter", sans-serif; font-weight:500;
   letter-spacing:-0.01em; color:#fff;
   margin:0; padding:0; line-height:1.18;
   text-shadow: 0 2px 12px rgba(0,0,0,.6);
@@ -661,7 +667,7 @@ button[kind="headerDeploy"] { display: none !important; }
 }
 .news-tile.wide .h3{font-size:17px}
 .news-tile .snippet{
-  color:#dbe3f1; font-size:13.5px; line-height:1.5;
+  color:#DDE1E8; font-size:13.5px; line-height:1.5;
   text-shadow: 0 1px 6px rgba(0,0,0,.5);
   margin:0; padding:0;
 }
@@ -674,8 +680,8 @@ button[kind="headerDeploy"] { display: none !important; }
 .news-tile .foot{
   margin-top:auto; display:flex; gap:12px; flex-wrap:wrap; align-items:center;
   padding-top:8px; border-top:1px solid rgba(255,255,255,.08);
-  font-family:"JetBrains Mono", monospace; font-size:10.5px;
-  color:#aab7d2; letter-spacing:0.06em;
+  font-family:"Geist Mono", monospace; font-size:10.5px;
+  color:#AEB5C1; letter-spacing:0.06em;
 }
 .news-tile .foot .sep{color:var(--muted-dim)}
 .news-tile .foot a{color: var(--accent); text-decoration:none;}
@@ -690,16 +696,16 @@ button[kind="headerDeploy"] { display: none !important; }
   grid-column: span 6; min-height:68px;
   background:
     linear-gradient(90deg,
-      rgba(16,224,161,.14) 0%,
-      rgba(16,224,161,.04) 12%,
-      rgba(10,18,32,.6) 50%,
-      rgba(16,224,161,.04) 88%,
-      rgba(16,224,161,.14) 100%),
+      rgba(40,204,149,.14) 0%,
+      rgba(40,204,149,.04) 12%,
+      rgba(11,13,18,.6) 50%,
+      rgba(40,204,149,.04) 88%,
+      rgba(40,204,149,.14) 100%),
     var(--card-elev);
-  border-color: rgba(16,224,161,.45);
+  border-color: rgba(40,204,149,.45);
   box-shadow:
-    0 0 0 1px rgba(16,224,161,.25),
-    0 0 24px rgba(16,224,161,.18),
+    0 0 0 1px rgba(40,204,149,.25),
+    0 0 24px rgba(40,204,149,.18),
     0 10px 30px rgba(0,0,0,.4);
   position:relative; overflow:hidden;
   display:flex; flex-direction:row; align-items:center; gap:18px;
@@ -717,12 +723,12 @@ button[kind="headerDeploy"] { display: none !important; }
 .news-tile.ticker .portrait, .news-tile.ticker .scrim-left, .news-tile.ticker .scrim-bottom{display:none}
 .ticker-label{
   display:inline-flex; align-items:center; gap:8px;
-  font-family:"JetBrains Mono", monospace; font-size:11.5px;
+  font-family:"Geist Mono", monospace; font-size:11.5px;
   letter-spacing:0.26em; text-transform:uppercase;
   color: var(--accent-ink); background: var(--accent);
   padding:7px 14px 7px 12px; border-radius:6px;
   white-space:nowrap; font-weight:700;
-  box-shadow: 0 0 18px rgba(16,224,161,.55), 0 4px 14px rgba(0,0,0,.4);
+  box-shadow: 0 0 18px rgba(40,204,149,.55), 0 4px 14px rgba(0,0,0,.4);
 }
 .ticker-label .bolt{display:inline-block; font-size:14px; animation: bolt 1.4s ease-in-out infinite;}
 @keyframes bolt{0%,100%{opacity:1; transform:scale(1)} 50%{opacity:.4; transform:scale(.8)}}
@@ -733,17 +739,17 @@ button[kind="headerDeploy"] { display: none !important; }
 .ticker-run{
   display:inline-flex; gap:0; animation: tick 42s linear infinite;
   padding-left:100%;
-  font-family:"JetBrains Mono", monospace; font-size:14.5px; color: var(--ink);
+  font-family:"Geist Mono", monospace; font-size:14.5px; color: var(--ink);
   letter-spacing:0.02em; font-weight:500;
 }
 .ticker-run .item{display:inline-flex; align-items:center; gap:10px; padding:0 22px; position:relative;}
 .ticker-run .item + .item::before{
   content:""; position:absolute; left:0; top:50%;
   transform: translateY(-50%);
-  width:1px; height:18px; background: rgba(16,224,161,.35);
+  width:1px; height:18px; background: rgba(40,204,149,.35);
 }
 .ticker-run .matchup{color:#fff; font-weight:600; letter-spacing:0.06em}
-.ticker-run .up{color: var(--good); font-weight:700; text-shadow: 0 0 10px rgba(16,224,161,.5);}
+.ticker-run .up{color: var(--good); font-weight:700; text-shadow: 0 0 10px rgba(40,204,149,.5);}
 .ticker-run .dn{color: var(--bad); font-weight:700; text-shadow: 0 0 10px rgba(255,68,119,.5);}
 .ticker-run .pm{color: var(--muted)}
 @keyframes tick{from{transform:translateX(0)} to{transform:translateX(-50%)}}
@@ -755,7 +761,7 @@ button[kind="headerDeploy"] { display: none !important; }
 
 /* bottom snapshot strip (spec §14: sits under a "Snapshot" kicker). */
 .section-title{
-  font-family:"JetBrains Mono", monospace; font-size:11px;
+  font-family:"Geist Mono", monospace; font-size:11px;
   letter-spacing:0.18em; text-transform:uppercase; color: var(--muted);
   margin: 30px 0 10px;
 }
@@ -768,8 +774,8 @@ button[kind="headerDeploy"] { display: none !important; }
   border-radius:12px; padding:12px 15px;
   display:flex; justify-content:space-between; align-items:baseline;
 }
-.snap-strip .k{font-family:"JetBrains Mono", monospace; font-size:10px; letter-spacing:0.14em; text-transform:uppercase; color: var(--muted);}
-.snap-strip .v{font-family:"JetBrains Mono", monospace; font-size:16px; color: var(--ink); font-variant-numeric: tabular-nums; letter-spacing:-0.01em;}
+.snap-strip .k{font-family:"Geist Mono", monospace; font-size:10px; letter-spacing:0.14em; text-transform:uppercase; color: var(--muted);}
+.snap-strip .v{font-family:"Geist Mono", monospace; font-size:16px; color: var(--ink); font-variant-numeric: tabular-nums; letter-spacing:-0.01em;}
 .snap-strip .v.accent{color: var(--accent)}
 .snap-strip .v.good{color: var(--good)}
 
@@ -777,11 +783,11 @@ button[kind="headerDeploy"] { display: none !important; }
    Sidebar nav header (added when tabs moved into the sidebar)
    ============================================================ */
 .nav-head .nav-kicker{
-  font-family:"JetBrains Mono", monospace; font-size:10px;
+  font-family:"Geist Mono", monospace; font-size:10px;
   letter-spacing:0.22em; text-transform:uppercase; color:var(--accent);
 }
 .nav-head h3{
-  font-family:"Fraunces", serif; font-weight:500;
+  font-family:"Open Sauce One", "Inter", sans-serif; font-weight:500;
   letter-spacing:-0.015em; font-size:19px; color:var(--ink);
 }
 /* Streamlit's radio becomes a vertical nav list — larger hit targets on mobile. */
@@ -798,7 +804,7 @@ button[kind="headerDeploy"] { display: none !important; }
 /* Section kicker for the filter-above-the-board */
 .board-filters-head{margin: 26px 0 6px}
 .section-kicker{
-  font-family:"JetBrains Mono", monospace; font-size:10.5px;
+  font-family:"Geist Mono", monospace; font-size:10.5px;
   letter-spacing:0.22em; text-transform:uppercase; color: var(--muted);
 }
 
@@ -847,7 +853,7 @@ button[kind="headerDeploy"] { display: none !important; }
 /* Header pill that only shows while the script is running. */
 .board-hero-head .refresh-pill{
   display:none; align-items:center; gap:6px;
-  font-family:"JetBrains Mono", monospace; font-size:10px; letter-spacing:0.14em; text-transform:uppercase;
+  font-family:"Geist Mono", monospace; font-size:10px; letter-spacing:0.14em; text-transform:uppercase;
   color: var(--accent); padding:4px 10px; border-radius:999px;
   border:1px solid color-mix(in oklab, var(--accent) 45%, transparent);
   background: color-mix(in oklab, var(--accent) 10%, transparent);
@@ -870,7 +876,7 @@ table.board-table{
 }
 table.board-table thead th{
   background: var(--card-elev);
-  color: var(--muted); font-family:"JetBrains Mono", monospace;
+  color: var(--muted); font-family:"Geist Mono", monospace;
   font-size:10px; letter-spacing:0.14em; text-transform:uppercase; font-weight:600;
   padding:12px 14px; text-align:left;
   border-bottom:1px solid var(--rule-strong);
@@ -885,7 +891,7 @@ table.board-table tbody tr:hover{background: color-mix(in oklab, var(--accent) 5
 table.board-table tbody tr:last-child td{border-bottom:none;}
 table.board-table tbody tr.row-divider td{
   background: var(--surface); padding:8px 14px;
-  font-family:"JetBrains Mono", monospace; font-size:10px;
+  font-family:"Geist Mono", monospace; font-size:10px;
   letter-spacing:0.16em; text-transform:uppercase; color: var(--muted);
   border-bottom:1px solid var(--rule-strong);
 }
@@ -903,7 +909,7 @@ table.board-table tbody tr.row-divider.divider-neutral td{
 }
 /* Auto-log confirmation caption (where the one-click expander used to live) */
 .auto-log-caption{
-  font-family:"JetBrains Mono", monospace; font-size:11px;
+  font-family:"Geist Mono", monospace; font-size:11px;
   letter-spacing:0.12em; text-transform:uppercase; color: var(--accent);
   margin: 10px 0 2px; padding: 6px 12px;
   display:inline-flex; align-items:center; gap:7px;
@@ -913,17 +919,17 @@ table.board-table tbody tr.row-divider.divider-neutral td{
 }
 .auto-log-caption .check{color: var(--good);}
 table.board-table .rank-cell{
-  font-family:"JetBrains Mono", monospace; color: var(--muted-dim);
+  font-family:"Geist Mono", monospace; color: var(--muted-dim);
   font-size:11px; width:36px;
 }
 table.board-table .tier-cell{width:52px;}
 .tier-badge{
   display:inline-flex; align-items:center; justify-content:center;
   width:22px; height:22px; border-radius:6px;
-  font-family:"JetBrains Mono", monospace; font-size:11px; font-weight:700;
+  font-family:"Geist Mono", monospace; font-size:11px; font-weight:700;
   line-height:1;
 }
-.tier-badge.a{background: rgba(16,224,161,.2); color: var(--accent); border:1px solid rgba(16,224,161,.5);}
+.tier-badge.a{background: rgba(40,204,149,.2); color: var(--accent); border:1px solid rgba(40,204,149,.5);}
 .tier-badge.b{background: rgba(90,183,255,.15); color: var(--info); border:1px solid rgba(90,183,255,.4);}
 .tier-badge.c{background: rgba(255,184,77,.15); color: var(--warn); border:1px solid rgba(255,184,77,.4);}
 .tier-badge.w{background: var(--chip); color: var(--muted); border:1px solid var(--rule-strong);}
@@ -931,37 +937,37 @@ table.board-table .tier-cell{width:52px;}
 .matchup-cell .chip-row{display:flex; align-items:center; gap:7px; flex-wrap:wrap;}
 .matchup-cell .chip-row .team-chip{
   display:inline-block; padding:2px 7px; border-radius:4px;
-  font-family:"JetBrains Mono", monospace; font-size:10px; font-weight:700;
+  font-family:"Geist Mono", monospace; font-size:10px; font-weight:700;
   color:#fff; letter-spacing:0.04em;
   background: var(--team-color, var(--rule-strong));
   box-shadow: 0 2px 6px rgba(0,0,0,.3);
 }
 .matchup-cell .chip-row .team-chip.light{color:#002D62;}
-.matchup-cell .chip-row .at{color: var(--muted); font-family:"Fraunces", serif; font-style:italic; font-size:11px;}
+.matchup-cell .chip-row .at{color: var(--muted); font-family:"Open Sauce One", "Inter", sans-serif; font-style:normal; font-size:11px;}
 .matchup-cell .time{
-  font-family:"JetBrains Mono", monospace; font-size:10.5px;
+  font-family:"Geist Mono", monospace; font-size:10.5px;
   color: var(--muted); letter-spacing:0.05em; display:block; margin-top:3px;
 }
 .side-cell{display:flex; flex-direction:column; gap:2px;}
-.side-cell .mkt{font-family:"JetBrains Mono", monospace; font-size:9.5px; letter-spacing:0.14em; text-transform:uppercase; color: var(--muted);}
+.side-cell .mkt{font-family:"Geist Mono", monospace; font-size:9.5px; letter-spacing:0.14em; text-transform:uppercase; color: var(--muted);}
 .side-cell .pick{font-weight:600; color: var(--ink); font-size:13px;}
-.book-cell{font-family:"JetBrains Mono", monospace; font-size:11.5px; color: var(--ink-dim); white-space:nowrap;}
+.book-cell{font-family:"Geist Mono", monospace; font-size:11.5px; color: var(--ink-dim); white-space:nowrap;}
 .book-cell .n{color: var(--accent); font-weight:600;}
-td.num-cell{font-family:"JetBrains Mono", monospace; font-size:13px; font-variant-numeric: tabular-nums; text-align:right; letter-spacing:-0.01em;}
+td.num-cell{font-family:"Geist Mono", monospace; font-size:13px; font-variant-numeric: tabular-nums; text-align:right; letter-spacing:-0.01em;}
 td.num-cell.good{color: var(--good); font-weight:600;}
 td.num-cell.bad{color: var(--bad);}
 td.num-cell.accent{color: var(--accent); font-weight:600;}
 td.num-cell.muted{color: var(--muted);}
 .stake-cell{display:flex; flex-direction:column; align-items:flex-end; gap:1px;}
-.stake-cell .u{font-family:"JetBrains Mono", monospace; font-size:13.5px; color: var(--accent); font-weight:600; font-variant-numeric: tabular-nums;}
-.stake-cell .d{font-family:"JetBrains Mono", monospace; font-size:10.5px; color: var(--muted); font-variant-numeric: tabular-nums;}
+.stake-cell .u{font-family:"Geist Mono", monospace; font-size:13.5px; color: var(--accent); font-weight:600; font-variant-numeric: tabular-nums;}
+.stake-cell .d{font-family:"Geist Mono", monospace; font-size:10.5px; color: var(--muted); font-variant-numeric: tabular-nums;}
 .stake-cell .u.watch{color: var(--muted);}
 .method-tag{
   display:inline-block; padding:2px 8px; border-radius:4px;
-  font-family:"JetBrains Mono", monospace; font-size:9.5px;
+  font-family:"Geist Mono", monospace; font-size:9.5px;
   letter-spacing:0.1em; text-transform:uppercase; font-weight:600;
 }
-.method-tag.model{background: rgba(16,224,161,.15); color: var(--accent);}
+.method-tag.model{background: rgba(40,204,149,.15); color: var(--accent);}
 .method-tag.line{background: rgba(255,184,77,.15); color: var(--warn);}
 .method-tag.sit{background: rgba(90,183,255,.15); color: var(--info);}
 .method-tag.fade{background: rgba(255,68,119,.15); color: var(--bad);}
@@ -1079,7 +1085,7 @@ td.num-cell.muted{color: var(--muted);}
   .board-wrap::before{
     content: "← swipe for price, edge & stake →";
     display: block;
-    font-family: "JetBrains Mono", monospace;
+    font-family: "Geist Mono", monospace;
     font-size: 9.5px; letter-spacing: 0.14em; text-transform: uppercase;
     color: var(--muted);
     padding: 6px 12px 0; text-align: center;
@@ -1186,9 +1192,8 @@ FONT_LINK = (
     '<link rel="preconnect" href="https://fonts.googleapis.com">'
     '<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>'
     '<link href="https://fonts.googleapis.com/css2?'
-    'family=Fraunces:ital,wght@0,400;0,500;1,400&'
     'family=Inter:wght@400;500;600;700&'
-    'family=JetBrains+Mono:wght@400;500;600;700&'
+    'family=Geist+Mono:wght@400;500;600;700&'
     'family=Material+Symbols+Rounded:opsz,wght,FILL,GRAD@24,400,0,0&'
     'display=swap" rel="stylesheet">'
 )
