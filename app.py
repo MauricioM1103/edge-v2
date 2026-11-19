@@ -16,12 +16,20 @@ import importlib
 import sys
 import streamlit as st
 
-# Dev-only: force fresh reimport of local modules so edits land on rerun.
+# Force a fresh import of every local module so new code lands on rerun.
+# A long-lived server (local dev, Streamlit Cloud after a git pull) keeps
+# already-imported modules in memory; any module missing from this list
+# stays at its old version while the code calling it moves on, which
+# surfaces as an AttributeError on a name that only the new version has.
+# Order is leaves first, so a module that does `from x import name` is
+# reloaded after x and picks up the new object.
 for _m in [
-    "ui.style", "ui.layout_c", "ui.loading", "ui.components", "ui.pages",
-    "apis.espn", "apis.odds", "apis.team_mapping",
     "calc.odds", "calc.ev", "calc.kelly", "calc.units", "calc.clv",
-    "storage.picks",
+    "apis.team_mapping", "apis.kalshi", "apis.kalshi_match",
+    "apis.espn", "apis.espn_boxscore", "apis.odds", "apis.discord",
+    "calc.parlay", "calc.capper", "calc.agent",
+    "storage.settings", "storage.picks",
+    "ui.style", "ui.layout_c", "ui.loading", "ui.components", "ui.pages",
 ]:
     if _m in sys.modules:
         try:
