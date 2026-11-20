@@ -1822,13 +1822,31 @@ def render_dashboard(settings: dict):
         from zoneinfo import ZoneInfo as _ZI
         _CT = _ZI("America/Chicago")
         _today_c = picked_date
+        # Late at night every game on today's slate has started, and started
+        # games are no longer priced, which left the Board empty until
+        # midnight. Once nothing on today's slate is still to come, roll
+        # forward and show tomorrow's games as well.
+        _now_roll = datetime.now(_CT)
+        def _og_start(og):
+            try:
+                return datetime.fromisoformat((og.get("commence_time") or "").replace("Z", "+00:00")).astimezone(_CT)
+            except (ValueError, AttributeError):
+                return None
+        _left_today = any(
+            (_st := _og_start(og)) is not None and _st.date() == _today_c and _st > _now_roll
+            for og in odds_games
+        )
+        _roll_forward = bool(is_today and odds_games and not _left_today)
+        st.session_state["_board_rolled_forward"] = _roll_forward
         def _is_today(og):
             commence = og.get("commence_time")
             if not commence:
                 return True  # keep when the API omits a time
             try:
-                dt = datetime.fromisoformat(commence.replace("Z", "+00:00"))
-                return dt.astimezone(_CT).date() == _today_c
+                dt = datetime.fromisoformat(commence.replace("Z", "+00:00")).astimezone(_CT)
+                if dt.date() == _today_c:
+                    return True
+                return _roll_forward and dt.date() == _today_c + timedelta(days=1)
             except (ValueError, AttributeError):
                 return True
         pinnacle_games_by_sport[sp] = [
