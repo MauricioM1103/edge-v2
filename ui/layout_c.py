@@ -252,5 +252,76 @@ section.bento{ margin-top:14px; }
   table.board-table thead th:nth-child(1), table.board-table .rank-cell{ width:30px; padding-left:10px; padding-right:4px; }
   table.board-table thead th, table.board-table tbody td{ padding-left:12px; padding-right:12px; }
 }
+
+/* ---------- pick rows as separated cards ----------
+   Each pick is its own band: white row, a gap in the page tone under it,
+   and a tier-coloured bar down the left edge. The table model is untouched
+   (still collapsed borders), so the phone layout's pinned columns keep
+   working. */
+.board-table-wrap, div:has(> table.board-table){ background: var(--surface); }
+table.board-table tbody tr.pick-row td{
+  background: var(--card);
+  border-bottom: 7px solid var(--surface);
+  border-top: 1px solid var(--rule);
+}
+table.board-table tbody tr.pick-row:nth-child(even){ background: transparent; }
+table.board-table tbody tr.pick-row:hover td{ background: color-mix(in oklab, var(--accent) 4%, var(--card)); }
+table.board-table tbody tr.pick-row td:first-child{ box-shadow: inset 3px 0 0 0 var(--rule-strong); }
+table.board-table tbody tr.pick-row.tier-a td:first-child{ box-shadow: inset 3px 0 0 0 var(--good); }
+table.board-table tbody tr.pick-row.tier-b td:first-child{ box-shadow: inset 3px 0 0 0 var(--info); }
+table.board-table tbody tr.pick-row.tier-c td:first-child{ box-shadow: inset 3px 0 0 0 var(--warn); }
+table.board-table tbody tr.pick-row.watch td{ color: var(--ink-dim); }
+table.board-table tbody tr.pick-row.watch .side-cell .pick{ font-weight:500; }
+
+/* Actionable picks: a glowing border that breathes. The glow strength is a
+   registered custom property animated on the row and inherited by its
+   cells, so every cell pulses in step and the edges read as one border. */
+@property --pick-glow{ syntax:'<percentage>'; inherits:true; initial-value:45%; }
+@keyframes pickPulse{ 0%,100%{ --pick-glow:28%; } 50%{ --pick-glow:95%; } }
+table.board-table tbody tr.pick-row.actionable{ animation: pickPulse 2.6s ease-in-out infinite; }
+table.board-table tbody tr.pick-row.actionable td{
+  --gl: color-mix(in srgb, var(--accent) var(--pick-glow), transparent);
+  --gs: color-mix(in srgb, var(--accent) calc(var(--pick-glow) * .45), transparent);
+  border-top-color: transparent;
+  background: color-mix(in oklab, var(--accent) 3%, var(--card));
+  box-shadow: inset 0 2px 0 0 var(--gl), inset 0 -2px 0 0 var(--gl),
+              inset 0 10px 12px -10px var(--gs), inset 0 -10px 12px -10px var(--gs);
+}
+table.board-table tbody tr.pick-row.actionable td:first-child{
+  box-shadow: inset 4px 0 0 0 var(--gl), inset 0 2px 0 0 var(--gl), inset 0 -2px 0 0 var(--gl),
+              inset 12px 0 12px -10px var(--gs), inset 0 10px 12px -10px var(--gs), inset 0 -10px 12px -10px var(--gs);
+}
+table.board-table tbody tr.pick-row.actionable td:last-child{
+  box-shadow: inset -2px 0 0 0 var(--gl), inset 0 2px 0 0 var(--gl), inset 0 -2px 0 0 var(--gl),
+              inset -12px 0 12px -10px var(--gs), inset 0 10px 12px -10px var(--gs), inset 0 -10px 12px -10px var(--gs);
+}
+/* No prefers-reduced-motion opt-out here on purpose: the owner asked for the
+   pulse and runs Windows with animation effects off, which would hide it.
+   The effect is a slow colour fade with no movement. */
+
+/* "Added during game" stays on one line; on a phone it drops under the
+   team chips instead of wrapping into a blob over the next column. */
+.matchup-cell .chip-row .added-chip{ white-space:nowrap; border-radius:999px; }
+@media (max-width: 899px){
+  .matchup-cell .chip-row{ flex-wrap:wrap !important; row-gap:3px; }
+  .matchup-cell .chip-row .added-chip{ flex-basis:100%; width:max-content; flex-grow:0; margin-left:0 !important; font-size:8.5px !important; }
+  /* Pinned columns: widths must equal the sticky offsets (0 / 28 / 60 px)
+     or a strip of the scrolling cells shows through between them. */
+  table.board-table thead th:nth-child(1), table.board-table tbody td:nth-child(1){ box-sizing:border-box; width:28px; min-width:28px; max-width:28px; }
+  table.board-table thead th:nth-child(2), table.board-table tbody td:nth-child(2){ box-sizing:border-box; width:32px; min-width:32px; max-width:32px; }
+  table.board-table tbody tr.pick-row td{ border-bottom-width:6px; }
+  .topbar-rule{ display:none; }
+  .matchup-cell .chip-row .added-chip{ max-width:max-content; }
+  table.board-table .matchup-cell .time{ white-space:normal; display:block; }
+  table.board-table .matchup-cell .time .chip{ margin-top:3px; }
+}
+
+/* Desktop: a live matchup carries a status line and chips. Let it wrap
+   inside a fixed-width cell so it cannot push the last column out of view. */
+@media (min-width: 900px){
+  table.board-table thead th:nth-child(3), table.board-table tbody td:nth-child(3){ width:210px; max-width:230px; }
+  table.board-table .matchup-cell .chip-row{ flex-wrap:wrap; row-gap:4px; }
+  table.board-table .matchup-cell .time{ white-space:normal; display:block; line-height:1.5; }
+}
 </style>
 """

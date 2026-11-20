@@ -814,43 +814,10 @@ button[kind="headerDeploy"] { display: none !important; }
    ============================================================ */
 /* ===== Refresh state: no dimming, a light travels the Board's border ===== */
 /* Streamlit fades stale elements to ~33% while a rerun is in flight. Keep
-   everything at full strength; the border beam below is the refresh signal. */
+   everything at full strength; the header pill below is the refresh signal. */
 [data-stale="true"], [data-stale="true"] *{opacity:1 !important;}
-/* A glowing comet rides a motion path traced on the Board's own border, so it
-   works at any box size (the full-slate table is thousands of px tall).
-   Motion path is used on purpose: @property registration does not take
-   effect inside Streamlit's injected <style>, so a custom-angle conic
-   animation never runs there. */
-/* The Board is thousands of px tall, so the ring the light travels is the
-   VISIBLE part of the Board: a sticky, zero-height carrier holds a
-   viewport-tall frame that follows the scroll. (.board-wrap uses
-   overflow:clip rather than hidden so sticky still tracks the window.) */
-.board-wrap .beam{
-  position:sticky; top:0; height:0; display:block;
-  opacity:0; pointer-events:none; z-index:5;
-  transition: opacity .25s ease;
-}
-.board-wrap .beam i{
-  position:absolute; left:0; right:0; top:0; height:100vh;
-  border-radius:14px; overflow:hidden; display:block;
-}
-.board-wrap .beam i::before{
-  content:""; position:absolute; top:0; left:0;
-  width:240px; height:4px; border-radius:4px;
-  background: linear-gradient(90deg,
-    transparent 0%,
-    color-mix(in oklab, var(--accent) 55%, transparent) 45%,
-    var(--accent) 80%, #ffffff 100%);
-  box-shadow: 0 0 8px var(--accent), 0 0 22px color-mix(in oklab, var(--accent) 70%, transparent);
-  offset-path: inset(1px round 14px);
-  offset-rotate: auto;
-  offset-distance: 0%;
-}
-.stApp[data-test-script-state="running"] .board-wrap .beam{opacity:1;}
-.stApp[data-test-script-state="running"] .board-wrap .beam i::before{
-  animation: beam-travel 2.6s linear infinite;
-}
-@keyframes beam-travel{to{offset-distance:100%;}}
+/* (The travelling border light was removed; the header pill below and the
+   pulsing actionable rows are the only motion on the Board.) */
 /* Header pill that only shows while the script is running. */
 .board-hero-head .refresh-pill{
   display:none; align-items:center; gap:6px;

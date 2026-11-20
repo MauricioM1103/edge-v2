@@ -152,6 +152,60 @@ def _find_espn_ev(espn_events_by_game: Optional[dict], home_name, away_name) -> 
     return {}
 
 
+#: How far Pinnacle's quote may trail the price being shopped. Before a game
+#: lines drift slowly, so ten minutes is fine. In play they move by the
+#: second, and Pinnacle's feed often trails the shop books by ten minutes or
+#: more: pricing a live +500 against a ten-minute-old +113 "fair" produced
+#: 10-28 point phantom edges that were logged as tier-A picks.
+PRE_GAME_MAX_LAG_S = 600
+#: Kalshi is read live while the odds feed may come from the on-disk cache
+#: (60 minutes by default), so before a game its price is allowed to be
+#: newer than Pinnacle's by up to the cache lifetime plus a margin.
+KALSHI_PRE_GAME_MAX_LAG_S = 75 * 60
+IN_PLAY_MAX_LAG_S = 90
+#: In-play pricing is off. Even quotes whose timestamps agree to the second
+#: were seen carrying pre-game numbers late in a game (Under 5.5 at a 58 %
+#: fair with 51 seconds left and five goals scored), and the odds feed is
+#: cached for up to an hour. Nothing here is fast enough to bet live.
+ALLOW_IN_PLAY = False
+
+
+def _ts(value):
+    """Parse an Odds API timestamp ("2026-11-20T05:06:45Z") to aware UTC."""
+    if not value:
+        return None
+    try:
+        from datetime import datetime, timezone
+        if isinstance(value, datetime):
+            return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+        d = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        return d if d.tzinfo else d.replace(tzinfo=timezone.utc)
+    except (ValueError, TypeError):
+        return None
+
+
+def _market_updated(book: dict, market: dict):
+    return _ts((market or {}).get("last_update") or (book or {}).get("last_update"))
+
+
+def _sharp_is_fresh(sharp_updated, quote_updated, commence_time, pre_game_max_lag_s: int = PRE_GAME_MAX_LAG_S) -> bool:
+    """True when the sharp quote is recent enough to price `quote` against.
+
+    quote_updated is when the price being shopped was last refreshed (for a
+    Kalshi price read just now, pass the current time). Missing timestamps
+    cannot be judged and are allowed, so hand-built test games still scan.
+    """
+    sharp, quote = _ts(sharp_updated), _ts(quote_updated)
+    if sharp is None or quote is None:
+        return True
+    lag = (quote - sharp).total_seconds()
+    start = _ts(commence_time)
+    in_play = start is not None and quote >= start
+    if in_play:
+        return ALLOW_IN_PLAY and abs(lag) <= IN_PLAY_MAX_LAG_S
+    return lag <= pre_game_max_lag_s
+
+
 def _side_of(name, home, away, loose=None) -> Optional[str]:
     """Which side of a game an outcome name refers to: "home", "away" or None.
 
@@ -536,9 +590,10 @@ def scan_kalshi_vs_pinnacle(
             pin_by_key[(canonical(home), canonical(away))] = g
 
     def _book_h2h_prices(game, book_name_or_key):
-        """Return (home_price, away_price, draw_price) for one book in h2h."""
+        """Return (home_price, away_price, draw_price, updated) for one book in h2h."""
         target = book_name_or_key.lower()
         hp = ap = dp = None
+        updated = None
         for b in (game.get("bookmakers") or []):
             bk = (b.get("key") or "").lower()
             bt = (b.get("title") or "").lower()
@@ -547,6 +602,7 @@ def scan_kalshi_vs_pinnacle(
             for m in (b.get("markets") or []):
                 if m.get("key") != "h2h":
                     continue
+                updated = _market_updated(b, m)
                 for o in (m.get("outcomes") or []):
                     price = o.get("price")
                     try:
@@ -564,7 +620,7 @@ def scan_kalshi_vs_pinnacle(
                     elif which == "away":
                         ap = price
             break
-        return hp, ap, dp
+        return hp, ap, dp, updated
 
     for (home_name, away_name), markets in kalshi_markets_by_game.items():
         if not markets:
@@ -575,7 +631,8 @@ def scan_kalshi_vs_pinnacle(
             if not pin_game:
                 continue
         # Pinnacle fair prob.
-        pin_h, pin_a, pin_d = _book_h2h_prices(pin_game, "Pinnacle")
+        pin_h, pin_a, pin_d, pin_updated = _book_h2h_prices(pin_game, "Pinnacle")
+        _commence = pin_game.get("commence_time")
         if pin_h is None or pin_a is None:
             continue
         fair_draw = None
@@ -622,7 +679,8 @@ def scan_kalshi_vs_pinnacle(
                         hp = price
                     elif which == "away":
                         ap = price
-                shop_prices[btitle] = {"home": hp, "away": ap, "draw": dp}
+                if _sharp_is_fresh(pin_updated, _market_updated(b, m), _commence):
+                    shop_prices[btitle] = {"home": hp, "away": ap, "draw": dp}
 
         # Build per-outcome candidate list: (book, american_price, implied_prob, kalshi_ticker_or_None)
         # One iteration per Kalshi market (yes side); fair prob derived from side.
@@ -658,6 +716,10 @@ def scan_kalshi_vs_pinnacle(
             kalshi_price_american = None
             kalshi_implied = None
             kalshi_ticker = market.get("ticker") or ""
+            # Kalshi's price is live as of this scan, so Pinnacle has to be too.
+            from datetime import datetime as _dt, timezone as _tz
+            if not _sharp_is_fresh(pin_updated, _dt.now(_tz.utc), _commence, KALSHI_PRE_GAME_MAX_LAG_S):
+                yes_prob = None
             if yes_prob is not None and 0 < yes_prob < 1:
                 try:
                     kalshi_price_american = decimal_to_american(1.0 / yes_prob)
@@ -863,6 +925,7 @@ def scan_offshore_markets_vs_pinnacle(
                 hp = ap = dp = None
                 hpt = apt = None
                 hlabel = alabel = None
+                _updated = _market_updated(b, m)
                 for o in (m.get("outcomes") or []):
                     price = o.get("price")
                     point = o.get("point")
@@ -900,6 +963,7 @@ def scan_offshore_markets_vs_pinnacle(
                         "home_pt": hpt, "away_pt": apt,
                         "home_label": hlabel or "home",
                         "away_label": alabel or "away",
+                        "updated": _updated,
                     }
         return out
 
@@ -966,6 +1030,8 @@ def scan_offshore_markets_vs_pinnacle(
                         continue
                     price = data.get(side_key)
                     if price is None:
+                        continue
+                    if not _sharp_is_fresh(pin_entry.get("updated"), data.get("updated"), g.get("commence_time")):
                         continue
                     # A spread or total is only the same bet at the same
                     # number. Books split on which side of a puck line or
@@ -1258,7 +1324,9 @@ def scan_player_props_vs_pinnacle(
                             pt = float(o.get("point"))
                         except (TypeError, ValueError):
                             continue
-                        lines.setdefault((player, pt), {}).setdefault(btitle, {})[side] = price
+                        _slot = lines.setdefault((player, pt), {}).setdefault(btitle, {})
+                        _slot[side] = price
+                        _slot["updated"] = _market_updated(b, m)
             for (player, pt), by_book in lines.items():
                 if not _is_half(pt):
                     continue  # whole-number lines carry push risk; skip like totals
@@ -1314,6 +1382,16 @@ def scan_player_props_vs_pinnacle(
                         price = d.get(side)
                         if price is None:
                             continue
+                        # Pinnacle fair must be current; a consensus fair has no
+                        # single timestamp, so it is only trusted before the game.
+                        _q = d.get("updated")
+                        if fair_source.startswith("Pinnacle"):
+                            if not _sharp_is_fresh((pin or {}).get("updated"), _q, g.get("commence_time")):
+                                continue
+                        else:
+                            _start = _ts(g.get("commence_time"))
+                            if _start is not None and _q is not None and _q >= _start:
+                                continue
                         imp = implied_prob_american(price)
                         if imp is None:
                             continue

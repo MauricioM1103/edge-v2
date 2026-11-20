@@ -2665,14 +2665,15 @@ def _render_agent_panel(odds_games, kalshi_cash, settings,
         stake_detail = f"${stake_d:,.2f}" if stake_u > 0 else "watch"
         stake_value = f"{stake_u:.1f}u" if stake_u > 0 else "—"
         live_chip = (
-            '<span class="chip" style="padding:1px 7px; margin-left:6px; '
+            '<span class="chip added-chip" style="padding:1px 7px; margin-left:6px; '
             'font-size:9.5px; font-weight:600; color:var(--accent); '
             'border:1px solid color-mix(in oklab, var(--accent) 40%, transparent);">'
             'ADDED DURING GAME</span>'
             if is_live_pick else ""
         )
+        row_state = "settled" if is_settled else ("actionable" if edge_val > 0 else "watch")
         return (
-            '<tr>'
+            f'<tr class="pick-row {row_state} tier-{tier}">'
             f'<td class="rank-cell">{rank or ""}</td>'
             f'<td class="tier-cell"><span class="tier-badge {tier}">{tier.upper()}</span></td>'
             f'<td class="matchup-cell">'
@@ -2848,7 +2849,7 @@ def _render_agent_panel(odds_games, kalshi_cash, settings,
         st.session_state["board_sort_mode"] = _new_sort
         st.rerun()
     html(
-        '<div class="board-wrap"><div class="beam"><i></i></div>'
+        '<div class="board-wrap">'
         '<table class="board-table">'
         + header
         + f'<tbody>{_render_rows(top, watch_total=_watch_total)}</tbody>'
@@ -3828,8 +3829,11 @@ def render_picks(settings: dict):
             # Today auto-expands; older days stay collapsed for scan-ability.
             with st.expander(f"{pretty} · {day['count']} picks · {record} · {day['net_units']:+.2f}u",
                              expanded=is_today_slate):
-                # Full table of the day's picks.
-                html(
+                # Full table of the day's picks. Built as ONE html block: emitting
+                # the header and each row as separate blocks made the browser close
+                # the table after the header, so rows no longer lined up with it.
+                _tbl = []
+                _tbl.append(
                     '<table class="ledger" style="margin-top:4px;">'
                     '<thead><tr>'
                     '<th>Logged</th><th>Src</th><th>Sport</th><th>Match-up</th><th>Market</th>'
@@ -3863,7 +3867,7 @@ def render_picks(settings: dict):
                         f'<span class="num mono {net_class}">{net_u:+.2f}u</span>'
                         if status in ("win","loss") else '<span style="color:var(--muted);">—</span>'
                     )
-                    html(f"""
+                    _tbl.append(f"""
                     <tr>
                       <td class="mono" style="font-size:11px; color:var(--muted);">{(p.get('created_at') or '')[11:16]}</td>
                       <td>{src_chip}</td>
@@ -3880,11 +3884,12 @@ def render_picks(settings: dict):
                       <td class="num mono">{clv_s}</td>
                     </tr>
                     """)
-                html("</tbody></table>")
+                html("".join(_tbl) + "</tbody></table>")
 
     # ----- Flat all-picks table (secondary, for raw lookup) -----
     with st.expander(f"🔎 Flat all-picks table ({len(rows)} rows)", expanded=False):
-        html("""
+        _flat = []
+        _flat.append("""
     <table class="ledger">
       <thead>
         <tr>
@@ -3915,7 +3920,7 @@ def render_picks(settings: dict):
                 if src == "agent-auto" else
                 '<span class="chip" style="padding:1px 7px; font-size:9.5px;">MANUAL</span>'
             )
-            html(f"""
+            _flat.append(f"""
         <tr>
           <td class="mono" style="font-size:11px; color:var(--muted);">{p.get('pick_date') or '—'}</td>
           <td class="mono" style="font-size:11px; color:var(--muted);">{(p.get('created_at') or '')[11:16]}</td>
@@ -3934,7 +3939,7 @@ def render_picks(settings: dict):
           <td class="num mono">{clv_s}</td>
         </tr>
         """)
-        html("</tbody></table>")
+        html("".join(_flat) + "</tbody></table>")
 
     with st.expander("Pick notes & manual actions"):
         for p in sorted(rows, key=lambda x: x.get("created_at") or "", reverse=True):
@@ -4268,8 +4273,28 @@ def render_performance(settings: dict):
         df = _pd.DataFrame(rows)
         if len(df) > 1:
             st.markdown("### Equity curve")
-            # Use the row index for x-axis so uneven timestamps don't warp the chart.
-            st.line_chart(df["equity"], height=260)
+            # Row index on the x-axis so uneven timestamps don't warp the chart.
+            # The y-axis is zoomed to the range the bankroll actually moved in:
+            # starting from zero flattened a $500 -> $476 run into a straight line.
+            try:
+                import altair as _alt
+                _eq = df[["equity"]].reset_index(drop=True)
+                _eq["pick"] = range(len(_eq))
+                _lo, _hi = float(_eq["equity"].min()), float(_eq["equity"].max())
+                _pad = max((_hi - _lo) * 0.25, _hi * 0.01, 1.0)
+                _y = _alt.Y("equity:Q", title="Bankroll ($)",
+                            scale=_alt.Scale(domain=[_lo - _pad, _hi + _pad], nice=False))
+                _x = _alt.X("pick:Q", title="Settled picks", axis=_alt.Axis(tickMinStep=1))
+                _base = _alt.Chart(_eq)
+                _chart = (
+                    _base.mark_area(opacity=0.10, color="#0A8F63").encode(x=_x, y=_y, y2=_alt.datum(_lo - _pad))
+                    + _base.mark_line(color="#0A8F63", strokeWidth=2.2).encode(x=_x, y=_y)
+                    + _alt.Chart(_pd.DataFrame({"y": [float(_eq["equity"].iloc[0])]}))
+                        .mark_rule(color="#9AA1AD", strokeDash=[4, 4]).encode(y="y:Q")
+                ).properties(height=280)
+                st.altair_chart(_chart, use_container_width=True)
+            except Exception:
+                st.line_chart(df["equity"], height=260)
     except ImportError:
         pass
 

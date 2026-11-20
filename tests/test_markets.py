@@ -269,6 +269,31 @@ def test_edge_audit_fixes():
           and kalshi_api.market_yes_ask_prob({"yes_bid_dollars": "0.40"}) is None)
 
 
+def test_stale_sharp_quote():
+    """In-play, Pinnacle's feed trails the shop books; a stale fair is not an edge."""
+    print("== stale sharp quotes")
+    from calc import agent as agent_calc
+    def game(pin_at, shop_at, commence):
+        def bk(title, at, hp, ap):
+            return {"title": title, "markets": [{"key": "h2h", "last_update": at, "outcomes": [
+                {"name": "Vegas Golden Knights", "price": hp}, {"name": "Dallas Stars", "price": ap}]}]}
+        return {"id": "g", "home_team": "Vegas Golden Knights", "away_team": "Dallas Stars",
+                "commence_time": commence,
+                "bookmakers": [bk("Pinnacle", pin_at, -132, 113), bk("Bovada", shop_at, -900, 500)]}
+    def scan(g):
+        return agent_calc.scan_offshore_markets_vs_pinnacle(
+            [g], 500.0, sport_key="nhl", markets=["h2h"], shop_books=["Bovada"], min_edge_pct=0.02)
+    live_stale = game("2026-11-20T05:06:45Z", "2026-11-20T05:17:34Z", "2026-11-20T03:08:35Z")
+    check("in-play: an 11-minute-old Pinnacle line prices nothing", scan(live_stale) == [], str(len(scan(live_stale))))
+    live_fresh = game("2026-11-20T05:17:00Z", "2026-11-20T05:17:34Z", "2026-11-20T03:08:35Z")
+    check("in-play: even a 34-second-old line prices nothing (live pricing is off)", scan(live_fresh) == [])
+    pre = game("2026-11-19T20:00:00Z", "2026-11-19T20:06:00Z", "2026-11-20T03:08:35Z")
+    check("pre-game: a 6-minute lag is fine", len(scan(pre)) == 1)
+    pre_old = game("2026-11-19T19:00:00Z", "2026-11-19T20:06:00Z", "2026-11-20T03:08:35Z")
+    check("pre-game: an hour-old Pinnacle line prices nothing", scan(pre_old) == [])
+    check("missing timestamps are not judged", agent_calc._sharp_is_fresh(None, None, "2026-11-20T03:08:35Z"))
+
+
 if __name__ == "__main__":
     test_math_and_names()
     test_matching()
@@ -277,5 +302,6 @@ if __name__ == "__main__":
     test_settlement()
     test_ledger_safety()
     test_edge_audit_fixes()
+    test_stale_sharp_quote()
     print(f"\n{'ALL PASS' if FAILS == 0 else f'{FAILS} FAILED'}")
     sys.exit(1 if FAILS else 0)
