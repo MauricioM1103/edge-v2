@@ -342,7 +342,7 @@ def group_by_date(picks: Optional[List[dict]] = None, path: Optional[str] = None
         for p in items:
             try:
                 risk_u = float(p.get("risk_units") or 0)
-                win_u = float(p.get("win_units") or 0)
+                win_u = win_units_of(p)
             except (TypeError, ValueError):
                 continue
             status = p.get("status") or "open"
@@ -505,6 +505,47 @@ def collapse_duplicate_sides(path: Optional[str] = None) -> int:
 #: that is still scanned, still shown on the Board, just not recorded, so the
 #: ledger is a working record of the agent's strongest signals.
 TIER_A_EDGE = 0.020
+
+
+def win_units_of(pick: dict) -> float:
+    """Units a pick pays if it wins.
+
+    Uses the stored win_units when there is one; otherwise works it out from
+    the stake and the price. Agent picks were logged with win_units empty,
+    and every total read that blank as zero, so a winning agent pick added
+    nothing to net units, ROI or the bankroll curve while a losing one still
+    subtracted its full stake.
+    """
+    try:
+        stored = float(pick.get("win_units") or 0)
+    except (TypeError, ValueError):
+        stored = 0.0
+    if stored > 0:
+        return stored
+    try:
+        risk = float(pick.get("risk_units") or 0)
+    except (TypeError, ValueError):
+        risk = 0.0
+    if risk <= 0:
+        return 0.0
+    from calc.odds import american_to_decimal
+    dec = american_to_decimal(pick.get("price_american"))
+    if not dec or dec <= 1.0:
+        return 0.0
+    return risk * (dec - 1.0)
+
+
+def net_units_of(pick: dict) -> float:
+    """Profit or loss in units for a settled pick; 0 for open, push or void."""
+    status = pick.get("status") or "open"
+    if status == "win":
+        return win_units_of(pick)
+    if status == "loss":
+        try:
+            return -float(pick.get("risk_units") or 0)
+        except (TypeError, ValueError):
+            return 0.0
+    return 0.0
 
 
 def _edge_from_pick(pick: dict) -> float:
@@ -1300,7 +1341,7 @@ def summarize(picks) -> dict:
     for p in picks or []:
         status = p.get("status") or "open"
         risk = float(p.get("risk_units") or 0)
-        win_u = float(p.get("win_units") or 0)
+        win_u = win_units_of(p)
         if status == "open":
             open_count += 1
             continue

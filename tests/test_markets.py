@@ -364,6 +364,62 @@ def test_kalshi_event_must_be_this_game():
           str([(r["book"], r.get("kalshi_price_cents"), round(r["fair_prob"], 3)) for r in hou]))
 
 
+def test_wins_pay_out():
+    """A winning pick with a blank win_units must still count its profit."""
+    print("== ledger: wins pay out")
+    win = {"status": "win", "risk_units": 2.2, "win_units": None, "price_american": 150}
+    loss = {"status": "loss", "risk_units": 1.04, "win_units": None, "price_american": 110}
+    check("blank win_units is worked out from stake and price (2.2u at 2.50 pays 3.30u)",
+          abs(picks_store.win_units_of(win) - 3.30) < 1e-9, str(picks_store.win_units_of(win)))
+    check("a stored win_units is kept", picks_store.win_units_of(dict(win, win_units=1.0)) == 1.0)
+    check("favourite: 1u at -200 pays 0.5u",
+          abs(picks_store.win_units_of({"risk_units": 1, "price_american": -200}) - 0.5) < 1e-9)
+    check("no stake pays nothing", picks_store.win_units_of({"price_american": 150}) == 0.0)
+    s = picks_store.summarize([win, loss])
+    check("summary net = +3.30 - 1.04", abs(s["net_units"] - 2.26) < 1e-6, str(s["net_units"]))
+    check("summary ROI = 2.26 / 3.24", abs(s["roi"] - 2.26 / 3.24) < 1e-6, str(s["roi"]))
+    check("net_units_of: win, loss, open",
+          abs(picks_store.net_units_of(win) - 3.30) < 1e-9 and picks_store.net_units_of(loss) == -1.04
+          and picks_store.net_units_of({"status": "open", "risk_units": 5}) == 0.0)
+
+
+def test_stale_odds_fallback_is_bounded_and_reported():
+    """A failed fetch may use a recent saved copy, never an old one, and says so."""
+    print("== odds: failed fetch")
+    import tempfile, time as _t
+    from urllib.error import URLError
+    from apis import odds as odds_api
+    keep = (odds_api._CACHE_DIR, odds_api.urlopen, odds_api.get_api_key, dict(odds_api.FETCH_PROBLEMS))
+    tmp = tempfile.mkdtemp(prefix="edge_cache_")
+    def boom(*a, **k):
+        raise URLError("down")
+    try:
+        odds_api._CACHE_DIR = tmp
+        odds_api.urlopen = boom
+        odds_api.get_api_key = lambda: "test"
+        odds_api.FETCH_PROBLEMS.clear()
+        path, params = "/sports/basketball_nba/odds", {"regions": "us"}
+        from urllib.parse import urlencode
+        url_key = f"{odds_api.ODDS_BASE}{path}?{urlencode(params)}"
+        odds_api._cache_write(url_key, [{"id": "g1"}])
+        f = odds_api._cache_key(url_key)
+        os.utime(f, (_t.time() - 20 * 60, _t.time() - 20 * 60))
+        got = odds_api._get(path, params, cache_ttl=60)
+        check("a 20-minute-old copy stands in for a failed fetch", got == [{"id": "g1"}], str(got))
+        msg = odds_api.describe_fetch_problems()
+        check("and the Board is told", "basketball_nba" in msg and "20 minutes ago" in msg, msg)
+        os.utime(f, (_t.time() - 5 * 86400, _t.time() - 5 * 86400))
+        got = odds_api._get(path, params, cache_ttl=60)
+        check("a five-day-old copy is not served", got is None, str(got))
+        msg = odds_api.describe_fetch_problems()
+        check("and that is reported too", "no odds shown" in msg and "hours old" in msg, msg)
+    finally:
+        odds_api._CACHE_DIR, odds_api.urlopen, odds_api.get_api_key = keep[0], keep[1], keep[2]
+        odds_api.FETCH_PROBLEMS.clear(); odds_api.FETCH_PROBLEMS.update(keep[3])
+        import shutil
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 if __name__ == "__main__":
     test_math_and_names()
     test_matching()
@@ -375,5 +431,7 @@ if __name__ == "__main__":
     test_stale_sharp_quote()
     test_scan_failures_are_reported()
     test_kalshi_event_must_be_this_game()
+    test_wins_pay_out()
+    test_stale_odds_fallback_is_bounded_and_reported()
     print(f"\n{'ALL PASS' if FAILS == 0 else f'{FAILS} FAILED'}")
     sys.exit(1 if FAILS else 0)

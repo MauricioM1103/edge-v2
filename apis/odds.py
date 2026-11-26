@@ -133,6 +133,44 @@ def get_api_key() -> Optional[str]:
     return None
 
 
+#: Oldest cache file that may stand in for a failed live fetch. Before this
+#: limit existed a failed request returned whatever was on disk, however old,
+#: with nothing on screen to say so: days-old prices were scanned as current.
+MAX_STALE_FALLBACK_S = 6 * 3600
+
+#: path -> {"age_s", "error", "served"} for requests that failed since the
+#: last success. Cleared for a path when a fetch for it succeeds.
+FETCH_PROBLEMS: dict = {}
+
+
+def fetch_problems() -> List[dict]:
+    return [dict(v, path=k) for k, v in sorted(FETCH_PROBLEMS.items())]
+
+
+def describe_fetch_problems() -> str:
+    """One readable line about failed odds requests, or "" when all is well."""
+    items = fetch_problems()
+    if not items:
+        return ""
+    parts = []
+    for it in items:
+        name = it["path"].strip("/").replace("sports/", "").replace("/odds", "") or it["path"]
+        if it.get("served"):
+            parts.append(f"{name}: showing odds from {it['age_s'] / 60:.0f} minutes ago ({it['error']})")
+        elif it.get("age_s") is not None:
+            parts.append(f"{name}: no odds shown, the saved copy is {it['age_s'] / 3600:.1f} hours old ({it['error']})")
+        else:
+            parts.append(f"{name}: no odds available ({it['error']})")
+    return "Odds feed problem. " + "; ".join(parts)
+
+
+def _cache_age_s(url_key: str) -> Optional[float]:
+    try:
+        return time.time() - os.path.getmtime(_cache_key(url_key))
+    except OSError:
+        return None
+
+
 def _get(path, params, cache_ttl: int = 0, historical: bool = False):
     """GET from The Odds API with on-disk caching + credit header capture.
 
@@ -168,11 +206,22 @@ def _get(path, params, cache_ttl: int = 0, historical: bool = False):
                 _cache_write(cache_url, data)
             except Exception:
                 pass
+            FETCH_PROBLEMS.pop(path, None)
             return data
-    except (URLError, ValueError, TimeoutError, ConnectionError, OSError):
-        # On error, fall back to a stale cache entry if any exists.
-        stale = _cache_read(cache_url, ttl=-1)
-        return stale
+    except (URLError, ValueError, TimeoutError, ConnectionError, OSError) as ex:
+        # Fall back to the saved copy only while it is recent, and always
+        # record the failure so the Board can say what it is showing.
+        age = _cache_age_s(cache_url)
+        err = type(ex).__name__ + (f" {getattr(ex, 'code', '')}".rstrip())
+        if historical:
+            return _cache_read(cache_url, ttl=-1)
+        if age is not None and age <= MAX_STALE_FALLBACK_S:
+            stale = _cache_read(cache_url, ttl=-1)
+            if stale is not None:
+                FETCH_PROBLEMS[path] = {"age_s": age, "error": err, "served": True}
+                return stale
+        FETCH_PROBLEMS[path] = {"age_s": age, "error": err, "served": False}
+        return None
 
 
 def list_sports() -> List[dict]:

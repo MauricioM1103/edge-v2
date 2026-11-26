@@ -2311,6 +2311,11 @@ def _render_agent_panel(odds_games, kalshi_cash, settings,
                 prop_edges = []
                 _scan_failures.append((sp, "player-prop scan", _ex))
             edges.extend(prop_edges)
+    # Odds served from an old cache file because the live fetch failed.
+    _stale_msg = odds_api.describe_fetch_problems()
+    if _stale_msg:
+        print("[edge] " + _stale_msg, flush=True)  # server log
+        html(f'<div class="hint err">{_esc_scan(_stale_msg)}</div>')
     _fail_msg = agent_calc.describe_scan_failures(_scan_failures)
     if _fail_msg:
         print("[edge] " + _fail_msg, flush=True)  # server log
@@ -3893,7 +3898,7 @@ def render_picks(settings: dict):
                         '<span class="chip" style="padding:1px 7px; font-size:9.5px;">MANUAL</span>'
                     )
                     risk_u = float(p.get("risk_units") or 0)
-                    win_u = float(p.get("win_units") or 0)
+                    win_u = picks_store.win_units_of(p)
                     if status == "win":
                         net_u = win_u
                     elif status == "loss":
@@ -3972,7 +3977,7 @@ def render_picks(settings: dict):
           <td class="num mono">{(p.get('projected_prob') or 0)*100:.1f}%</td>
           <td><span class="tag {tag_cls}">{meth}</span></td>
           <td class="num mono">{(p.get('risk_units') or 0):.2f}u</td>
-          <td class="num mono">{(p.get('win_units') or 0):.2f}u</td>
+          <td class="num mono">{picks_store.win_units_of(p):.2f}u</td>
           <td><span class="chip {status_cls}">{status_lbl}</span>{_prop_result_html(p)}</td>
           <td class="num mono">{clv_s}</td>
         </tr>
@@ -4278,7 +4283,7 @@ def render_performance(settings: dict):
     for p in settled_sorted:
         status = p.get("status")
         risk_u = float(p.get("risk_units") or 0)
-        win_u = float(p.get("win_units") or 0)
+        win_u = picks_store.win_units_of(p)
         if status == "win":
             pl = win_u * unit_dollars
         elif status == "loss":
