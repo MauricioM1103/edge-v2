@@ -29,7 +29,7 @@ for _m in [
     "apis.team_mapping", "apis.kalshi", "apis.kalshi_match",
     "apis.espn", "apis.espn_boxscore", "apis.odds", "apis.discord",
     "calc.parlay", "calc.capper", "calc.agent",
-    "storage.settings", "storage.picks",
+    "storage.settings", "storage.remote", "storage.picks",
     "ui.style", "ui.layout_c", "ui.system", "ui.loading", "ui.components", "ui.pages",
 ]:
     if _m in sys.modules:

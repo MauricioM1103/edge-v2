@@ -3724,6 +3724,13 @@ def render_picks(settings: dict):
     except Exception:
         pass
 
+    try:
+        from storage import remote as _remote
+        _rs = _remote.describe_status()
+    except Exception:
+        _rs = ""
+    if _rs:
+        html(f'<div class="hint{" err" if "PROBLEM" in _rs else ""}">{_esc_scan(_rs)}</div>')
     cols = st.columns([1.1, 1.2, 1, 1, 1, 1])
     with cols[0]:
         if st.button("Auto-settle from ESPN"):

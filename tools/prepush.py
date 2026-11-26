@@ -19,6 +19,7 @@ PRIVATE_FILES = re.compile(
 SECRETS = [
     (re.compile(r"discord(app)?\.com/api/webhooks/\d+/[\w-]{20,}"), "Discord webhook URL"),
     (re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----"), "private key"),
+    (re.compile(r"(github_pat_[A-Za-z0-9_]{30,}|gh[pousr]_[A-Za-z0-9]{30,})"), "GitHub token"),
 ]
 
 

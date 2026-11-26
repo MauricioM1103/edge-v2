@@ -85,6 +85,61 @@ def _default_path() -> str:
     return os.path.join(here, "picks.json")
 
 
+def _is_app_ledger(path) -> bool:
+    try:
+        return os.path.abspath(path) == os.path.abspath(_default_path())
+    except (OSError, ValueError):
+        return False
+
+
+def _restore_from_remote(path) -> None:
+    """On a fresh disk (hosted restart) bring the stored ledger back before
+    anything reads or writes the local file. No-op unless the GitHub ledger
+    secrets are set; runs at most once per process once it has an answer."""
+    if not _is_app_ledger(path):
+        return
+    try:
+        from storage import remote
+        if remote._state.get("restored_for") == path:
+            return
+        local_rows = 0
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                text = f.read()
+            data = json.loads(text) if text.strip() else []
+            local_rows = len(data) if isinstance(data, list) else 0
+        except FileNotFoundError:
+            local_rows = 0
+        except (OSError, ValueError):
+            return  # local file exists but is unreadable right now: do not touch it
+        rows = remote.restore_if_needed(path, local_rows)
+        if rows:
+            tmp = f"{path}.{os.getpid()}.restore.tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(rows, f, indent=2, default=str)
+            os.replace(tmp, path)
+    except Exception as ex:  # never let storage sync break the app
+        try:
+            from storage import remote
+            remote.STATUS["last_error"] = f"Restore failed ({type(ex).__name__})"
+        except Exception:
+            pass
+
+
+def _push_to_remote(path, picks) -> None:
+    if not _is_app_ledger(path):
+        return
+    try:
+        from storage import remote
+        remote.after_save(picks)
+    except Exception as ex:
+        try:
+            from storage import remote
+            remote.STATUS["last_error"] = f"Save to GitHub failed ({type(ex).__name__})"
+        except Exception:
+            pass
+
+
 class LedgerUnavailable(OSError):
     """The ledger file exists but could not be read right now."""
 
@@ -105,6 +160,7 @@ def _read_ledger(path, attempts: int = 10, delay: float = 0.12) -> List[dict]:
     """
     import time as _time
     last_err = None
+    _restore_from_remote(path)
     # "Missing" and "empty" are only believed after several looks in a row.
     # While another session swaps a new file in, Windows can briefly report
     # the ledger as absent (os.path.exists also returns False on ANY stat
@@ -259,6 +315,7 @@ def _save(path, picks, allow_shrink: bool = False) -> None:
                 os.replace(tmp, path)
                 if allow_shrink and len(picks) * 2 < _backup_row_count(path):
                     _rebase_backup(path)  # a deliberate big delete; keep later saves unblocked
+                _push_to_remote(path, picks)
                 return
             except OSError:
                 if attempt == 7:

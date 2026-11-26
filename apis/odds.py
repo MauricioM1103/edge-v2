@@ -140,7 +140,8 @@ MAX_STALE_FALLBACK_S = 6 * 3600
 
 #: path -> {"age_s", "error", "served"} for requests that failed since the
 #: last success. Cleared for a path when a fetch for it succeeds.
-FETCH_PROBLEMS: dict = {}
+#: (app.py reloads this module on every rerun; globals() keeps the record.)
+FETCH_PROBLEMS: dict = globals().get("FETCH_PROBLEMS") or {}
 
 
 def fetch_problems() -> List[dict]:

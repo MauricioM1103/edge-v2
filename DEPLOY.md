@@ -109,3 +109,37 @@ Equivalent environment variables (useful for the .bat launcher):
 Right-click `Edge-DesktopApp.pyw` → **Send to** → **Desktop (create shortcut)**.
 Rename the shortcut "Edge". Optionally set a custom icon via Properties →
 Change Icon.
+
+
+## Keeping the ledger across restarts
+
+Streamlit Community Cloud gives the app a fresh disk on every redeploy or
+reboot, so `picks.json` on the hosted copy used to be lost each time. With two
+secrets set, the app keeps a copy of the ledger in a private GitHub repo,
+pulls it back on a fresh start, and saves to it as picks are logged, settled
+or deleted.
+
+1. Create a **private** repo to hold the data (it must not be the public app
+   repo), for example `your-user/edge-v2-data`. It can be empty.
+2. Create a fine-grained personal access token: GitHub -> Settings ->
+   Developer settings -> Fine-grained tokens. Repository access: only the data
+   repo. Permissions: Contents, read and write. Nothing else.
+3. In Streamlit Cloud: Manage app -> Settings -> Secrets, add
+
+       ledger_github_repo  = "your-user/edge-v2-data"
+       ledger_github_token = "github_pat_..."
+
+   Optional: `ledger_github_path` (default `picks.json`) and
+   `ledger_github_branch` (default `main`).
+4. Reboot the app. The Ledger tab shows a line starting "Ledger copy in
+   GitHub:" with when it last saved, or the problem if something is wrong.
+
+Notes
+
+- Do not add these secrets on your own computer. Local and hosted would then
+  write the same file and overwrite each other.
+- A restart only restores when the local file is missing or empty; a ledger
+  that already has picks is never replaced by the stored copy.
+- Each change is a commit in the data repo, so its history is also a backup.
+- Check it is working: Ledger tab status line, or look for new commits in the
+  data repo after a pick is logged.
