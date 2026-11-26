@@ -13,6 +13,7 @@ Everything else (ESPN schedules & scores) is free and needs no key.
 from __future__ import annotations
 
 import importlib
+import os
 import sys
 import streamlit as st
 
@@ -29,7 +30,7 @@ for _m in [
     "apis.espn", "apis.espn_boxscore", "apis.odds", "apis.discord",
     "calc.parlay", "calc.capper", "calc.agent",
     "storage.settings", "storage.picks",
-    "ui.style", "ui.layout_c", "ui.loading", "ui.components", "ui.pages",
+    "ui.style", "ui.layout_c", "ui.system", "ui.loading", "ui.components", "ui.pages",
 ]:
     if _m in sys.modules:
         try:
@@ -313,7 +314,7 @@ def _sidebar_settings() -> dict:
 def main():
     st.set_page_config(
         page_title="Edge v2.0 — sports betting dashboard",
-        page_icon="🎯",
+        page_icon=os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", "favicon.png"),
         layout="wide",
         initial_sidebar_state="collapsed",
     )

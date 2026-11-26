@@ -1013,7 +1013,7 @@ def _render_line_moves_ticker(merged: list, top_picks: list = None) -> str:
     run = "".join(items_html + items_html)
     return (
         '<div class="news-tile ticker">'
-        '<span class="ticker-label"><span class="bolt">⚡</span> Live Line Moves</span>'
+        '<span class="ticker-label"><span class="bolt">●</span> Live line moves</span>'
         f'<div class="ticker-track"><div class="ticker-run">{run}</div></div>'
         '</div>'
     )
@@ -1669,7 +1669,6 @@ def render_dashboard(settings: dict):
         st.session_state["dash_date"] = central_today + timedelta(days=1)
         st.toast(
             f"Tonight's slate is final — jumping to tomorrow ({(central_today + timedelta(days=1)).strftime('%a %b %d')}) early.",
-            icon="➡️",
         )
         st.rerun()
 
@@ -1832,11 +1831,15 @@ def render_dashboard(settings: dict):
                 return datetime.fromisoformat((og.get("commence_time") or "").replace("Z", "+00:00")).astimezone(_CT)
             except (ValueError, AttributeError):
                 return None
-        _left_today = any(
-            (_st := _og_start(og)) is not None and _st.date() == _today_c and _st > _now_roll
-            for og in odds_games
+        # Only games that can actually be priced count as "left": one late
+        # game with no sharp line still left the Board empty at 9:40 PM.
+        def _has_sharp(og):
+            return any((b.get("title") or "").lower() == "pinnacle" for b in (og.get("bookmakers") or []))
+        _left_today = sum(
+            1 for og in odds_games
+            if (_st := _og_start(og)) is not None and _st.date() == _today_c and _st > _now_roll and _has_sharp(og)
         )
-        _roll_forward = bool(is_today and odds_games and not _left_today)
+        _roll_forward = bool(is_today and odds_games and _left_today < 3)
         st.session_state["_board_rolled_forward"] = _roll_forward
         def _is_today(og):
             commence = og.get("commence_time")
@@ -1919,8 +1922,8 @@ def render_dashboard(settings: dict):
     if top_picks:
         sc1, sc2 = st.columns([1, 4])
         with sc1:
-            if st.button("📤 Send to Discord", key="send_discord_btn",
-                         use_container_width=True, type="primary",
+            if st.button("Send to Discord", key="send_discord_btn",
+                         use_container_width=True,
                          help="Posts the current board snapshot with a timestamp."):
                 hook = discord_api.get_webhook_url()
                 if not hook:
@@ -2089,6 +2092,11 @@ def _render_matchups_grid(merged, sports_list, settings, unit_pct, bankroll_unit
             _render_one_card(ev, odds_meta, exch_probs)
 
 
+def _esc_scan(text: str) -> str:
+    import html as _h
+    return _h.escape(str(text))
+
+
 def _render_agent_panel(odds_games, kalshi_cash, settings,
                         kalshi_markets_by_sport=None, sports_list=None,
                         espn_events_by_sport=None, pinnacle_games_by_sport=None):
@@ -2231,6 +2239,7 @@ def _render_agent_panel(odds_games, kalshi_cash, settings,
     props_sports_allow = {str(x).strip().lower() for x in (saved_cfg.get("odds_player_sports") or [])}
     props_markets_cfg = saved_cfg.get("odds_player_markets") or {}
     props_board_max = int(saved_cfg.get("odds_player_board_max") or 10)
+    _scan_failures: list = []
     for sp in (sports_list or []):
         sp_kalshi = kalshi_markets_by_sport.get(sp, {})
         sp_pin = pinnacle_games_by_sport.get(sp, [])
@@ -2253,8 +2262,9 @@ def _render_agent_panel(odds_games, kalshi_cash, settings,
                     shop_books=shop_books,
                     espn_events_by_game=sp_espn,
                 )
-            except Exception:
+            except Exception as _ex:
                 sport_edges = []
+                _scan_failures.append((sp, "moneyline scan", _ex))
             edges.extend(sport_edges)
 
         # Non-h2h markets ALWAYS go through the offshore scanner.
@@ -2276,8 +2286,9 @@ def _render_agent_panel(odds_games, kalshi_cash, settings,
                     max_bet_pct=max_bet,
                     espn_events_by_game=sp_espn,
                 )
-            except Exception:
+            except Exception as _ex:
                 other_edges = []
+                _scan_failures.append((sp, "spread/total scan", _ex))
             edges.extend(other_edges)
 
         if props_on and sp in props_sports_allow and props_markets_cfg.get(sp):
@@ -2294,9 +2305,14 @@ def _render_agent_panel(odds_games, kalshi_cash, settings,
                     espn_events_by_game=sp_espn,
                     consensus_min_edge_pct=float(saved_cfg.get("odds_player_consensus_min_edge") or 0.03),
                 )
-            except Exception:
+            except Exception as _ex:
                 prop_edges = []
+                _scan_failures.append((sp, "player-prop scan", _ex))
             edges.extend(prop_edges)
+    _fail_msg = agent_calc.describe_scan_failures(_scan_failures)
+    if _fail_msg:
+        print("[edge] " + _fail_msg, flush=True)  # server log
+        html(f'<div class="hint err">{_esc_scan(_fail_msg)}</div>')
     # Deduplicate across sports — key by (event, market, side).
     seen = set()
     deduped = []
@@ -2783,7 +2799,7 @@ def _render_agent_panel(odds_games, kalshi_cash, settings,
     try:
         settled_count = picks_store.auto_settle()
         if settled_count:
-            st.toast(f"Graded {settled_count} finished pick(s) from the record.", icon="✅")
+            st.toast(f"Graded {settled_count} finished pick(s) from the record.")
     except Exception:
         pass
 
@@ -2929,7 +2945,7 @@ def _render_agent_panel(odds_games, kalshi_cash, settings,
     if dropped:
         # Dropped picks hit the daily cap - show them separately with $0 stake so
         # the user can see opportunities their cap didn't fund.
-        with st.expander(f"⚠ {len(dropped)} edges found but capped out (no stake)", expanded=False):
+        with st.expander(f"{len(dropped)} edges found but capped out (no stake)", expanded=False):
             by_sport: Dict[str, list] = {}
             for e in dropped:
                 key = (e.get("_sport") or "other").upper()
@@ -2943,8 +2959,9 @@ def _render_agent_panel(odds_games, kalshi_cash, settings,
                     + f'<tbody>{"".join(_row(e, highlight=True) for e in sport_edges[:50])}</tbody>'
                     + '</table>'
                 )
-    html(
-        '<div class="hint" style="margin-top:10px;">'
+    with st.expander("How these picks are chosen and sized", expanded=False):
+      html(
+        '<div class="hint" style="margin-top:2px;">'
         f'Agent compares <strong>Kalshi</strong> + offshore books '
         f'(<em>Bovada, LowVig.ag, BetOnline.ag, BetUS, MyBookie.ag</em>) against <strong>Pinnacle no-vig</strong>. '
         f'For each outcome, the <strong>best price</strong> wins the row — bet on whichever book is shown. '
@@ -2952,10 +2969,11 @@ def _render_agent_panel(odds_games, kalshi_cash, settings,
         f'Stakes sized at <strong>{kelly_mult*100:.0f}%-Kelly</strong>, 1u = {unit_pct*100:.1f}% of your Kalshi cash, '
         f'per-bet cap <strong>{max_bet/unit_pct:.1f}u</strong>, daily total cap <strong>{daily_cap_pct/unit_pct:.1f}u</strong>.'
         '</div>'
-    )
+      )
 
-    # Jump-nav to the per-pick analysis boards.
-    if top:
+    # (The "jump to analysis" strip was removed: its anchors live on the
+    # Analysis tab now, so the links went nowhere from the Board.)
+    if False and top:
         nav_links = " ".join(
             f'<a href="#{e["_anchor"]}" style="padding:3px 10px; background:var(--card-elev); '
             f'border:1px solid var(--rule); border-radius:999px; text-decoration:none; '
@@ -3701,14 +3719,14 @@ def render_picks(settings: dict):
 
     cols = st.columns([1.1, 1.2, 1, 1, 1, 1])
     with cols[0]:
-        if st.button("↻ Auto-settle from ESPN"):
+        if st.button("Auto-settle from ESPN"):
             n = picks_store.auto_settle()
             st.cache_data.clear()
             st.success(f"Settled {n} pick(s).")
     with cols[1]:
         # Legacy cleanup: picks logged before the two-way collapse landed can
         # still show both sides of the same market. One click fixes.
-        if st.button("⟲ Collapse opposing sides"):
+        if st.button("Collapse opposing sides"):
             removed = picks_store.collapse_duplicate_sides()
             st.cache_data.clear()
             if removed:
@@ -3755,7 +3773,7 @@ def render_picks(settings: dict):
                 row["actual"] = (p.get("result_payload") or {}).get("stat") if _is_prop_row(p) else None
                 writer.writerow(row)
             st.download_button(
-                "⬇ CSV", buf.getvalue().encode("utf-8"),
+                "Export CSV", buf.getvalue().encode("utf-8"),
                 "picks.csv", "text/csv",
                 use_container_width=True, key="ledger_csv_dl",
             )
@@ -3905,7 +3923,7 @@ def render_picks(settings: dict):
                 html("".join(_tbl) + "</tbody></table>")
 
     # ----- Flat all-picks table (secondary, for raw lookup) -----
-    with st.expander(f"🔎 Flat all-picks table ({len(rows)} rows)", expanded=False):
+    with st.expander(f"All picks, flat table ({len(rows)} rows)", expanded=False):
         _flat = []
         _flat.append("""
     <table class="ledger">

@@ -1184,3 +1184,6 @@ def inject(theme: str = "dark"):
     st.markdown(RESPONSIVE_CSS + anchor, unsafe_allow_html=True)
     # Layout C overrides load last so they win the cascade.
     st.markdown(LAYOUT_C_CSS + anchor, unsafe_allow_html=True)
+    # Design-system layer: tokens and the shared components, last so it wins.
+    from ui.system import SYSTEM_CSS
+    st.markdown(SYSTEM_CSS + anchor, unsafe_allow_html=True)
