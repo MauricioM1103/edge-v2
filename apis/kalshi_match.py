@@ -62,6 +62,121 @@ def _group_markets_by_event(markets: List[dict]) -> Dict[str, List[dict]]:
     return out
 
 
+#: Words that say nothing about WHICH club a name refers to.
+_GENERIC_NAME_TOKENS = {"fc", "sc", "cf", "ac", "afc", "cd", "club", "city", "united", "real", "st", "state", "the", "de"}
+
+
+def _name_tokens(name: str) -> List[str]:
+    """Canonical tokens with Kalshi's spelling habits normalised.
+
+    Kalshi writes "Kansas St.", "Miami (FL)", "Saint Louis" and truncates
+    long names to an initial ("Los Angeles R"). A parenthetical is dropped,
+    a trailing "st" becomes "state" and a leading "saint" becomes "st".
+    """
+    raw = re.sub(r"\([^)]*\)", " ", str(name or ""))
+    toks = canonical(raw).split()
+    if len(toks) > 1 and toks[-1] == "st":
+        toks[-1] = "state"
+    if toks and toks[0] == "saint":
+        toks[0] = "st"
+    return toks
+
+
+def _contains_run(longer: List[str], shorter: List[str]) -> bool:
+    n = len(shorter)
+    return n > 0 and any(longer[i:i + n] == shorter for i in range(len(longer) - n + 1))
+
+
+def names_team(sub_title: str, team: str) -> bool:
+    """Could this Kalshi market name refer to this team?
+
+    Deliberately permissive: on its own it only says "plausible". The
+    caller (event_side_map) accepts an event only when the names fit the
+    two teams in exactly ONE way, which is what makes it safe.
+    """
+    a, b = _name_tokens(sub_title), _name_tokens(team)
+    if not a or not b:
+        return False
+    if a == b:
+        return True
+    if all(t in _GENERIC_NAME_TOKENS for t in a) or all(t in _GENERIC_NAME_TOKENS for t in b):
+        return False
+    # "Green Bay" / "Green Bay Packers", "Salt Lake" / "Real Salt Lake",
+    # "Brest" / "Stade Brest 29": one name's words sit inside the other's.
+    if _contains_run(b, a) or _contains_run(a, b):
+        return True
+    # Truncated to an initial: "Los Angeles R" / "Los Angeles Rams".
+    if len(a) >= 2 and len(a[-1]) <= 2 and len(b) >= len(a) and a[:-1] == b[:len(a) - 1] and b[len(a) - 1].startswith(a[-1]):
+        return True
+    # Person names across feeds: "F. Tiafoe" / "Frances Tiafoe".
+    return same_contestant(sub_title, team)
+
+
+def event_side_map(markets: List[dict], home: str, away: str, commence_time=None,
+                   max_day_gap: int = 1) -> Optional[Dict[str, str]]:
+    """Check that a Kalshi event really is THIS game and say which market is which.
+
+    Returns {market_ticker: "home" | "away" | "draw"} or None when the event
+    cannot be shown to be this game. Every price the Board shows from Kalshi
+    must pass through here.
+
+    An event is accepted only when all of these hold:
+      * its date (from the ticker) is within `max_day_gap` days of the game.
+        A team's next fixture has the same team in it and a different date;
+      * it has exactly two non-tie markets, and
+      * those two names fit the two teams in exactly one way. If "Sacramento"
+        fits the home team but the other market says "Utah" and the away
+        team is San Antonio, this is a different game and nothing is used.
+
+    The old matching accepted an event when a fragment of each team name
+    appeared anywhere in the market names, with no date check, so "ac" (from
+    "Le Havre AC") matched "Strasbourg Alsace" and a different week's game
+    supplied the price.
+    """
+    if not markets or not home or not away:
+        return None
+    event_ticker = (markets[0].get("event_ticker") or "")
+    if any((m.get("event_ticker") or "") != event_ticker for m in markets):
+        return None
+    tdate = _ticker_date(event_ticker)
+    gdate = None
+    if commence_time:
+        try:
+            ct = commence_time if isinstance(commence_time, datetime) else datetime.fromisoformat(str(commence_time).replace("Z", "+00:00"))
+            gdate = ct.date()
+        except (ValueError, TypeError):
+            gdate = None
+    if gdate is not None:
+        if tdate is None or abs((gdate - tdate).days) > max_day_gap:
+            return None
+    ties = [m for m in markets if is_tie_market(m)]
+    sides = [m for m in markets if not is_tie_market(m)]
+    if len(sides) != 2 or len(ties) > 1:
+        return None
+    a, b = sides
+    na, nb = a.get("yes_sub_title") or "", b.get("yes_sub_title") or ""
+    fit_ab = names_team(na, home) and names_team(nb, away)   # a=home, b=away
+    fit_ba = names_team(na, away) and names_team(nb, home)   # a=away, b=home
+    if fit_ab == fit_ba:
+        # Neither arrangement fits, or both do. Exact names break a tie
+        # ("Florida" and "Florida St." both fit "Florida State Seminoles"
+        # loosely, but only one of them fits it exactly once normalised).
+        ta, tb, th, tw = _name_tokens(na), _name_tokens(nb), _name_tokens(home), _name_tokens(away)
+        def _lead(x, y):  # x is the leading words of y
+            return len(x) <= len(y) and y[:len(x)] == x
+        score_ab = (len(ta) if _lead(ta, th) else 0) + (len(tb) if _lead(tb, tw) else 0)
+        score_ba = (len(ta) if _lead(ta, tw) else 0) + (len(tb) if _lead(tb, th) else 0)
+        if not (fit_ab and fit_ba) or score_ab == score_ba:
+            return None
+        fit_ab, fit_ba = score_ab > score_ba, score_ba > score_ab
+    out = {}
+    out[a.get("ticker") or na] = "home" if fit_ab else "away"
+    out[b.get("ticker") or nb] = "away" if fit_ab else "home"
+    for t in ties:
+        out[t.get("ticker") or "tie"] = "draw"
+    return out
+
+
 def find_event_markets(
     kalshi_markets: List[dict],
     event_start_utc: Optional[datetime],
@@ -96,18 +211,19 @@ def find_event_markets(
                     continue
             except ValueError:
                 continue
+        # Abbreviations overlap ("SA" sits inside "SAC"), so a ticker match
+        # alone can pick another game played the same day. When the team
+        # names are known the market names have to fit them too.
+        if home_name and away_name and event_side_map(markets, home_name, away_name, event_start_utc) is None:
+            continue
         return markets
 
-    # fallback: match by canonical name tokens in yes_sub_title
-    for event_ticker, markets in grouped.items():
-        subs = [canonical(m.get("yes_sub_title") or "") for m in markets]
-        hc = canonical(home_name).split()[-1] if home_name else ""
-        ac = canonical(away_name).split()[-1] if away_name else ""
-        if not hc or not ac:
-            continue
-        matched = any(hc in s for s in subs) and any(ac in s for s in subs)
-        if matched:
-            return markets
+    # Fallback by name. Same rule as everywhere else: right date, and the two
+    # market names fit the two teams in exactly one way.
+    if home_name and away_name:
+        for event_ticker, markets in grouped.items():
+            if event_side_map(markets, home_name, away_name, event_start_utc) is not None:
+                return markets
     return []
 
 
@@ -254,14 +370,7 @@ def match_markets_to_games(kalshi_markets: List[dict], odds_games: List[dict],
             except ValueError:
                 game_date = None
         for event_ticker, markets in grouped.items():
-            names = [m.get("yes_sub_title") or "" for m in markets if not is_tie_market(m)]
-            if len(names) < 2:
-                continue
-            if not (any(same_contestant(n, home) for n in names)
-                    and any(same_contestant(n, away) for n in names)):
-                continue
-            tdate = _ticker_date(event_ticker)
-            if game_date and tdate and abs((game_date - tdate).days) > max_day_gap:
+            if event_side_map(markets, home, away, ct, max_day_gap=max_day_gap) is None:
                 continue
             out[(home, away)] = markets
             break

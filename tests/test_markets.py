@@ -79,7 +79,7 @@ def test_matching():
 def test_scanners():
     print("== tennis via Kalshi scanner")
     game = {"id": "g1", "home_team": "Daniil Medvedev", "away_team": "Frances Tiafoe",
-            "commence_time": "2099-01-01T00:00:00Z",
+            "commence_time": "2026-11-17T13:30:00Z",
             "bookmakers": [book("Pinnacle", "pinnacle", [("Daniil Medvedev", -185), ("Frances Tiafoe", 160)])]}
     markets = [km("KXATPMATCH-26NOV17MEDTIA", "Frances Tiafoe", 0.30, 0.31),
                km("KXATPMATCH-26NOV17MEDTIA", "Daniil Medvedev", 0.69, 0.70)]
@@ -97,7 +97,7 @@ def test_scanners():
 
     print("== soccer three-way")
     sg = {"id": "s1", "home_team": "Tottenham Hotspur", "away_team": "Fulham",
-          "commence_time": "2099-01-01T00:00:00Z",
+          "commence_time": "2026-12-03T15:00:00Z",
           "bookmakers": [
               book("Pinnacle", "pinnacle", [("Tottenham Hotspur", 105), ("Fulham", 265), ("Draw", 255)]),
               book("Bovada", "bovada", [("Tottenham Hotspur", 100), ("Fulham", 250), ("Draw", 300)]),
@@ -307,6 +307,63 @@ def test_scan_failures_are_reported():
     check("message carries the error type", "KeyError" in msg and "ValueError: bad point" in msg, msg)
 
 
+def test_kalshi_event_must_be_this_game():
+    """A Kalshi price is only used when the event is shown to be this game."""
+    print("== Kalshi event validation")
+    from apis.kalshi_match import event_side_map, find_event_markets, names_team
+    from datetime import datetime, timezone
+    # The live case from 2026-11-25: Strasbourg-Lorient (Dec 5) was attached to
+    # Strasbourg @ Le Havre (Nov 28) because "ac" sits inside "Alsace".
+    other_week = [km("KXLIGUE1GAME-26DEC05RCSFCL", "Strasbourg Alsace", 0.25, 0.26),
+                  km("KXLIGUE1GAME-26DEC05RCSFCL", "Lorient", 0.48, 0.50),
+                  km("KXLIGUE1GAME-26DEC05RCSFCL", "Tie", 0.25, 0.27)]
+    check("another week's game with one shared team is rejected",
+          event_side_map(other_week, "Le Havre AC", "Strasbourg", "2026-11-28T18:00:00Z") is None)
+    check("old name fallback no longer attaches it",
+          find_event_markets(other_week, datetime(2026, 11, 28, 18, tzinfo=timezone.utc), "HAC", "STR",
+                             "Le Havre AC", "Strasbourg") == [])
+    check("right teams on the wrong date are rejected",
+          event_side_map(other_week, "Strasbourg", "Lorient", "2026-11-28T18:00:00Z") is None)
+    right = event_side_map(other_week, "Strasbourg", "Lorient", "2026-12-05T18:00:00Z")
+    check("the real fixture maps home, away and draw",
+          right is not None and sorted(right.values()) == ["away", "draw", "home"], str(right))
+    # Overlapping abbreviations: "SA" is inside "SAC", so the ticker alone
+    # matched the Sacramento-Utah event to San Antonio @ Sacramento.
+    sac_uta = [km("KXNBAGAME-26NOV29SACUTA", "Sacramento", 0.55, 0.57), km("KXNBAGAME-26NOV29SACUTA", "Utah", 0.43, 0.45)]
+    check("same-day game sharing an abbreviation is rejected",
+          find_event_markets(sac_uta, datetime(2026, 11, 29, 23, tzinfo=timezone.utc), "SAC", "SA",
+                             "Sacramento Kings", "San Antonio Spurs") == [])
+    # The scanner refuses it even if something upstream attached it anyway.
+    g = {"id": "x", "home_team": "Le Havre AC", "away_team": "Strasbourg", "commence_time": "2026-11-28T18:00:00Z",
+         "bookmakers": [book("Pinnacle", "pinnacle", [("Le Havre AC", 180), ("Strasbourg", 150), ("Draw", 230)])]}
+    rows = agent.scan_kalshi_vs_pinnacle({("Le Havre AC", "Strasbourg"): other_week}, [g], 500.0,
+                                         sport_key="ligue_1", min_edge_pct=-1.0)
+    check("scanner prices nothing from a mismatched event", rows == [], str(len(rows)))
+    # Kalshi's spellings still resolve when the game is right.
+    check("'Kansas St.' names Kansas State", names_team("Kansas St.", "Kansas State Wildcats"))
+    check("'Los Angeles R' names the Rams, not the Chargers",
+          names_team("Los Angeles R", "Los Angeles Rams") and not names_team("Los Angeles R", "Los Angeles Chargers"))
+    check("'Salt Lake' names Real Salt Lake", names_team("Salt Lake", "Real Salt Lake"))
+    check("'Saint Louis' names St. Louis City SC", names_team("Saint Louis", "St. Louis City SC"))
+    check("a bare 'FC' names nobody", not names_team("FC", "Toronto FC"))
+    fla = [km("KXNCAAFGAME-26NOV27FLAFSU", "Florida St.", 0.60, 0.62), km("KXNCAAFGAME-26NOV27FLAFSU", "Florida", 0.38, 0.40)]
+    fla[0]["ticker"], fla[1]["ticker"] = "KXNCAAFGAME-26NOV27FLAFSU-FSU", "KXNCAAFGAME-26NOV27FLAFSU-FLA"
+    m = event_side_map(fla, "Florida State Seminoles", "Florida Gators", "2026-11-27T20:00:00Z")
+    check("Florida vs Florida State resolves each market to the right school",
+          m is not None and m.get(fla[0]["ticker"]) == "home" and m.get(fla[1]["ticker"]) == "away", str(m))
+    # A Kalshi number far from the sharp fair is not offered as a price.
+    g2 = {"id": "y", "home_team": "Houston Dynamo", "away_team": "San Jose Earthquakes", "commence_time": "2026-11-28T22:30:00Z",
+          "bookmakers": [book("Pinnacle", "pinnacle", [("Houston Dynamo", -105), ("San Jose Earthquakes", 280), ("Draw", 270)])]}
+    odd = [km("KXMLSGAME-26NOV28HOUSJ", "Houston", 0.25, 0.26), km("KXMLSGAME-26NOV28HOUSJ", "San Jose", 0.25, 0.26),
+           km("KXMLSGAME-26NOV28HOUSJ", "Tie", 0.24, 0.25)]
+    rows = agent.scan_kalshi_vs_pinnacle({("Houston Dynamo", "San Jose Earthquakes"): odd}, [g2], 500.0,
+                                         sport_key="mls", min_edge_pct=-1.0)
+    hou = [r for r in rows if r["side_label"].startswith("Houston")]
+    check("26c against a ~48% fair is not shown as a Kalshi edge",
+          all(r["book"] != "Kalshi" for r in hou) and all(r.get("kalshi_price_cents") is None for r in hou),
+          str([(r["book"], r.get("kalshi_price_cents"), round(r["fair_prob"], 3)) for r in hou]))
+
+
 if __name__ == "__main__":
     test_math_and_names()
     test_matching()
@@ -317,5 +374,6 @@ if __name__ == "__main__":
     test_edge_audit_fixes()
     test_stale_sharp_quote()
     test_scan_failures_are_reported()
+    test_kalshi_event_must_be_this_game()
     print(f"\n{'ALL PASS' if FAILS == 0 else f'{FAILS} FAILED'}")
     sys.exit(1 if FAILS else 0)

@@ -168,6 +168,8 @@ IN_PLAY_MAX_LAG_S = 90
 #: fair with 51 seconds left and five goals scored), and the odds feed is
 #: cached for up to an hour. Nothing here is fast enough to bet live.
 ALLOW_IN_PLAY = False
+#: Largest believable gap between Kalshi's midpoint and the sharp fair value.
+KALSHI_MAX_FAIR_GAP = 0.10
 
 
 def _ts(value):
@@ -573,7 +575,7 @@ def scan_kalshi_vs_pinnacle(
     """
     from apis.team_mapping import canonical, same_team as _same_team_strict
     from apis import kalshi as kalshi_api
-    from apis.kalshi_match import is_tie_market, same_contestant
+    from apis.kalshi_match import is_tie_market, same_contestant, event_side_map
     from calc.odds import decimal_to_american, implied_prob_american, no_vig_multi
 
     three_way_sport = sport_key in kalshi_api.THREE_WAY_SPORTS
@@ -669,6 +671,13 @@ def scan_kalshi_vs_pinnacle(
                 continue
         pin_home_name = pin_game.get("home_team") or home_name
         pin_away_name = pin_game.get("away_team") or away_name
+        # Last gate before any Kalshi price is used: the event must be shown
+        # to be THIS game (right date, both teams named, one way to fit them).
+        # Whatever attached these markets upstream, a different game's price
+        # never reaches the Board.
+        side_by_ticker = event_side_map(markets, pin_home_name, pin_away_name, pin_game.get("commence_time"))
+        if side_by_ticker is None:
+            continue
 
         # Pre-extract shop-book prices for this game (home_price, away_price).
         shop_prices = {}
@@ -711,22 +720,33 @@ def scan_kalshi_vs_pinnacle(
             yes_team = (market.get("yes_sub_title") or "").strip()
             if not yes_team:
                 continue
-            if is_tie_market(market):
+            _which = side_by_ticker.get(market.get("ticker") or yes_team)
+            if _which == "draw":
                 if fair_draw is None:
                     continue
                 fair_for_yes = fair_draw
                 yes_side_name = "Draw"
                 side_key = "draw"
-            elif _side_of(yes_team, pin_home_name, pin_away_name, same_team) == "home":
+            elif _which == "home":
                 fair_for_yes = fair_home
                 yes_side_name = pin_home_name
                 side_key = "home"
-            elif _side_of(yes_team, pin_home_name, pin_away_name, same_team) == "away":
+            elif _which == "away":
                 fair_for_yes = fair_away
                 yes_side_name = pin_away_name
                 side_key = "away"
             else:
                 continue
+            # Sanity check on the number itself. Kalshi's game markets track
+            # the sharp line closely; when its midpoint sits more than ten
+            # points from the fair value, the far likelier explanation is a
+            # stale line or a mismatched market than a real mispricing, so
+            # Kalshi is not offered as a price for this side.
+            _mid = kalshi_api.market_implied_yes_prob(market)
+            kalshi_suspect = _mid is not None and abs(_mid - fair_for_yes) > KALSHI_MAX_FAIR_GAP
+            if kalshi_suspect:
+                yes_prob = None
+                yes_ask = None
 
             # Candidate list: start with Kalshi, add offshore books.
             candidates = []
@@ -845,6 +865,7 @@ def scan_kalshi_vs_pinnacle(
                 # Kalshi comparison
                 "kalshi_price_cents": int(round(yes_ask * 100)) if yes_ask else None,
                 "kalshi_fee_cents": round(yes_fee * 100, 2) if yes_ask else None,
+                "kalshi_suspect": bool(kalshi_suspect),
                 "kalshi_implied": kalshi_implied,
                 "kalshi_ticker": kalshi_ticker,
                 "kalshi_url": kalshi_url,

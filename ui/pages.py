@@ -1804,7 +1804,9 @@ def render_dashboard(settings: dict):
         # sports have no ESPN abbreviations to match on, and soccer clubs
         # are spelled differently per feed; any Kalshi event the ESPN pass
         # did not already claim is matched by contestant name instead.
-        if all_markets_sp and (sp in kalshi.INDIVIDUAL_SPORTS or sp in kalshi.THREE_WAY_SPORTS):
+        # Runs for every sport now: an event is only attached when its date and
+        # both names check out, so this can add coverage but not a wrong game.
+        if all_markets_sp:
             claimed = {m.get("event_ticker") for ms in kalshi_by_game.values() for m in ms}
             free_markets = [m for m in all_markets_sp if m.get("event_ticker") not in claimed]
             sp_odds_games = [og for og in odds_games if og.get("_sport") == sp]
