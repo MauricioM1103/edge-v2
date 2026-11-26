@@ -127,6 +127,42 @@ table.ledger td.num, table.ledger td.mono, .num, .mono{ font-variant-numeric:tab
 .chip{ border-radius:5px !important; }
 .calc-wrap{ border:var(--hair) !important; border-radius:var(--r-md) !important; }
 
+/* ---------- second pass ---------- */
+/* One rule under the top bar is enough; section headers draw their own. */
+.topbar-rule{ display:none !important; }
+[data-testid="stMainBlockContainer"] [data-testid="stMarkdownContainer"]:first-of-type h3{ margin-top:var(--sp-3) !important; }
+
+/* Native inputs: white field with a hairline, matching the tables. Streamlit
+   draws these as a borderless gray block by default. */
+[data-testid="stNumberInputContainer"], [data-testid="stTextInputRootElement"],
+[data-testid="stSelectbox"] [data-baseweb="select"] > div,
+[data-testid="stMultiSelect"] [data-baseweb="select"] > div,
+[data-testid="stDateInputField"], [data-testid="stDateInput"] [data-baseweb="input"]{
+  background:var(--card) !important; border:1px solid var(--rule) !important; border-radius:var(--r-sm) !important; box-shadow:none !important;
+}
+[data-testid="stNumberInputContainer"]:focus-within, [data-testid="stTextInputRootElement"]:focus-within,
+[data-testid="stSelectbox"] [data-baseweb="select"] > div:focus-within{ border-color:var(--accent) !important; }
+[data-testid="stNumberInputContainer"] button{ background:transparent !important; border-left:1px solid var(--rule) !important; border-radius:0 !important; }
+[data-testid="stNumberInputContainer"] button:hover{ background:var(--surface) !important; color:var(--ink) !important; }
+[data-testid="stNumberInputContainer"] > div, [data-testid="stNumberInputContainer"] input{ background:transparent !important; }
+
+/* Calculator result panels read as a KPI strip, not a tinted box. */
+.calc-wrap{ background:var(--surface) !important; padding:12px 16px !important; }
+.calc-wrap .calc-grid .label, .calc-grid .label{
+  font-family:inherit !important; font-size:10px !important; letter-spacing:.09em !important; text-transform:uppercase;
+  color:var(--muted) !important; font-weight:600 !important;
+}
+.calc-wrap .calc-grid .value, .calc-grid .value{ font-family:"Geist Mono", monospace !important; font-variant-numeric:tabular-nums; font-size:17px !important; font-weight:600 !important; letter-spacing:-.02em; }
+
+/* One label style everywhere: small sans capitals. Wide-tracked monospace
+   capitals are kept for nothing; monospace is for numbers. */
+table.board-table thead th, .side-cell .mkt, .label.mono, .rail-box-head, .board-count,
+table.board-table tbody tr.row-divider td, .auto-log-caption{
+  font-family:"Open Sauce One", "Inter", sans-serif !important; letter-spacing:.07em !important; font-weight:600 !important;
+}
+table.board-table thead th{ font-size:10px !important; }
+.side-cell .mkt{ font-size:9.5px !important; }
+
 @media (max-width: 899px){
   .metric-grid{ grid-template-columns:repeat(2, minmax(0, 1fr)) !important; }
   .metric-card{ padding:9px 12px !important; }
