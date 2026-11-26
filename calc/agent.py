@@ -206,6 +206,23 @@ def _sharp_is_fresh(sharp_updated, quote_updated, commence_time, pre_game_max_la
     return lag <= pre_game_max_lag_s
 
 
+def describe_scan_failures(failures) -> str:
+    """One readable line for scanner crashes, or "" when there were none.
+
+    `failures` is a list of (sport, scanner_label, exception). The Board used
+    to catch a scanner exception and carry on with an empty list, so a crash
+    made a whole sport vanish with no sign anything was wrong.
+    """
+    if not failures:
+        return ""
+    parts = []
+    for sport, label, ex in failures:
+        detail = f"{type(ex).__name__}: {ex}" if str(ex) else type(ex).__name__
+        parts.append(f"{str(sport).upper()} {label} ({detail[:120]})")
+    n = len(failures)
+    return f"{n} scan{'s' if n != 1 else ''} failed and {'are' if n != 1 else 'is'} missing from the Board: " + "; ".join(parts)
+
+
 def _side_of(name, home, away, loose=None) -> Optional[str]:
     """Which side of a game an outcome name refers to: "home", "away" or None.
 

@@ -427,6 +427,11 @@ def live_test():
 
 if __name__ == "__main__":
     unit_tests()
-    live_test()
+    # The live section calls ESPN. EDGE_OFFLINE=1 (set by run_tests.py --offline
+    # and by CI) skips it so the suite can run with no network.
+    if os.environ.get("EDGE_OFFLINE") == "1":
+        print("== live section skipped (EDGE_OFFLINE=1)")
+    else:
+        live_test()
     print(f"\n{'ALL PASS' if FAILS == 0 else f'{FAILS} FAILED'}")
     sys.exit(1 if FAILS else 0)

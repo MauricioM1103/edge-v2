@@ -294,6 +294,19 @@ def test_stale_sharp_quote():
     check("missing timestamps are not judged", agent_calc._sharp_is_fresh(None, None, "2026-11-20T03:08:35Z"))
 
 
+def test_scan_failures_are_reported():
+    """A scanner crash must be visible, not an empty Board."""
+    print("== scanner failures")
+    from calc import agent as agent_calc
+    check("no failures gives no message", agent_calc.describe_scan_failures([]) == "")
+    msg = agent_calc.describe_scan_failures([("nba", "moneyline scan", KeyError("price")),
+                                             ("nhl", "player-prop scan", ValueError("bad point"))])
+    check("message counts the failures", msg.startswith("2 scans failed"), msg)
+    check("message names each sport and scanner",
+          "NBA moneyline scan" in msg and "NHL player-prop scan" in msg, msg)
+    check("message carries the error type", "KeyError" in msg and "ValueError: bad point" in msg, msg)
+
+
 if __name__ == "__main__":
     test_math_and_names()
     test_matching()
@@ -303,5 +316,6 @@ if __name__ == "__main__":
     test_ledger_safety()
     test_edge_audit_fixes()
     test_stale_sharp_quote()
+    test_scan_failures_are_reported()
     print(f"\n{'ALL PASS' if FAILS == 0 else f'{FAILS} FAILED'}")
     sys.exit(1 if FAILS else 0)
