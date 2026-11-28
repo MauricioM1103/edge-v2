@@ -216,6 +216,12 @@ def _get(path, params, cache_ttl: int = 0, historical: bool = False):
         err = type(ex).__name__ + (f" {getattr(ex, 'code', '')}".rstrip())
         if historical:
             return _cache_read(cache_url, ttl=-1)
+        if getattr(ex, "code", None) in (404, 422):
+            # The API has no such market or sport right now (off-season, or a
+            # key it does not offer). That is an empty answer, not an outage,
+            # so it is not reported as a feed problem.
+            FETCH_PROBLEMS.pop(path, None)
+            return None
         if age is not None and age <= MAX_STALE_FALLBACK_S:
             stale = _cache_read(cache_url, ttl=-1)
             if stale is not None:

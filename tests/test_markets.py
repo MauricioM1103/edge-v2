@@ -413,6 +413,15 @@ def test_stale_odds_fallback_is_bounded_and_reported():
         check("a five-day-old copy is not served", got is None, str(got))
         msg = odds_api.describe_fetch_problems()
         check("and that is reported too", "no odds shown" in msg and "hours old" in msg, msg)
+        from urllib.error import HTTPError
+        def not_found(*a, **k):
+            raise HTTPError("u", 404, "Not Found", None, None)
+        odds_api.urlopen = not_found
+        odds_api.FETCH_PROBLEMS.clear()
+        check("a 404 (no such market right now) returns nothing",
+              odds_api._get("/sports/basketball_wcbb/odds", params, cache_ttl=60) is None)
+        check("and is not reported as a feed problem", odds_api.describe_fetch_problems() == "",
+              odds_api.describe_fetch_problems())
     finally:
         odds_api._CACHE_DIR, odds_api.urlopen, odds_api.get_api_key = keep[0], keep[1], keep[2]
         odds_api.FETCH_PROBLEMS.clear(); odds_api.FETCH_PROBLEMS.update(keep[3])

@@ -163,6 +163,22 @@ table.board-table tbody tr.row-divider td, .auto-log-caption{
 table.board-table thead th{ font-size:10px !important; }
 .side-cell .mkt{ font-size:9.5px !important; }
 
+/* ---------- the header must not eat clicks ----------
+   Streamlit's header is a transparent bar fixed across the top of the page,
+   above everything. The tab strip sits in that band, so every real click on
+   a tab landed on the header instead and nothing happened. The bar itself
+   now lets clicks through; only its own controls (menu, sidebar opener,
+   deploy/status buttons) take them. */
+header[data-testid="stHeader"], header[data-testid="stHeader"] > div,
+[data-testid="stToolbar"], [data-testid="stToolbar"] > div,
+[data-testid="stAppToolbar"], .stAppToolbar, .stAppToolbar > div,
+[data-testid="stDecoration"], [data-testid="stStatusWidget"]{ pointer-events:none !important; }
+header[data-testid="stHeader"] button, header[data-testid="stHeader"] a,
+header[data-testid="stHeader"] [role="button"], header[data-testid="stHeader"] [data-testid="stMainMenu"],
+header[data-testid="stHeader"] [data-testid="stToolbarActions"] *,
+[data-testid="stExpandSidebarButton"], [data-testid="stSidebarCollapsedControl"], [data-testid="collapsedControl"],
+[data-testid="stStatusWidget"] button{ pointer-events:auto !important; }
+
 @media (max-width: 899px){
   .metric-grid{ grid-template-columns:repeat(2, minmax(0, 1fr)) !important; }
   .metric-card{ padding:9px 12px !important; }
